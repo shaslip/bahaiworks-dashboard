@@ -20,19 +20,18 @@ st.set_page_config(
 
 # --- Helper Functions ---
 def load_data():
-    """Fetches all documents from the database into a Pandas DataFrame."""
+    """Fetches all documents sorted by Priority Score (Highest to Lowest)."""
     with Session(engine) as session:
-        # Select all fields
         query = select(Document.id, 
                        Document.filename, 
                        Document.status, 
                        Document.priority_score, 
                        Document.language, 
                        Document.summary,
+                       Document.ai_justification,
                        Document.file_path)\
                 .order_by(desc(Document.priority_score))
         
-        # Load into DataFrame
         df = pd.read_sql(query, session.bind)
         return df
 
