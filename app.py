@@ -1,3 +1,6 @@
+import subprocess
+import platform
+import os
 import streamlit as st
 import pandas as pd
 from sqlalchemy.orm import Session
@@ -82,19 +85,38 @@ with tab2:
         st.info("No documents evaluated yet.")
 
 # 4. Detail View (Sidebar)
-# When a user clicks a row in the dataframe, show details in sidebar
 if len(event.selection['rows']) > 0:
     selected_index = event.selection['rows'][0]
     selected_id = df.iloc[selected_index]['id']
     
-    # Fetch full details for this specific doc
+    # Fetch full details
     record = df[df['id'] == selected_id].iloc[0]
     
     with st.sidebar:
         st.header("📄 Document Details")
         st.write(f"**Filename:** {record['filename']}")
-        st.write(f"**Path:** `{record['file_path']}`")
         
+        # --- NEW: Open File Button ---
+        if st.button("📂 Open Local File"):
+            file_path = record['file_path']
+            if os.path.exists(file_path):
+                try:
+                    # Linux (Ubuntu/Debian)
+                    if platform.system() == "Linux":
+                        subprocess.call(["xdg-open", file_path])
+                    # macOS
+                    elif platform.system() == "Darwin":
+                        subprocess.call(["open", file_path])
+                    # Windows
+                    elif platform.system() == "Windows":
+                        os.startfile(file_path)
+                    st.toast(f"Opening: {record['filename']}")
+                except Exception as e:
+                    st.error(f"Error opening file: {e}")
+            else:
+                st.error("File not found at original path!")
+        # -----------------------------
+
         st.divider()
         
         st.subheader("AI Analysis")
