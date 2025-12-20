@@ -127,6 +127,32 @@ if len(event.selection['rows']) > 0:
                 st.info(f"**Summary:** {record.summary}")
                 with st.expander("See AI Justification"):
                     st.caption(record.ai_justification)
+                st.divider()
+
+                # 2. MANUAL OVERRIDE CONTROLS
+            st.subheader("Manual Controls")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                # Number input defaults to current score
+                new_score = st.number_input(
+                    "Set Score", 
+                    min_value=1, 
+                    max_value=10, 
+                    value=record.priority_score,
+                    label_visibility="collapsed"
+                )
+            
+            with col2:
+                if st.button("💾 Save Override"):
+                    record.priority_score = new_score
+                    # Append a note so you know this was human-edited later
+                    if "Manually Overridden" not in (record.ai_justification or ""):
+                        record.ai_justification = (record.ai_justification or "") + "\n[Manually Overridden]"
+                    
+                    session.commit()
+                    st.toast(f"Score updated to {new_score}")
+                    st.rerun()
                 
                 # RE-EVALUATE LOGIC
                 if st.button("🔄 Re-evaluate"):
