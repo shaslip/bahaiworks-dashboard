@@ -128,10 +128,31 @@ if len(event.selection['rows']) > 0:
                 with st.expander("See AI Justification"):
                     st.caption(record.ai_justification)
                 
-                # Optional: Re-run button
+                # RE-EVALUATE LOGIC
                 if st.button("🔄 Re-evaluate"):
-                     # Reset score to None in DB and rerun logic (implementation implied)
-                     pass
+                    with st.spinner("Re-processing document..."):
+                        # 1. Extract Images
+                        images = extract_preview_images(record.file_path)
+                        
+                        if not images:
+                             st.error("Failed to extract images.")
+                        else:
+                            # 2. Re-run AI
+                            result = evaluate_document(images)
+                            
+                            if result:
+                                # 3. Overwrite Database Record
+                                record.priority_score = result['priority_score']
+                                record.summary = result['summary']
+                                record.language = result['language']
+                                record.ai_justification = result['ai_justification']
+                                record.status = "EVALUATED"
+                                
+                                session.commit()
+                                st.success("Updated!")
+                                st.rerun()
+                            else:
+                                st.error("AI returned no results.")
 
             # --- CONDITION: If Pending, show Action Button ---
             else:
