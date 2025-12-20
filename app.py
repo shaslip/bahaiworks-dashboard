@@ -20,7 +20,7 @@ st.set_page_config(
 
 # --- Helper Functions ---
 def load_data():
-    """Fetches all documents sorted by Priority Score (Highest to Lowest), then by ID."""
+    """Fetches all documents sorted by Priority Score (Highest to Lowest)."""
     with Session(engine) as session:
         query = select(Document.id, 
                        Document.filename, 
@@ -30,10 +30,7 @@ def load_data():
                        Document.summary,
                        Document.ai_justification,
                        Document.file_path)\
-                .order_by(
-                    desc(Document.priority_score), 
-                    Document.id
-                )
+                .order_by(desc(Document.priority_score))
         
         df = pd.read_sql(query, session.bind)
         return df
@@ -66,20 +63,7 @@ st.markdown("---")
 # 3. Main Data View
 st.subheader("Document Queue")
 
-# View Controls
-col_sort, col_filter = st.columns([1, 4])
-with col_sort:
-    # Toggle to keep the list still while you work
-    sort_mode = st.radio("Sort Order:", ["Priority (Default)", "Filename (Stable)"], horizontal=True)
-
-# Apply Sort in Python (cheaper than reloading DB)
-if sort_mode == "Filename (Stable)":
-    df = df.sort_values(by="filename", ascending=True)
-else:
-    # Ensure stable sort even for Priority (Priority DESC, then Filename ASC)
-    df = df.sort_values(by=["priority_score", "filename"], ascending=[False, True])
-
-# Initialize Session State... (rest of code follows)
+# Initialize Session State for Selection if it doesn't exist
 if "selected_doc_id" not in st.session_state:
     st.session_state.selected_doc_id = None
 
