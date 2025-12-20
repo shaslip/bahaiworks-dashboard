@@ -29,17 +29,17 @@ def evaluate_document(images):
     model = genai.GenerativeModel('gemini-3-flash-preview')
 
     prompt = """
-    You are an expert Historian and Archivist for Bahai.works. 
-    Review these document pages. Your task is to categorize and prioritize them for digitization.
+    You are an expert Historian and Archivist for 'Bahai.works', a repository of primary source materials. 
+    Review these document pages. Your task is to prioritize them based on their value to **academic researchers**.
 
     1. **Language**: Identify the primary language (e.g., 'English', 'German', 'Persian').
-    2. **Summary**: Write a concise English summary (2-3 sentences) of the content.
-    3. **Priority Score (1-10)**: Rate the historical value for researchers.
-       - 10: Rare/Original manuscripts, major historical letters, unique primary sources.
-       - 7-9: Early periodicals, out-of-print books, community histories.
-       - 4-6: Common reprints, general study guides, modern administrative circulars.
-       - 1-3: Low value duplicates, blurry/unreadable scans, or irrelevant receipts.
-    4. **Justification**: Briefly explain why you gave this score.
+    2. **Summary**: Write a concise English summary (2-3 sentences).
+    3. **Priority Score (1-10)**: Assign a score based on this strict rubric:
+       - **9-10 (Critical Source):** Original manuscripts, handwriting, primary source letters from central figures, unique pre-1930 documents.
+       - **7-8 (High Value):** Rare early periodicals (e.g., Star of the West, Sonne der Wahrheit), out-of-print historical books, local community records/minutes.
+       - **4-6 (Standard Reference):** Standard history books, biographies, study guides, substantive administrative reports.
+       - **1-3 (Low Priority):** Mass-produced brochures, introductory pamphlets, modern reprints widely available elsewhere, or simple event programs.
+    4. **Justification**: Briefly explain the score. **explicitly mention** if the item is a common brochure or pamphlet to justify a low score.
 
     Return the result in JSON format.
     """
