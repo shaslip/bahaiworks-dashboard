@@ -45,8 +45,8 @@ def get_metrics(df):
     return total, pending, completed, high_priority
 
 # --- Sidebar Fragment ---
-# NOTE: We removed 'with st.sidebar' from INSIDE this function.
-# We will call this function FROM the sidebar scope later.
+# FIX 1: Removed 'with st.sidebar' context from INSIDE this function to prevent crash.
+# This function now generates generic UI elements, which we place in the sidebar later.
 @st.fragment
 def render_details(selected_id):
     with Session(engine) as session:
@@ -56,13 +56,16 @@ def render_details(selected_id):
             st.error("Document not found.")
             return
 
+        # Note: We use st.header, st.write directly (not st.sidebar.header)
+        # The placement is determined by where this function is called.
         st.header("📄 Document Details")
         st.write(f"**Filename:** {record.filename}")
         
         # --- 1. File Actions ---
         b1, b2 = st.columns(2)
         with b1:
-            if st.button("📄 Open File", use_container_width=True):
+            # FIX 2: Replaced use_container_width=True with width="stretch" per logs
+            if st.button("📄 Open File", width="stretch"):
                 if os.path.exists(record.file_path):
                     try:
                         if platform.system() == "Linux":
@@ -77,7 +80,7 @@ def render_details(selected_id):
                     st.error("File not found!")
 
         with b2:
-            if st.button("📂 Open Folder", use_container_width=True):
+            if st.button("📂 Open Folder", width="stretch"):
                 folder_path = os.path.dirname(record.file_path)
                 if os.path.exists(folder_path):
                     try:
@@ -188,9 +191,10 @@ tab1, tab2 = st.tabs(["All Files", "High Priority Only"])
 display_cols = ['id', 'filename', 'status', 'priority_score', 'language']
 
 with tab1:
+    # FIX 2: Replaced use_container_width=True with width="stretch"
     event = st.dataframe(
         df[display_cols],
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         selection_mode="single-row",
         on_select="rerun",
@@ -205,7 +209,7 @@ with tab2:
         high_pri_df = df[df['priority_score'] >= 8]
         event_hp = st.dataframe(
             high_pri_df[display_cols], 
-            use_container_width=True, 
+            width="stretch", 
             hide_index=True,
             selection_mode="single-row",
             on_select="rerun",
