@@ -22,10 +22,9 @@ class EvaluationResult(typing.TypedDict):
 
 def evaluate_document(images):
     """
-    Sends images to Gemini 3 Flash for analysis.
+    Sends images to Gemini 3 Flash Preview for analysis.
     Returns a dictionary matching the EvaluationResult schema.
     """
-    # Use Flash for speed and high rate limits.
     model = genai.GenerativeModel('gemini-3-flash-preview')
 
     prompt = """
