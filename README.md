@@ -19,7 +19,7 @@ A local Python application for scanning, prioritizing, and managing a large queu
 
 1. **Clone the repository:**
 ```bash
-git clone <repository-url>
+git clone https://github.com/shaslip/bahaiworks-dashboard.git dashboard
 cd dashboard
 
 ```
