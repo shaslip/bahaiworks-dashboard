@@ -89,11 +89,8 @@ with tab2:
 # 4. Detail View (Sidebar)
 if len(event.selection['rows']) > 0:
     selected_index = event.selection['rows'][0]
-    selected_id = int(df.iloc[selected_index]['id']) # Ensure ID is native Python int
+    selected_id = int(df.iloc[selected_index]['id'])
     
-    # Fetch full details
-    # We use a fresh session query here to ensure we get the absolute latest data 
-    # (in case you just updated it)
     with Session(engine) as session:
         record = session.get(Document, selected_id)
         
@@ -120,95 +117,77 @@ if len(event.selection['rows']) > 0:
             
             st.subheader("AI Analysis")
             
-            # --- CONDITION: If already evaluated, show results ---
+            # --- PATH A: ALREADY EVALUATED ---
             if record.priority_score is not None:
                 st.metric("Priority Score", f"{record.priority_score}/10")
                 st.write(f"**Language:** {record.language}")
                 st.info(f"**Summary:** {record.summary}")
+                
                 with st.expander("See AI Justification"):
                     st.caption(record.ai_justification)
+                
                 st.divider()
 
-                # 2. MANUAL OVERRIDE CONTROLS
-            st.subheader("Manual Controls")
+                # Manual Override Controls
+                st.subheader("Manual Controls")
+                col1, col2 = st.columns(2)
+                with col1:
+                    new_score = st.number_input(
+                        "Set Score", min_value=1, max_value=10, 
+                        value=record.priority_score, label_visibility="collapsed"
+                    )
+                with col2:
+                    if st.button("💾 Save Override"):
+                        record.priority_score = new_score
+                        if "Manually Overridden" not in (record.ai_justification or ""):
+                            record.ai_justification = (record.ai_justification or "") + "\n[Manually Overridden]"
+                        session.commit()
+                        st.toast(f"Score updated to {new_score}")
+                        st.rerun()
 
-            col1, col2 = st.columns(2)
-            with col1:
-                # Number input defaults to current score
-                new_score = st.number_input(
-                    "Set Score", 
-                    min_value=1, 
-                    max_value=10, 
-                    value=record.priority_score,
-                    label_visibility="collapsed"
-                )
-            
-            with col2:
-                if st.button("💾 Save Override"):
-                    record.priority_score = new_score
-                    # Append a note so you know this was human-edited later
-                    if "Manually Overridden" not in (record.ai_justification or ""):
-                        record.ai_justification = (record.ai_justification or "") + "\n[Manually Overridden]"
-                    
-                    session.commit()
-                    st.toast(f"Score updated to {new_score}")
-                    st.rerun()
-                
-                # RE-EVALUATE LOGIC
-                if st.button("🔄 Re-evaluate"):
+                # Re-evaluate Button
+                if st.button("🔄 Re-run AI Evaluation"):
                     with st.spinner("Re-processing document..."):
-                        # 1. Extract Images
                         images = extract_preview_images(record.file_path)
-                        
-                        if not images:
-                             st.error("Failed to extract images.")
-                        else:
-                            # 2. Re-run AI
+                        if images:
                             result = evaluate_document(images)
-                            
                             if result:
-                                # 3. Overwrite Database Record
                                 record.priority_score = result['priority_score']
                                 record.summary = result['summary']
                                 record.language = result['language']
                                 record.ai_justification = result['ai_justification']
                                 record.status = "EVALUATED"
-                                
                                 session.commit()
                                 st.success("Updated!")
                                 st.rerun()
                             else:
                                 st.error("AI returned no results.")
+                        else:
+                            st.error("Failed to extract images.")
 
-            # --- CONDITION: If Pending, show Action Button ---
+            # --- PATH B: PENDING ANALYSIS ---
             else:
                 st.warning("Status: Pending Analysis")
                 
                 if st.button("✨ Run AI Evaluation", type="primary"):
                     with st.spinner("Extracting pages and reading with Gemini..."):
-                        
-                        # 1. Extract Images (The Eyes)
                         images = extract_preview_images(record.file_path)
                         
                         if not images:
-                            st.error("Failed to extract images from PDF. File might be corrupted or password protected.")
+                            st.error("Failed to extract images.")
                         else:
-                            # 2. Evaluate (The Brain)
                             result = evaluate_document(images)
-                            
                             if result:
-                                # 3. Update Database
                                 record.priority_score = result['priority_score']
                                 record.summary = result['summary']
                                 record.language = result['language']
                                 record.ai_justification = result['ai_justification']
                                 record.status = "EVALUATED"
-                                
                                 session.commit()
                                 st.success("Analysis Complete!")
-                                st.rerun() # Refresh app to show new data
+                                st.rerun()
                             else:
-                                st.error("AI returned no results. Check API Key or Console logs.")
+                                st.error("AI returned no results.")
 
 else:
     with st.sidebar:
