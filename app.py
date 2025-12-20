@@ -99,19 +99,41 @@ if len(event.selection['rows']) > 0:
             st.write(f"**Filename:** {record.filename}")
             
             # Open File Button
-            if st.button("📂 Open Local File"):
-                if os.path.exists(record.file_path):
-                    try:
-                        if platform.system() == "Linux":
-                            subprocess.call(["xdg-open", record.file_path])
-                        elif platform.system() == "Darwin":
-                            subprocess.call(["open", record.file_path])
-                        elif platform.system() == "Windows":
-                            os.startfile(record.file_path)
-                    except Exception as e:
-                        st.error(f"Error: {e}")
-                else:
-                    st.error("File not found!")
+            b1, b2 = st.columns(2)
+            
+            with b1:
+                if st.button("📄 Open File", use_container_width=True):
+                    if os.path.exists(record.file_path):
+                        try:
+                            if platform.system() == "Linux":
+                                subprocess.call(["xdg-open", record.file_path])
+                            elif platform.system() == "Darwin":
+                                subprocess.call(["open", record.file_path])
+                            elif platform.system() == "Windows":
+                                os.startfile(record.file_path)
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+                    else:
+                        st.error("File not found!")
+
+            with b2:
+                if st.button("📂 Open Folder", use_container_width=True):
+                    folder_path = os.path.dirname(record.file_path)
+                    if os.path.exists(folder_path):
+                        try:
+                            if platform.system() == "Linux":
+                                # Open folder and select file (Nautilus specific, usually works on Gnome/Ubuntu)
+                                subprocess.call(["nautilus", record.file_path]) 
+                                # If nautilus fails or isn't installed, fallback to just opening folder:
+                                # subprocess.call(["xdg-open", folder_path])
+                            elif platform.system() == "Darwin":
+                                subprocess.call(["open", "-R", record.file_path])
+                            elif platform.system() == "Windows":
+                                subprocess.Popen(f'explorer /select,"{record.file_path}"')
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+                    else:
+                        st.error("Folder not found!")
 
             st.divider()
             
