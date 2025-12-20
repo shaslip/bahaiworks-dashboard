@@ -29,7 +29,8 @@ def load_data():
                        Document.priority_score, 
                        Document.language, 
                        Document.summary,
-                       Document.file_path)
+                       Document.file_path)\
+                .order_by(desc(Document.priority_score))
         
         # Load into DataFrame
         df = pd.read_sql(query, session.bind)
@@ -122,10 +123,8 @@ if len(event.selection['rows']) > 0:
                     if os.path.exists(folder_path):
                         try:
                             if platform.system() == "Linux":
-                                # Open folder and select file (Nautilus specific, usually works on Gnome/Ubuntu)
-                                subprocess.call(["nautilus", record.file_path]) 
-                                # If nautilus fails or isn't installed, fallback to just opening folder:
-                                # subprocess.call(["xdg-open", folder_path])
+                                # KDE Dolphin specific command to highlight the file
+                                subprocess.call(["dolphin", "--select", record.file_path])
                             elif platform.system() == "Darwin":
                                 subprocess.call(["open", "-R", record.file_path])
                             elif platform.system() == "Windows":
