@@ -146,15 +146,13 @@ class OcrEngine:
             )
 
             # B. Perform OCR
-            try:
-                # Use PIL to open image, pass to pytesseract
-                # Pass 'eng', 'deu', 'fas' etc directly
-                text = pytesseract.image_to_string(Image.open(img_path), lang=config.language)
-                
-                # Clean generic garbage (form feed characters)
-                text = text.replace('\f', '')
-            except Exception as e:
-                text = f"[OCR FAILED: {str(e)}]"
+            # --- ERROR HANDLING REMOVED ---
+            # If tesseract fails (missing language, etc.), this will now RAISE an exception
+            # and stop the script immediately, preventing silent corruption.
+            text = pytesseract.image_to_string(Image.open(img_path), lang=config.language)
+            
+            # Clean generic garbage (form feed characters)
+            text = text.replace('\f', '')
 
             # C. Format Template
             # {{page|label|file=Filename.pdf|page=index}}
