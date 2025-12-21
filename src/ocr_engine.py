@@ -80,24 +80,22 @@ class OcrEngine:
 
     def generate_images(self) -> int:
         """
-        Runs pdftoppm to generate PNGs in the temp directory.
-        Returns the count of images generated.
+        Runs pdftoppm to generate PNGs.
+        ALWAYS starts fresh to prevent corrupted cache issues.
         """
-        if not os.path.exists(self.cache_dir):
-            os.makedirs(self.cache_dir)
+        # 1. Force Clean Start: If dir exists, nuke it.
+        if os.path.exists(self.cache_dir):
+            shutil.rmtree(self.cache_dir)
+        
+        # 2. Re-create empty dir
+        os.makedirs(self.cache_dir)
         
         # Output prefix for pdftoppm
         prefix = os.path.join(self.cache_dir, "page")
         
-        # Check if we already have images (simple caching)
-        existing_files = glob.glob(os.path.join(self.cache_dir, "*.png"))
-        if len(existing_files) > 0:
-            return len(existing_files)
-
         print(f"Generating images for {self.filename}...")
         
         # Using subprocess to call system pdftoppm
-        # -r 300 sets DPI to 300 (good for OCR)
         cmd = ["pdftoppm", "-png", "-r", "300", self.file_path, prefix]
         subprocess.run(cmd, check=True)
         
@@ -168,7 +166,8 @@ class OcrEngine:
             )
 
             # B. Perform OCR
-            text = pytesseract.image_to_string(Image.open(img_path), lang=config.language)
+            with Image.open(img_path) as img:
+                text = pytesseract.image_to_string(img, lang=config.language)
             
             # Clean generic garbage (form feed characters)
             text = text.replace('\f', '')
