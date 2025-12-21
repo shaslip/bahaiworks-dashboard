@@ -281,7 +281,8 @@ st.subheader("Document Queue")
 if "selected_doc_id" not in st.session_state:
     st.session_state.selected_doc_id = None
 
-tab1, tab2 = st.tabs(["All Files", "High Priority Only"])
+# UPDATED: Added tab3 for "Digitized"
+tab1, tab2, tab3 = st.tabs(["All Files", "High Priority Only", "Digitized"])
 display_cols = ['id', 'filename', 'status', 'priority_score', 'language']
 
 with tab1:
@@ -313,6 +314,24 @@ with tab2:
             st.session_state.selected_doc_id = int(high_pri_df.iloc[idx]['id'])
     else:
         st.info("No documents evaluated yet.")
+
+# NEW: Tab 3 Logic
+with tab3:
+    if not df.empty:
+        digitized_df = df[df['status'] == 'DIGITIZED']
+        event_dig = st.dataframe(
+            digitized_df[display_cols], 
+            width="stretch", 
+            hide_index=True,
+            selection_mode="single-row",
+            on_select="rerun",
+            key="dig_table"
+        )
+        if len(event_dig.selection['rows']) > 0:
+            idx = event_dig.selection['rows'][0]
+            st.session_state.selected_doc_id = int(digitized_df.iloc[idx]['id'])
+    else:
+        st.info("No digitized documents found.")
 
 # 4. Render Sidebar (Caller)
 with st.sidebar:
