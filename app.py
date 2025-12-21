@@ -45,9 +45,10 @@ def load_data():
 def get_metrics(df):
     total = len(df)
     pending = len(df[df['status'] == 'PENDING'])
-    completed = len(df[df['status'] == 'DIGITIZED'])
+    digitized = len(df[df['status'] == 'DIGITIZED'])
+    completed = len(df[df['status'] == 'COMPLETED'])
     high_priority = len(df[df['priority_score'] >= 8]) if not df.empty else 0
-    return total, pending, completed, high_priority
+    return total, pending, digitized, completed, high_priority
 
 def parse_ranges(text):
     """Parses '48-55, 102' into [(48, 55), (102, 102)]"""
@@ -391,6 +392,14 @@ def render_details(selected_id):
             st.info(f"**Target URL:** de.bahai.works/{clean_title_url}")
             st.info(f"**Text URL:** de.bahai.works/{clean_title_url}/Text")
 
+            st.markdown("---")
+
+            if st.button("✅ Mark as Completed (Remove from Queue)", type="primary"):
+                record.status = "COMPLETED"
+                session.commit()
+                st.success("Document marked as COMPLETED!")
+                st.rerun()
+
 # --- Main App Execution ---
 
 st.title("📚 Bahai.works Prioritization Engine")
@@ -399,12 +408,14 @@ st.title("📚 Bahai.works Prioritization Engine")
 df = load_data()
 
 # 2. Metrics
-m1, m2, m3, m4 = st.columns(4)
-total, pending, completed, high_pri = get_metrics(df)
-m1.metric("Total Documents Found", total)
-m2.metric("Pending AI Review", pending)
-m3.metric("Digitized", completed)
-m4.metric("High Priority (>8)", high_pri)
+m1, m2, m3, m4, m5 = st.columns(5)
+total, pending, digitized, completed, high_pri = get_metrics(df)
+
+m1.metric("Total Documents", total)
+m2.metric("Pending AI", pending)
+m3.metric("Digitized (Queue)", digitized)
+m4.metric("Completed", completed)
+m5.metric("High Priority", high_pri)
 
 st.markdown("---")
 
@@ -414,8 +425,8 @@ st.subheader("Document Queue")
 if "selected_doc_id" not in st.session_state:
     st.session_state.selected_doc_id = None
 
-# UPDATED: Added tab3 for "Digitized"
-tab1, tab2, tab3 = st.tabs(["All Files", "High Priority Only", "Digitized"])
+# UPDATED: Added tab4 for "Completed"
+tab1, tab2, tab3, tab4 = st.tabs(["All Files", "High Priority Only", "Digitized", "Completed"])
 display_cols = ['id', 'filename', 'status', 'priority_score', 'language']
 
 with tab1:
@@ -448,7 +459,6 @@ with tab2:
     else:
         st.info("No documents evaluated yet.")
 
-# NEW: Tab 3 Logic
 with tab3:
     if not df.empty:
         digitized_df = df[df['status'] == 'DIGITIZED']
@@ -465,6 +475,23 @@ with tab3:
             st.session_state.selected_doc_id = int(digitized_df.iloc[idx]['id'])
     else:
         st.info("No digitized documents found.")
+
+with tab4:
+    if not df.empty:
+        completed_df = df[df['status'] == 'COMPLETED']
+        event_comp = st.dataframe(
+            completed_df[display_cols], 
+            width="stretch", 
+            hide_index=True,
+            selection_mode="single-row",
+            on_select="rerun",
+            key="comp_table"
+        )
+        if len(event_comp.selection['rows']) > 0:
+            idx = event_comp.selection['rows'][0]
+            st.session_state.selected_doc_id = int(completed_df.iloc[idx]['id'])
+    else:
+        st.info("No completed documents yet.")
 
 # 4. Render Sidebar (Caller)
 with st.sidebar:
