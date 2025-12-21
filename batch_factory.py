@@ -34,7 +34,7 @@ def run_factory():
             # --- INTERACTIVE PROMPT ---
             if ask_permission:
                 while True:
-                    user_input = input("   Would you like to continue? [y/n/a] (Yes/No/All): ").strip().lower()
+                    user_input = input("   Would you like to continue? [y/n/a]: ").strip().lower()
                     
                     if user_input in ['n', 'no', 'q', 'quit']:
                         print("   🛑 Stopping factory.")
