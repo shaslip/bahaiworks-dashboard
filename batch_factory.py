@@ -44,15 +44,21 @@ def run_factory():
 
             print(f"\n[{i}/{len(queue)}] Processing: {doc.filename}")
             
+            skip_file = False
+
             # --- INTERACTIVE PROMPT ---
             if ask_permission:
                 while True:
-                    user_input = input("    Would you like to continue? [y/n/a]: ").strip().lower()
+                    user_input = input("    Would you like to continue? [y/n/a/s]: ").strip().lower()
                     
                     if user_input in ['n', 'no', 'q', 'quit']:
                         print("    🛑 Stopping factory.")
                         return
                     
+                    elif user_input == 's':
+                        skip_file = True
+                        break
+                        
                     elif user_input in ['a', 'all']:
                         print("    🚀 fast-forward enabled. Processing all remaining files...")
                         ask_permission = False
@@ -60,6 +66,10 @@ def run_factory():
                     
                     elif user_input in ['y', 'yes', '']:
                         break  # Just continue to this file
+            
+            if skip_file:
+                print("    ⏩ Skipping.")
+                continue
             # --------------------------
 
             # 1. Validation check
