@@ -1,6 +1,6 @@
 import os
 import sys
-import fitz  # PyMuPDF for page counting
+import fitz  # PyMuPDF
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from src.database import engine, Document
@@ -9,65 +9,92 @@ from src.auto_config import calculate_start_offset
 
 def run_factory():
     print("🏭 Starting Bahai.works Automation Factory...")
+    print("   Scanning database for High Priority (>8) items pending digitization...")
     
     with Session(engine) as session:
-        # 1. Get High Priority items that are NOT digitized yet
+        # Get High Priority items that are NOT digitized
         stm = select(Document).where(
             Document.priority_score >= 8,
             Document.status != "DIGITIZED"
         )
         queue = session.scalars(stm).all()
         
-        print(f"Found {len(queue)} high-priority documents to process.")
+        if not queue:
+            print("   No matching documents found.")
+            return
+
+        print(f"   Found {len(queue)} documents to process.")
         
-        for doc in queue:
-            print(f"\n--- Processing: {doc.filename} ---")
+        for i, doc in enumerate(queue, 1):
+            print(f"\n[{i}/{len(queue)}] Processing: {doc.filename}")
             
-            # Step A: Get Page Count
-            try:
-                pdf = fitz.open(doc.file_path)
-                total_pages = len(pdf)
-                pdf.close()
-            except:
-                print("❌ Could not open PDF.")
+            # 1. Validation check
+            if not os.path.exists(doc.file_path):
+                print("   ❌ File not found on disk. Skipping.")
                 continue
 
-            # Step B: Auto-Calibrate Offset
-            print("   Triangulating page numbers with Gemini...")
+            # 2. Get Total Pages
+            try:
+                with fitz.open(doc.file_path) as pdf:
+                    total_pages = len(pdf)
+            except Exception as e:
+                print(f"   ❌ Corrupt PDF: {e}")
+                continue
+
+            # 3. Auto-Calibrate (The "Detective")
+            print("   🔍 Triangulating page offset...")
             start_page = calculate_start_offset(doc.file_path, total_pages)
             
             if start_page:
-                print(f"   ✅ LOCK: 'Page 1' begins at PDF Page {start_page}")
+                print(f"   ✅ LOCK: 'Page 1' starts at PDF Page {start_page}")
                 
-                # Step C: Configure & Run OCR
-                # We assume standard Roman Numeral front matter (has_cover=True)
+                # 4. Configure Job
+                # We assume 'eng' unless DB says otherwise
+                lang_map = {'German': 'deu', 'Persian': 'fas', 'French': 'fra'}
+                ocr_lang = 'eng'
+                for k, v in lang_map.items():
+                    if doc.language and k in doc.language:
+                        ocr_lang = v
+                        break
+                
                 config = OcrConfig(
-                    has_cover_image=True,
+                    has_cover_image=True, # Safe assumption for published books
                     first_numbered_page_index=start_page,
-                    illustration_ranges=[], # Automation cannot guess these yet, safe to leave empty
-                    language=doc.language if doc.language in ['eng', 'deu', 'fas'] else 'eng'
+                    illustration_ranges=[], # Automation ignores illustrations for now
+                    language=ocr_lang
                 )
                 
-                engine_worker = OcrEngine(doc.file_path)
-                
-                # Generate Images
-                engine_worker.generate_images()
-                
-                # Run OCR
-                engine_worker.run_ocr(config)
-                
-                # Cleanup
-                engine_worker.cleanup()
-                
-                # Update DB
-                doc.status = "DIGITIZED"
-                session.commit()
-                print("   🎉 Digitization Complete!")
-                
+                # 5. Execute OCR (The "Worker")
+                try:
+                    worker = OcrEngine(doc.file_path)
+                    
+                    # A. Generate Images
+                    print("   📸 Generating page images...")
+                    worker.generate_images()
+                    
+                    # B. OCR
+                    print(f"   📖 Reading text ({ocr_lang})...")
+                    worker.run_ocr(config)
+                    
+                    # C. Cleanup
+                    worker.cleanup()
+                    
+                    # D. Update DB
+                    doc.status = "DIGITIZED"
+                    session.commit()
+                    print("   🎉 Success! DB updated.")
+                    
+                except Exception as e:
+                    print(f"   ❌ OCR Failure: {e}")
+                    worker.cleanup() # Ensure cleanup even on fail
+            
             else:
-                print("   ⚠️  Could not determine page offset automatically. Skipping.")
-                doc.ai_justification = (doc.ai_justification or "") + "\n[Auto-OCR Failed: Offset Unclear]"
+                print("   ⚠️  Calibration Failed: Offsets did not agree (need 2/3). Skipping.")
+                # Log failure so we don't retry infinitely
+                doc.ai_justification = (doc.ai_justification or "") + "\n[Auto-OCR Failed: Calibration Mismatch]"
                 session.commit()
+
+    print("\n🏭 Factory shutdown. All jobs complete.")
 
 if __name__ == "__main__":
     run_factory()
