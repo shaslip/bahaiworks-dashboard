@@ -1,6 +1,7 @@
 import fitz  # PyMuPDF
 from PIL import Image
 import io
+import os
 
 def extract_preview_images(file_path: str, max_pages: int = 3):
     """
@@ -30,3 +31,26 @@ def extract_preview_images(file_path: str, max_pages: int = 3):
     except Exception as e:
         print(f"Error processing {file_path}: {e}")
         return []
+
+def merge_pdf_pair(cover_path: str, content_path: str, output_path: str) -> bool:
+    """
+    Merges two PDFs: Cover + Content into a single file at output_path.
+    """
+    try:
+        if not os.path.exists(cover_path) or not os.path.exists(content_path):
+            print(f"    ❌ Merge failed: One or more input files missing.")
+            return False
+
+        doc_master = fitz.open(cover_path)
+        doc_content = fitz.open(content_path)
+        
+        # Append content to the end of master (cover)
+        doc_master.insert_pdf(doc_content)
+        
+        doc_master.save(output_path)
+        doc_master.close()
+        doc_content.close()
+        return True
+    except Exception as e:
+        print(f"    ❌ Merge Error: {e}")
+        return False
