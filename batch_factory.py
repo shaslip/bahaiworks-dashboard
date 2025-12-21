@@ -17,7 +17,7 @@ def run_factory():
         # Get High Priority items that are NOT digitized
         stm = select(Document).where(
             Document.priority_score >= 8,
-            Document.status != "DIGITIZED"
+            Document.status.notin_(["DIGITIZED", "COMPLETED"])
         )
         queue = session.scalars(stm).all()
         
