@@ -364,7 +364,7 @@ def render_details(selected_id):
 {summary_block}
 
 == Zugang ==
-* [{{{filepath:{pub_filename}}}} PDF]
+* [{{{{filepath:{pub_filename}}}}} PDF]
 * Für den Volltext siehe [[/Text]]."""
 
 
