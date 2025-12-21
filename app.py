@@ -299,30 +299,36 @@ def render_details(selected_id):
             suggested_name = f"{pub_title.strip()}.pdf"
             pub_filename = st.text_input("Target Filename (MediaWiki)", value=suggested_name)
 
-            # --- START OF REPLACEMENT BLOCK ---
+            # --- START OF FIXED BLOCK ---
             
             # Summary Editor
-            # We use a unique key per record so the text doesn't persist when switching files
             summary_key = f"summary_{record.id}"
             
-            # Initialize session state if not set for this record
+            # Initialize session state if not set
             if summary_key not in st.session_state:
                 st.session_state[summary_key] = record.summary or ""
 
             st.write("**Summary (German)**")
             
-            # Text Area bound to session_state
-            pub_summary = st.text_area("Summary", height=150, key=summary_key)
+            # 1. Create a placeholder for the text area
+            summary_placeholder = st.empty()
             
+            # 2. Render the button and handle logic BEFORE the text area is instantiated
             if st.button("🤖 Translate to German"):
                 with st.spinner("Translating..."):
-                    # Call the function we just added to evaluator.py
-                    german_text = translate_summary(pub_summary)
+                    # We can safely read/write session_state here because 
+                    # the text_area widget hasn't been called yet in this frame.
+                    current_text = st.session_state.get(summary_key, "")
+                    german_text = translate_summary(current_text)
                     if german_text:
                         st.session_state[summary_key] = german_text
-                        st.rerun()
+                        # No st.rerun() needed! The widget below will pick up the new value immediately.
             
-            # --- END OF REPLACEMENT BLOCK ---
+            # 3. Render the text area into the placeholder
+            # It will automatically display the value currently in st.session_state[summary_key]
+            pub_summary = summary_placeholder.text_area("Summary", height=150, key=summary_key)
+            
+            # --- END OF FIXED BLOCK ---
 
             st.divider()
             
