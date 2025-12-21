@@ -140,7 +140,6 @@ def render_details(selected_id):
         st.divider()
 
         # === TABS ===
-        # NEW: Added "📝 Publisher" tab
         tab_ai, tab_ocr, tab_pub = st.tabs(["🤖 AI Analyst", "🏭 OCR Factory", "📝 Publisher"])
 
         # -------------------------
@@ -220,7 +219,7 @@ def render_details(selected_id):
             else:
                 st.success("✅ Images Ready")
                 
-                # Spot Checker (Outside Form)
+                # Spot Checker
                 with st.expander("🔍 Spot Checker (Verify Pages)"):
                     check_page = st.number_input("Check Page #", min_value=1, value=1)
                     images = sorted(glob.glob(os.path.join(ocr.cache_dir, "*.png")), key=ocr._natural_sort_key)
@@ -239,12 +238,9 @@ def render_details(selected_id):
                     if record.language and "Persian" in record.language: default_idx = 1
                     
                     sel_lang = st.selectbox("Language", lang_opts, index=default_idx)
-                    
                     has_cover = st.checkbox("Has Cover Image?", value=True)
-                    
                     first_num = st.number_input("Start of 'Page 1'", min_value=1, value=14, 
                                                 help="The image number where the printed 'Page 1' begins.")
-                    
                     illus_text = st.text_input("Illustration Ranges", placeholder="e.g. 48-55, 102-105", 
                                                help="Ranges will be labeled 'illus.X'")
                     
@@ -267,7 +263,6 @@ def render_details(selected_id):
                     try:
                         final_path = ocr.run_ocr(config, progress_callback=update_prog)
                         st.success(f"OCR Complete! Saved to: {os.path.basename(final_path)}")
-                        
                         record.status = "DIGITIZED"
                         session.commit()
                         
@@ -300,6 +295,11 @@ def render_details(selected_id):
                 pub_year = st.text_input("Year", value=defaults['year'])
                 # pub_next = st.text_input("Next Link", placeholder="[[../Nr 2|Nr 2]]") 
 
+            # NEW: Target Filename Logic
+            # Auto-suggest name based on Title, but allow manual override
+            suggested_name = f"{pub_title.strip()}.pdf"
+            pub_filename = st.text_input("Target Filename (MediaWiki)", value=suggested_name)
+
             # Summary Editor
             st.write("**Summary (German)**")
             pub_summary = st.text_area("Summary", value=record.summary or "", height=150)
@@ -315,8 +315,10 @@ def render_details(selected_id):
             
             wiki_text = ""
             clean_title_url = pub_title.replace(" ", "_") # Rough URL encoding
-            pdf_filename = record.filename # Assuming we use the current filename on media
             
+            # Wrap summary in {{ai}} template
+            summary_block = f"{{{{ai|{pub_summary}}}}}" if pub_summary else ""
+
             # HEADER Template (Common)
             header = f"""{{{{header
  | title      = [[../]]
@@ -326,21 +328,21 @@ def render_details(selected_id):
  | previous   = 
  | next       = 
  | year       = {pub_year}
- | notes      = {{{{home |link= | pdf=[{{{{filepath:{pdf_filename}}}}} PDF] }}}}
+ | notes      = {{{{home |link= | pdf=[{{{{filepath:{pub_filename}}}}} PDF] }}}}
 }}}}"""
 
             if "Periodical" in pub_type:
                 wiki_text = f"""{header}
 
-<pdf>File:{pdf_filename}</pdf>"""
+<pdf>File:{pub_filename}</pdf>"""
 
             elif "Unstructured" in pub_type:
                 wiki_text = f"""{header}
 
-{pub_summary}
+{summary_block}
 
 == Downloads ==
-* {{{{pcl|{pdf_filename}|PDF Download}}}}
+* {{{{pcl|{pub_filename}|PDF Download}}}}
 
 == Text ==
 See [[/Text]] for the full text."""
@@ -349,13 +351,13 @@ See [[/Text]] for the full text."""
                 wiki_text = f"""{header}
 {{{{book
 | color = a24229
-| image = {pdf_filename} | downloads = 
+| image = {pub_filename} | downloads = 
 | links = 
 | pages = 
 }}}}
 
 === Contents ===
-{pub_summary}
+{summary_block}
 
 * [[/Foreword|Foreword]]
 * [[/Chapter 1|Chapter 1]]
