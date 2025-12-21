@@ -62,3 +62,30 @@ def evaluate_document(images):
     except Exception as e:
         print(f"AI Evaluation Error: {e}")
         return None
+
+def translate_summary(text: str) -> str:
+    """
+    Translates the provided text into German suitable for an academic/archival context.
+    """
+    if not text:
+        return ""
+        
+    model = genai.GenerativeModel('gemini-3-flash-preview') # Matching your existing model string
+
+    prompt = f"""
+    You are an expert translator for a German academic archive (Bahai.works).
+    Translate the following English summary into formal, encyclopedic German.
+    Maintain the factual tone. Do not add conversational fillers.
+
+    Input Text:
+    "{text}"
+
+    German Translation:
+    """
+
+    try:
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception as e:
+        print(f"Translation Error: {e}")
+        return text # Fallback to original
