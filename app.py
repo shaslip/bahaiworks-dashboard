@@ -3,6 +3,7 @@ import pandas as pd
 import subprocess
 import platform
 import os
+import re
 import glob
 from sqlalchemy.orm import Session
 from sqlalchemy import select, desc
@@ -64,6 +65,33 @@ def parse_ranges(text):
         pass # Fail silently on bad input
     return ranges
 
+def parse_filename_metadata(filename):
+    """
+    Attempts to extract Year, Author, and Title from:
+    'G 020 Schw D 1919 - Schwarz-Alice - Die Universale Weltreligion.pdf'
+    """
+    meta = {"year": "", "author": "", "title": ""}
+    
+    # Remove extension
+    clean_name = os.path.splitext(filename)[0]
+    
+    # Regex for standard pattern: Code - Author - Title
+    # Looks for '1919 - ' separator
+    match = re.search(r"(\d{4})\s*-\s*(.*?)\s*-\s*(.*)", clean_name)
+    if match:
+        meta["year"] = match.group(1)
+        # Flip 'Schwarz-Alice' to 'Alice Schwarz' if hyphenated
+        author_part = match.group(2).replace("-", " ").strip()
+        # Optional: heuristic to flip Last First -> First Last? 
+        # For now, just keeping it clean.
+        meta["author"] = author_part 
+        meta["title"] = match.group(3)
+    else:
+        # Fallback: Use whole name as title
+        meta["title"] = clean_name
+        
+    return meta
+
 # --- Sidebar Fragment ---
 @st.fragment
 def render_details(selected_id):
@@ -111,8 +139,9 @@ def render_details(selected_id):
 
         st.divider()
 
-        # === TABS: AI vs OCR ===
-        tab_ai, tab_ocr = st.tabs(["🤖 AI Analyst", "🏭 OCR Factory"])
+        # === TABS ===
+        # NEW: Added "📝 Publisher" tab
+        tab_ai, tab_ocr, tab_pub = st.tabs(["🤖 AI Analyst", "🏭 OCR Factory", "📝 Publisher"])
 
         # -------------------------
         # TAB 1: AI EVALUATION
@@ -179,7 +208,6 @@ def render_details(selected_id):
             ocr = OcrEngine(record.file_path)
             
             # 1. Image Generation Check
-            # We look for the hidden temp folder to see if images exist
             has_images = os.path.exists(ocr.cache_dir) and len(glob.glob(os.path.join(ocr.cache_dir, "*.png"))) > 0
             
             if not has_images:
@@ -195,9 +223,6 @@ def render_details(selected_id):
                 # Spot Checker (Outside Form)
                 with st.expander("🔍 Spot Checker (Verify Pages)"):
                     check_page = st.number_input("Check Page #", min_value=1, value=1)
-                    # Find file with padding logic (001 vs 0001)
-                    # We just glob for it because we don't know the exact padding here easily
-                    # A robust way is to just listdir and sort
                     images = sorted(glob.glob(os.path.join(ocr.cache_dir, "*.png")), key=ocr._natural_sort_key)
                     if 0 <= check_page-1 < len(images):
                         st.image(images[check_page-1], caption=f"Image {check_page}")
@@ -209,7 +234,6 @@ def render_details(selected_id):
                     st.subheader("Step 2: Configuration")
                     
                     lang_opts = ["eng", "fas", "deu", "fra", "spa", "rus"]
-                    # Try to auto-select language based on AI analysis
                     default_idx = 0
                     if record.language and "German" in record.language: default_idx = 2
                     if record.language and "Persian" in record.language: default_idx = 1
@@ -219,15 +243,14 @@ def render_details(selected_id):
                     has_cover = st.checkbox("Has Cover Image?", value=True)
                     
                     first_num = st.number_input("Start of 'Page 1'", min_value=1, value=14, 
-                                              help="The image number where the printed 'Page 1' begins.")
+                                                help="The image number where the printed 'Page 1' begins.")
                     
                     illus_text = st.text_input("Illustration Ranges", placeholder="e.g. 48-55, 102-105", 
-                                             help="Ranges will be labeled 'illus.X'")
+                                               help="Ranges will be labeled 'illus.X'")
                     
                     submitted = st.form_submit_button("🚀 Start OCR Job", type="primary")
                 
                 if submitted:
-                    # Parse Inputs
                     ranges = parse_ranges(illus_text)
                     config = OcrConfig(
                         has_cover_image=has_cover,
@@ -236,7 +259,6 @@ def render_details(selected_id):
                         language=sel_lang
                     )
                     
-                    # Run OCR
                     progress_bar = st.progress(0, text="Starting Tesseract...")
                     
                     def update_prog(curr, total):
@@ -246,17 +268,105 @@ def render_details(selected_id):
                         final_path = ocr.run_ocr(config, progress_callback=update_prog)
                         st.success(f"OCR Complete! Saved to: {os.path.basename(final_path)}")
                         
-                        # Mark as Digitized in DB
                         record.status = "DIGITIZED"
                         session.commit()
                         
-                        # Cleanup Button
                         if st.button("🧹 Cleanup Temp Images"):
                             ocr.cleanup()
                             st.rerun()
                             
                     except Exception as e:
                         st.error(f"OCR Failed: {e}")
+
+        # -------------------------
+        # TAB 3: PUBLISHER (NEW)
+        # -------------------------
+        with tab_pub:
+            st.subheader("🌐 Wikitext Generator")
+            
+            # 1. Parse Metadata Defaults
+            defaults = parse_filename_metadata(record.filename)
+            
+            # 2. Controls
+            pub_type = st.radio("Publication Type", 
+                                ["Periodical (PDF Only)", "Unstructured (Summary + Links)", "Book (Full TOC)"],
+                                index=1)
+            
+            c_meta1, c_meta2 = st.columns(2)
+            with c_meta1:
+                pub_title = st.text_input("Title", value=defaults['title'])
+                pub_author = st.text_input("Author", value=defaults['author'])
+            with c_meta2:
+                pub_year = st.text_input("Year", value=defaults['year'])
+                # pub_next = st.text_input("Next Link", placeholder="[[../Nr 2|Nr 2]]") 
+
+            # Summary Editor
+            st.write("**Summary (German)**")
+            pub_summary = st.text_area("Summary", value=record.summary or "", height=150)
+            
+            if st.button("🤖 Translate to German (Placeholder)"):
+                st.warning("Gemini Translation integration required here.")
+                # Future: Call Gemini with record.summary to get German text
+            
+            st.divider()
+            
+            # 3. Generate Logic
+            st.subheader("Preview")
+            
+            wiki_text = ""
+            clean_title_url = pub_title.replace(" ", "_") # Rough URL encoding
+            pdf_filename = record.filename # Assuming we use the current filename on media
+            
+            # HEADER Template (Common)
+            header = f"""{{{{header
+ | title      = [[../]]
+ | author     = {pub_author}
+ | translator = 
+ | section    = 
+ | previous   = 
+ | next       = 
+ | year       = {pub_year}
+ | notes      = {{{{home |link= | pdf=[{{{{filepath:{pdf_filename}}}}} PDF] }}}}
+}}}}"""
+
+            if "Periodical" in pub_type:
+                wiki_text = f"""{header}
+
+<pdf>File:{pdf_filename}</pdf>"""
+
+            elif "Unstructured" in pub_type:
+                wiki_text = f"""{header}
+
+{pub_summary}
+
+== Downloads ==
+* {{{{pcl|{pdf_filename}|PDF Download}}}}
+
+== Text ==
+See [[/Text]] for the full text."""
+
+            elif "Book" in pub_type:
+                wiki_text = f"""{header}
+{{{{book
+| color = a24229
+| image = {pdf_filename} | downloads = 
+| links = 
+| pages = 
+}}}}
+
+=== Contents ===
+{pub_summary}
+
+* [[/Foreword|Foreword]]
+* [[/Chapter 1|Chapter 1]]
+* [[/Chapter 2|Chapter 2]]
+"""
+
+            st.code(wiki_text, language="mediawiki")
+            
+            # Link to text page
+            st.info(f"**Target URL:** de.bahai.works/{clean_title_url}")
+            st.info(f"**Text URL:** de.bahai.works/{clean_title_url}/Text")
 
 # --- Main App Execution ---
 
