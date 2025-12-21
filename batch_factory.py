@@ -11,14 +11,30 @@ from src.processor import merge_pdf_pair
 
 def run_factory():
     print("🏭 Starting Bahai.works Automation Factory...")
-    print("    Scanning database for High Priority (>8) items pending digitization...")
+    
+    # Check for command line argument (specific ID)
+    target_id = None
+    if len(sys.argv) > 1:
+        try:
+            target_id = int(sys.argv[1])
+            print(f"   🎯 TARGET MODE: Overriding queue to process Document ID: {target_id}")
+        except ValueError:
+            print("   ⚠️ Invalid ID provided. Falling back to priority queue.")
+
+    print("    Scanning database...")
     
     with Session(engine) as session:
-        # Get High Priority items that are NOT digitized
-        stm = select(Document).where(
-            Document.priority_score >= 8,
-            Document.status.notin_(["DIGITIZED", "COMPLETED"])
-        )
+        # LOGIC BRANCH: Specific ID vs. High Priority Queue
+        if target_id:
+            # Fetch specifically requested document (ignoring status flags so you can force-run it)
+            stm = select(Document).where(Document.id == target_id)
+        else:
+            # Standard High Priority Queue
+            stm = select(Document).where(
+                Document.priority_score >= 8,
+                Document.status.notin_(["DIGITIZED", "COMPLETED"])
+            )
+            
         queue = session.scalars(stm).all()
         
         if not queue:
@@ -28,17 +44,19 @@ def run_factory():
         print(f"    Found {len(queue)} documents to process.")
         
         # INTERACTIVE FLAG: Starts true, turns false if you type 'a'
-        ask_permission = True
+        # If in Target Mode, we default to False (just run it), or you can keep it True.
+        ask_permission = True 
         
         # Regex for identifying split parts
-        # Captures: Group 1 (Base Name), Group 2 (Suffix Type: Cover or Inhalt gesamt)
         split_pattern = re.compile(r"^(.*?)\s*-\s*(Cover|Inhalt gesamt)\.pdf$", re.IGNORECASE)
 
         for i, doc in enumerate(queue, 1):
             # Refresh doc status in case it was modified by a previous merge in this loop
             session.refresh(doc)
             
-            if doc.status == "DIGITIZED":
+            # If manually targeted, we might want to allow reprocessing even if DIGITIZED
+            # But standard logic skips it.
+            if doc.status == "DIGITIZED" and not target_id:
                 print(f"\n[{i}/{len(queue)}] Skipping {doc.filename} (Already processed via merge partner).")
                 continue
 
