@@ -77,8 +77,10 @@ def run_factory():
                         ocr_lang = v
                         break
                 
+                use_cover = (start_page > 1)
+                
                 config = OcrConfig(
-                    has_cover_image=True,
+                    has_cover_image=use_cover,
                     first_numbered_page_index=start_page,
                     illustration_ranges=[], 
                     language=ocr_lang
