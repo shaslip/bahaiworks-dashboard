@@ -430,8 +430,11 @@ tab1, tab2, tab3, tab4 = st.tabs(["All Files", "High Priority Only", "Digitized"
 display_cols = ['id', 'filename', 'status', 'priority_score', 'language']
 
 with tab1:
+    # UPDATED: Filter out 'Completed' status
+    filtered_df = df[df['status'] != 'COMPLETED']
+
     event = st.dataframe(
-        df[display_cols],
+        filtered_df[display_cols],
         width="stretch",
         hide_index=True,
         selection_mode="single-row",
@@ -440,7 +443,8 @@ with tab1:
     )
     if len(event.selection['rows']) > 0:
         idx = event.selection['rows'][0]
-        st.session_state.selected_doc_id = int(df.iloc[idx]['id'])
+        # UPDATED: Use filtered_df to get the correct ID
+        st.session_state.selected_doc_id = int(filtered_df.iloc[idx]['id'])
 
 with tab2:
     if not df.empty and 'priority_score' in df.columns:
