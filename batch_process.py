@@ -9,35 +9,28 @@ from src.database import engine, Document
 from src.processor import extract_preview_images
 from src.evaluator import evaluate_document
 
-def process_batch(target_id=None):
+def process_batch():
     """
-    Fetches documents. If target_id is set, processes ONLY that document.
-    Otherwise, processes all PENDING documents.
+    Fetches all PENDING documents and processes them sequentially.
     """
+    print("--- Starting Batch Processor ---")
     
     with Session(engine) as session:
-        # 1. Determine Query
-        if target_id:
-            print(f"--- SINGLE ITEM MODE: Processing ID {target_id} ---")
-            # Strict filter: Only this ID, ignore status
-            stm = select(Document).where(Document.id == target_id)
-        else:
-            print("--- BATCH MODE: Processing PENDING items ---")
-            stm = select(Document).where(Document.status == "PENDING")
-
-        # 2. Execute Query
-        docs_to_process = session.scalars(stm).all()
+        # 1. Get all pending documents
+        stm = select(Document).where(Document.status == "PENDING")
+        pending_docs = session.scalars(stm).all()
         
-        total_count = len(docs_to_process)
+        total_count = len(pending_docs)
         if total_count == 0:
-            print(f"No documents found matching criteria (ID: {target_id}).")
+            print("No pending documents found! Run the crawler first.")
             return
 
-        print(f"Found {total_count} document(s) to process.")
+        print(f"Found {total_count} documents to process.")
         print("Press Ctrl+C to pause safely at any time.\n")
 
-        # 3. Process Loop
-        for doc in tqdm(docs_to_process, unit="file"):
+        # 2. Iterate with a progress bar
+        # We use tqdm to show a nice progress bar in the terminal
+        for doc in tqdm(pending_docs, unit="file"):
             try:
                 # A. Extract Images
                 images = extract_preview_images(doc.file_path)
@@ -75,17 +68,7 @@ def process_batch(target_id=None):
                 doc.status = "SKIPPED_CRASH"
                 session.commit()
 
-    print("\n--- Processing Complete ---")
+    print("\n--- Batch Processing Complete ---")
 
 if __name__ == "__main__":
-    # Check for command line argument
-    if len(sys.argv) > 1:
-        try:
-            # sys.argv[0] is script name, [1] is first arg
-            p_id = int(sys.argv[1])
-            process_batch(target_id=p_id)
-        except ValueError:
-            print("Error: The provided ID must be an integer.")
-    else:
-        # Default: Run batch
-        process_batch()
+    process_batch()
