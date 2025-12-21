@@ -444,7 +444,9 @@ with tab1:
 
 with tab2:
     if not df.empty and 'priority_score' in df.columns:
-        high_pri_df = df[df['priority_score'] >= 8]
+        # UPDATED: Filter priority >= 8 AND exclude "Completed" status
+        high_pri_df = df[(df['priority_score'] >= 8) & (df['status'] != 'COMPLETED')]
+        
         event_hp = st.dataframe(
             high_pri_df[display_cols], 
             width="stretch", 
