@@ -108,13 +108,35 @@ class OcrEngine:
         """Helper to sort filenames like page-1.png, page-2.png, page-10.png correctly."""
         return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', s)]
 
+    def _clean_hyphenation(self, text: str) -> str:
+        """
+        Fixes hyphenation split across lines within a single page context.
+        Strategy:
+        1. If char after break is lowercase -> Join (ge-\\nlegt -> gelegt)
+        2. If char after break is Uppercase -> Keep hyphen (Abdul-\\nBaha -> Abdul-Baha)
+        """
+        def replace_match(match):
+            next_char = match.group(1)
+            if next_char.islower():
+                return next_char # Delete hyphen and newline
+            else:
+                return f"-{next_char}" # Keep hyphen, delete newline
+        
+        # Regex explanation:
+        # (?<=\w)   : Lookbehind ensures hyphen is attached to a preceding word character
+        # -         : The hyphen
+        # \s*\n\s* : The newline (and any surrounding whitespace/indentation)
+        # (.)       : Capture the very next character
+        return re.sub(r'(?<=\w)-\s*\n\s*(.)', replace_match, text)
+
     def run_ocr(self, config: OcrConfig, progress_callback: Optional[Callable[[int, int], None]] = None):
         """
         Main execution loop.
         1. Reads images.
         2. OCRs them.
-        3. Formats template.
-        4. Writes single .txt file.
+        3. Cleans hyphenation.
+        4. Formats template.
+        5. Writes single .txt file.
         """
         # 1. Get all PNGs sorted naturally
         image_files = sorted(glob.glob(os.path.join(self.cache_dir, "*.png")), key=self._natural_sort_key)
@@ -146,13 +168,13 @@ class OcrEngine:
             )
 
             # B. Perform OCR
-            # --- ERROR HANDLING REMOVED ---
-            # If tesseract fails (missing language, etc.), this will now RAISE an exception
-            # and stop the script immediately, preventing silent corruption.
             text = pytesseract.image_to_string(Image.open(img_path), lang=config.language)
             
             # Clean generic garbage (form feed characters)
             text = text.replace('\f', '')
+
+            # --- NEW: Fix Hyphenation ---
+            text = self._clean_hyphenation(text)
 
             # C. Format Template
             # {{page|label|file=Filename.pdf|page=index}}
@@ -161,9 +183,6 @@ class OcrEngine:
             # Combine
             page_content = f"{template}\n{text}\n"
             full_text_content.append(page_content)
-            
-            # Optional: Print status to console for debugging
-            # print(f"Finished image {i} -> page {label}")
 
         # 4. Save to Disk
         with open(self.output_txt_path, "w", encoding="utf-8") as f:
