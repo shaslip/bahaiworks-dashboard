@@ -35,20 +35,18 @@ def extract_single_page(pdf_path, page_num, output_dir):
         files = glob.glob(f"{prefix}*.png")
         return files[0] if files else None
     except Exception as e:
-        print(f"   [Error extracting page {page_num}]: {e}")
+        print(f"      [Error extracting page {page_num}]: {e}")
         return None
 
 def get_printed_page_number(image_path):
     """Asks Gemini to find the page number."""
     model = genai.GenerativeModel('gemini-1.5-flash')
     try:
-        # FIX 1: Use 'with' context manager to ensure file closes immediately
         with Image.open(image_path) as img:
             prompt = "Return ONLY the integer value of the printed page number in the header/footer. If none, return 'NONE'."
             response = model.generate_content([prompt, img])
             text = response.text.strip()
             
-            # Clean response
             text = ''.join(filter(str.isdigit, text))
             
             if text and text.isdigit():
@@ -62,7 +60,6 @@ def calculate_start_offset(pdf_path, total_pages):
     Triangulates the 'Page 1' PDF index.
     """
     temp_dir = f".temp_calib_{os.path.basename(pdf_path)}"
-    # Ensure directory exists
     if not os.path.exists(temp_dir):
         os.makedirs(temp_dir)
 
@@ -71,6 +68,9 @@ def calculate_start_offset(pdf_path, total_pages):
         int(total_pages * 0.5),
         int(total_pages * 0.8)
     ]
+    
+    # NEW: Insight logging
+    print(f"      Probing PDF pages: {probes}")
     
     offsets = []
     
@@ -86,6 +86,10 @@ def calculate_start_offset(pdf_path, total_pages):
                 if printed_num is not None:
                     offset = pdf_page - printed_num
                     offsets.append(offset)
+                    # NEW: Insight logging
+                    print(f"      - PDF Pg {pdf_page} -> printed '{printed_num}' (Offset: {offset})")
+                else:
+                    print(f"      - PDF Pg {pdf_page} -> printed 'None'")
 
         if not offsets:
             return None
@@ -94,13 +98,16 @@ def calculate_start_offset(pdf_path, total_pages):
         most_common_offset, frequency = counts.most_common(1)[0]
         
         if frequency >= 2:
-            return 1 + most_common_offset
+            final_start = 1 + most_common_offset
+            print(f"      > Consensus found! Offset {most_common_offset} (Freq: {frequency}/{len(probes)})")
+            return final_start
+        else:
+             print(f"      > No consensus. Offsets found: {offsets}")
             
     except Exception as e:
-        print(f"Calibration crash: {e}")
+        print(f"      Calibration crash: {e}")
         
     finally:
-        # FIX 2: Add ignore_errors=True so a stuck file doesn't crash the factory
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir, ignore_errors=True)
             
