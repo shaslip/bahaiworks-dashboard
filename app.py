@@ -343,7 +343,7 @@ def render_details(selected_id):
 
             # HEADER Template (Common)
             header = f"""{{{{header
- | title      = [[../]]
+ | title      = {pub_title}
  | author     = {pub_author}
  | translator = 
  | section    = 
