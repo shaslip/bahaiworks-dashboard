@@ -364,7 +364,7 @@ def render_details(selected_id):
 {summary_block}
 
 == Zugang ==
-* [{{filepath:Die Universale Weltreligion.pdf}} PDF]
+* [{{{filepath:{pub_filename}}}} PDF]
 * Für den Volltext siehe [[/Text]]."""
 
 
