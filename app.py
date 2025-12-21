@@ -200,7 +200,7 @@ def render_details(selected_id):
                     # A robust way is to just listdir and sort
                     images = sorted(glob.glob(os.path.join(ocr.cache_dir, "*.png")), key=ocr._natural_sort_key)
                     if 0 <= check_page-1 < len(images):
-                        st.image(images[check_page-1], caption=f"Image {check_page}", use_container_width=True)
+                        st.image(images[check_page-1], caption=f"Image {check_page}")
                     else:
                         st.error("Page out of range")
 
