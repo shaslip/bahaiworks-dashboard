@@ -2,7 +2,7 @@ import time
 import sys
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from tqdm import tqdm
+from tqdm import tqdm  # Progress bar library
 
 # Local imports
 from src.database import engine, Document
@@ -10,43 +10,48 @@ from src.processor import extract_preview_images
 from src.evaluator import evaluate_document
 
 def process_batch(target_id=None):
-    print("--- Bahai.works Automation Factory ---")
+    """
+    Fetches documents. If target_id is set, processes ONLY that document.
+    Otherwise, processes all PENDING documents.
+    """
     
     with Session(engine) as session:
-        # 1. Determine which documents to fetch
+        # 1. Determine Query
         if target_id:
-            # STRICT MODE: Only fetch the specific ID, ignore status/priority
-            print(f"Target Mode: Processing single document ID {target_id}...")
-            stmt = select(Document).where(Document.id == target_id)
+            print(f"--- SINGLE ITEM MODE: Processing ID {target_id} ---")
+            # Strict filter: Only this ID, ignore status
+            stm = select(Document).where(Document.id == target_id)
         else:
-            # BATCH MODE: Fetch all pending documents
-            print("Batch Mode: Scanning for PENDING documents...")
-            stmt = select(Document).where(Document.status == "PENDING")
+            print("--- BATCH MODE: Processing PENDING items ---")
+            stm = select(Document).where(Document.status == "PENDING")
 
-        # 2. Execute the query
-        docs = session.scalars(stmt).all()
-        total_count = len(docs)
-
+        # 2. Execute Query
+        docs_to_process = session.scalars(stm).all()
+        
+        total_count = len(docs_to_process)
         if total_count == 0:
-            print(f"No documents found. (Target ID: {target_id})")
+            print(f"No documents found matching criteria (ID: {target_id}).")
             return
 
-        print(f"Found {total_count} document(s).")
-        
-        # 3. Process loop
-        for doc in tqdm(docs, unit="file"):
+        print(f"Found {total_count} document(s) to process.")
+        print("Press Ctrl+C to pause safely at any time.\n")
+
+        # 3. Process Loop
+        for doc in tqdm(docs_to_process, unit="file"):
             try:
                 # A. Extract Images
                 images = extract_preview_images(doc.file_path)
                 
                 if not images:
                     doc.status = "SKIPPED_ERROR"
-                    doc.ai_justification = "Could not extract images"
+                    doc.ai_justification = "Could not extract images (corrupt PDF?)"
                     session.commit()
                     continue
 
                 # B. AI Evaluation
-                time.sleep(1) # Rate limit pause
+                # Small sleep to be nice to the API rate limits (optional)
+                time.sleep(1) 
+                
                 result = evaluate_document(images)
                 
                 if result:
@@ -57,12 +62,13 @@ def process_batch(target_id=None):
                     doc.status = "EVALUATED"
                 else:
                     doc.status = "SKIPPED_API_FAIL"
-                    doc.ai_justification = "AI returned None"
+                    doc.ai_justification = "AI returned None (API Error)"
 
+                # Commit after every file so we don't lose progress if crashed
                 session.commit()
 
             except KeyboardInterrupt:
-                print("\nStopping safely.")
+                print("\n\nStopping safely... Progress saved.")
                 sys.exit(0)
             except Exception as e:
                 print(f"\nError on {doc.filename}: {e}")
@@ -75,10 +81,11 @@ if __name__ == "__main__":
     # Check for command line argument
     if len(sys.argv) > 1:
         try:
+            # sys.argv[0] is script name, [1] is first arg
             p_id = int(sys.argv[1])
             process_batch(target_id=p_id)
         except ValueError:
-            print("Error: ID must be an integer.")
+            print("Error: The provided ID must be an integer.")
     else:
-        # No argument -> Run standard batch
+        # Default: Run batch
         process_batch()
