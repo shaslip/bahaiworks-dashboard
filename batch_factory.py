@@ -25,9 +25,30 @@ def run_factory():
 
         print(f"   Found {len(queue)} documents to process.")
         
+        # INTERACTIVE FLAG: Starts true, turns false if you type 'a'
+        ask_permission = True
+        
         for i, doc in enumerate(queue, 1):
             print(f"\n[{i}/{len(queue)}] Processing: {doc.filename}")
             
+            # --- INTERACTIVE PROMPT ---
+            if ask_permission:
+                while True:
+                    user_input = input("   Would you like to continue? [y/n/a] (Yes/No/All): ").strip().lower()
+                    
+                    if user_input in ['n', 'no', 'q', 'quit']:
+                        print("   🛑 Stopping factory.")
+                        return
+                    
+                    elif user_input in ['a', 'all']:
+                        print("   🚀 fast-forward enabled. Processing all remaining files...")
+                        ask_permission = False
+                        break
+                    
+                    elif user_input in ['y', 'yes', '']:
+                        break  # Just continue to this file
+            # --------------------------
+
             # 1. Validation check
             if not os.path.exists(doc.file_path):
                 print("   ❌ File not found on disk. Skipping.")
@@ -49,7 +70,6 @@ def run_factory():
                 print(f"   ✅ LOCK: 'Page 1' starts at PDF Page {start_page}")
                 
                 # 4. Configure Job
-                # We assume 'eng' unless DB says otherwise
                 lang_map = {'German': 'deu', 'Persian': 'fas', 'French': 'fra'}
                 ocr_lang = 'eng'
                 for k, v in lang_map.items():
@@ -58,9 +78,9 @@ def run_factory():
                         break
                 
                 config = OcrConfig(
-                    has_cover_image=True, # Safe assumption for published books
+                    has_cover_image=True,
                     first_numbered_page_index=start_page,
-                    illustration_ranges=[], # Automation ignores illustrations for now
+                    illustration_ranges=[], 
                     language=ocr_lang
                 )
                 
@@ -68,29 +88,24 @@ def run_factory():
                 try:
                     worker = OcrEngine(doc.file_path)
                     
-                    # A. Generate Images
                     print("   📸 Generating page images...")
                     worker.generate_images()
                     
-                    # B. OCR
                     print(f"   📖 Reading text ({ocr_lang})...")
                     worker.run_ocr(config)
                     
-                    # C. Cleanup
                     worker.cleanup()
                     
-                    # D. Update DB
                     doc.status = "DIGITIZED"
                     session.commit()
                     print("   🎉 Success! DB updated.")
                     
                 except Exception as e:
                     print(f"   ❌ OCR Failure: {e}")
-                    worker.cleanup() # Ensure cleanup even on fail
+                    worker.cleanup()
             
             else:
                 print("   ⚠️  Calibration Failed: Offsets did not agree (need 2/3). Skipping.")
-                # Log failure so we don't retry infinitely
                 doc.ai_justification = (doc.ai_justification or "") + "\n[Auto-OCR Failed: Calibration Mismatch]"
                 session.commit()
 
