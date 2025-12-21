@@ -7,6 +7,7 @@ import re
 import glob
 from sqlalchemy.orm import Session
 from sqlalchemy import select, desc
+from src.evaluator import evaluate_document, translate_summary
 
 # Local imports
 from src.database import engine, Document
@@ -295,19 +296,34 @@ def render_details(selected_id):
                 pub_year = st.text_input("Year", value=defaults['year'])
                 # pub_next = st.text_input("Next Link", placeholder="[[../Nr 2|Nr 2]]") 
 
-            # NEW: Target Filename Logic
-            # Auto-suggest name based on Title, but allow manual override
             suggested_name = f"{pub_title.strip()}.pdf"
             pub_filename = st.text_input("Target Filename (MediaWiki)", value=suggested_name)
 
+            # --- START OF REPLACEMENT BLOCK ---
+            
             # Summary Editor
+            # We use a unique key per record so the text doesn't persist when switching files
+            summary_key = f"summary_{record.id}"
+            
+            # Initialize session state if not set for this record
+            if summary_key not in st.session_state:
+                st.session_state[summary_key] = record.summary or ""
+
             st.write("**Summary (German)**")
-            pub_summary = st.text_area("Summary", value=record.summary or "", height=150)
             
-            if st.button("🤖 Translate to German (Placeholder)"):
-                st.warning("Gemini Translation integration required here.")
-                # Future: Call Gemini with record.summary to get German text
+            # Text Area bound to session_state
+            pub_summary = st.text_area("Summary", height=150, key=summary_key)
             
+            if st.button("🤖 Translate to German"):
+                with st.spinner("Translating..."):
+                    # Call the function we just added to evaluator.py
+                    german_text = translate_summary(pub_summary)
+                    if german_text:
+                        st.session_state[summary_key] = german_text
+                        st.rerun()
+            
+            # --- END OF REPLACEMENT BLOCK ---
+
             st.divider()
             
             # 3. Generate Logic
