@@ -70,7 +70,7 @@ def translate_summary(text: str) -> str:
     if not text:
         return ""
         
-    model = genai.GenerativeModel('gemini-3-flash-preview') # Matching your existing model string
+    model = genai.GenerativeModel('gemini-3-flash-preview')
 
     prompt = f"""
     You are an expert translator for a German academic archive (Bahai.works).
