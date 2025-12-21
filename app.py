@@ -363,11 +363,10 @@ def render_details(selected_id):
 
 {summary_block}
 
-== Downloads ==
-* {{{{pcl|{pub_filename}|PDF Download}}}}
+== Zugang ==
+* [{{filepath:Die Universale Weltreligion.pdf}} PDF]
+* Für den Volltext siehe [[/Text]]."""
 
-== Text ==
-See [[/Text]] for the full text."""
 
             elif "Book" in pub_type:
                 wiki_text = f"""{header}
