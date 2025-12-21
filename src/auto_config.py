@@ -41,7 +41,7 @@ def extract_single_page(pdf_path, page_num, output_dir):
 
 def get_printed_page_number(image_path):
     """Asks Gemini to find the page number."""
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-3-flash-preview')
     try:
         with Image.open(image_path) as img:
             # UPDATED: Prompt is slightly more instructive
