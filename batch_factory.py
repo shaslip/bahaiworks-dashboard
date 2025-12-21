@@ -70,7 +70,7 @@ def run_factory():
                 print(f"   ✅ LOCK: 'Page 1' starts at PDF Page {start_page}")
                 
                 # 4. Configure Job
-                lang_map = {'German': 'deu', 'Persian': 'fas', 'French': 'fra'}
+                lang_map = {'German': 'deu', 'Persian': 'fas', 'French': 'fra', 'Esperanto': 'epo'}
                 ocr_lang = 'eng'
                 for k, v in lang_map.items():
                     if doc.language and k in doc.language:
