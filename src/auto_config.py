@@ -26,9 +26,10 @@ def extract_single_page(pdf_path, page_num, output_dir):
     if existing: return existing[0]
 
     try:
+        # UPDATED: Increased DPI to 300 for better OCR on old scans
         subprocess.run([
             "pdftoppm", "-png", "-f", str(page_num), "-l", str(page_num), 
-            "-r", "150", 
+            "-r", "300", 
             pdf_path, prefix
         ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
@@ -43,17 +44,19 @@ def get_printed_page_number(image_path):
     model = genai.GenerativeModel('gemini-1.5-flash')
     try:
         with Image.open(image_path) as img:
-            prompt = "Return ONLY the integer value of the printed page number in the header/footer. If none, return 'NONE'."
+            # UPDATED: Prompt is slightly more instructive
+            prompt = "Look at the corners (header/footer) of this page image. Return ONLY the digit of the printed page number. If there is no page number, return 'NONE'."
             response = model.generate_content([prompt, img])
-            text = response.text.strip()
+            raw_text = response.text.strip()
             
-            text = ''.join(filter(str.isdigit, text))
+            # UPDATED: We return both the clean number AND the raw text for debugging
+            clean_text = ''.join(filter(str.isdigit, raw_text))
             
-            if text and text.isdigit():
-                return int(text)
-    except Exception:
-        pass 
-    return None
+            if clean_text and clean_text.isdigit():
+                return int(clean_text), raw_text
+            return None, raw_text
+    except Exception as e:
+        return None, str(e)
 
 def calculate_start_offset(pdf_path, total_pages):
     """
@@ -69,7 +72,6 @@ def calculate_start_offset(pdf_path, total_pages):
         int(total_pages * 0.8)
     ]
     
-    # NEW: Insight logging
     print(f"      Probing PDF pages: {probes}")
     
     offsets = []
@@ -81,15 +83,15 @@ def calculate_start_offset(pdf_path, total_pages):
             img_path = extract_single_page(pdf_path, pdf_page, temp_dir)
             
             if img_path:
-                printed_num = get_printed_page_number(img_path)
+                printed_num, raw_response = get_printed_page_number(img_path)
                 
                 if printed_num is not None:
                     offset = pdf_page - printed_num
                     offsets.append(offset)
-                    # NEW: Insight logging
                     print(f"      - PDF Pg {pdf_page} -> printed '{printed_num}' (Offset: {offset})")
                 else:
-                    print(f"      - PDF Pg {pdf_page} -> printed 'None'")
+                    # UPDATED: Print the RAW response so you know why it failed
+                    print(f"      - PDF Pg {pdf_page} -> printed 'None' | Raw AI Response: '{raw_response}'")
 
         if not offsets:
             return None
@@ -97,18 +99,17 @@ def calculate_start_offset(pdf_path, total_pages):
         counts = Counter(offsets)
         most_common_offset, frequency = counts.most_common(1)[0]
         
+        # Cleanup ONLY if successful. If failed, we keep files for inspection.
         if frequency >= 2:
             final_start = 1 + most_common_offset
-            print(f"      > Consensus found! Offset {most_common_offset} (Freq: {frequency}/{len(probes)})")
+            print(f"      > Consensus found! Offset {most_common_offset}")
+            shutil.rmtree(temp_dir, ignore_errors=True)
             return final_start
         else:
              print(f"      > No consensus. Offsets found: {offsets}")
+             print(f"      > DEBUG: Kept images in {temp_dir} for inspection.")
             
     except Exception as e:
         print(f"      Calibration crash: {e}")
-        
-    finally:
-        if os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir, ignore_errors=True)
             
     return None
