@@ -10,52 +10,43 @@ from src.processor import extract_preview_images
 from src.evaluator import evaluate_document
 
 def process_batch(target_id=None):
-    """
-    Fetches documents and processes them.
-    If target_id is provided, processes ONLY that ID (ignoring status).
-    Otherwise, processes all documents with status="PENDING".
-    """
+    print("--- Bahai.works Automation Factory ---")
     
     with Session(engine) as session:
-        # 1. Build Query based on mode
-        stmt = select(Document)
-
+        # 1. Determine which documents to fetch
         if target_id:
-            print(f"--- Processing Single Target ID: {target_id} ---")
-            # We filter ONLY by ID here, allowing you to re-process EVALUATED docs
-            stmt = stmt.where(Document.id == target_id)
+            # STRICT MODE: Only fetch the specific ID, ignore status/priority
+            print(f"Target Mode: Processing single document ID {target_id}...")
+            stmt = select(Document).where(Document.id == target_id)
         else:
-            print("--- Starting Batch Processor (PENDING items only) ---")
-            stmt = stmt.where(Document.status == "PENDING")
+            # BATCH MODE: Fetch all pending documents
+            print("Batch Mode: Scanning for PENDING documents...")
+            stmt = select(Document).where(Document.status == "PENDING")
 
-        # Execute query
-        docs_to_process = session.scalars(stmt).all()
-        
-        total_count = len(docs_to_process)
+        # 2. Execute the query
+        docs = session.scalars(stmt).all()
+        total_count = len(docs)
+
         if total_count == 0:
-            msg = f"ID {target_id}" if target_id else "PENDING documents"
-            print(f"No documents found matching: {msg}")
+            print(f"No documents found. (Target ID: {target_id})")
             return
 
-        print(f"Found {total_count} document(s) to process.")
-        print("Press Ctrl+C to pause safely at any time.\n")
-
-        # 2. Iterate with a progress bar
-        for doc in tqdm(docs_to_process, unit="file"):
+        print(f"Found {total_count} document(s).")
+        
+        # 3. Process loop
+        for doc in tqdm(docs, unit="file"):
             try:
                 # A. Extract Images
                 images = extract_preview_images(doc.file_path)
                 
                 if not images:
                     doc.status = "SKIPPED_ERROR"
-                    doc.ai_justification = "Could not extract images (corrupt PDF?)"
+                    doc.ai_justification = "Could not extract images"
                     session.commit()
                     continue
 
                 # B. AI Evaluation
-                # Small sleep to be nice to the API rate limits (optional)
-                time.sleep(1) 
-                
+                time.sleep(1) # Rate limit pause
                 result = evaluate_document(images)
                 
                 if result:
@@ -66,13 +57,12 @@ def process_batch(target_id=None):
                     doc.status = "EVALUATED"
                 else:
                     doc.status = "SKIPPED_API_FAIL"
-                    doc.ai_justification = "AI returned None (API Error)"
+                    doc.ai_justification = "AI returned None"
 
-                # Commit after every file
                 session.commit()
 
             except KeyboardInterrupt:
-                print("\n\nStopping safely... Progress saved.")
+                print("\nStopping safely.")
                 sys.exit(0)
             except Exception as e:
                 print(f"\nError on {doc.filename}: {e}")
@@ -82,15 +72,13 @@ def process_batch(target_id=None):
     print("\n--- Processing Complete ---")
 
 if __name__ == "__main__":
-    # Check if a command line argument (ID) was passed
+    # Check for command line argument
     if len(sys.argv) > 1:
         try:
-            # sys.argv[0] is the script name, sys.argv[1] is the first argument
             p_id = int(sys.argv[1])
             process_batch(target_id=p_id)
         except ValueError:
-            print("Error: The provided ID must be an integer.")
-            print("Usage: python batch_factory.py [ID]")
+            print("Error: ID must be an integer.")
     else:
-        # Default behavior: Process all pending
+        # No argument -> Run standard batch
         process_batch()
