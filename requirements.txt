@@ -5,3 +5,5 @@ pymupdf==1.24.11
 python-dotenv==1.0.1
 watchdog==5.0.3
 pandas==2.2.3
+pytesseract==0.3.13
+Pillow>=10.0.0
