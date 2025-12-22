@@ -144,7 +144,7 @@ elif st.session_state.pipeline_stage == "proof":
         # COLUMN 1: TALK PAGE
         with c_talk:
             st.subheader("Talk Page")
-            talk_text = st.text_area("Clean OCR", value=st.session_state.get("talk_text", ""), height=500, key="talk_editor")
+            talk_text = st.text_area("Clean OCR", value=st.session_state.get("talk_text", ""), height=500, key="proof_talk_editor")
             
             talk_title = f"Talk:{st.session_state['target_page']}"
             if st.button(f"☁️ Import to {talk_title}", type="primary", use_container_width=True):
@@ -158,7 +158,7 @@ elif st.session_state.pipeline_stage == "proof":
         # COLUMN 2: WIKIBASE ITEM
         with c_json:
             st.subheader("Wikibase Data")
-            json_text = st.text_area("Metadata", value=st.session_state.get("meta_json_str", "{}"), height=500, key="meta_editor")
+            json_text = st.text_area("Metadata", value=st.session_state.get("meta_json_str", "{}"), height=500, key="proof_meta_editor")
             
             # A. Create Item
             if st.button("1. ☁️ Create Book Item", type="primary", use_container_width=True):
@@ -186,7 +186,7 @@ elif st.session_state.pipeline_stage == "proof":
         # COLUMN 1: CHAPTER ITEMS
         with c_toc_json:
             st.subheader("Chapter Data")
-            toc_json_text = st.text_area("Chapters", value=st.session_state.get("toc_json_str", "[]"), height=400, key="toc_json_editor")
+            toc_json_text = st.text_area("Chapters", value=st.session_state.get("toc_json_str", "[]"), height=400, key="proof_toc_json_editor")
             
             parent_qid = st.text_input("Parent Book QID (P361)", value=st.session_state.get("parent_qid", ""))
             
@@ -248,7 +248,7 @@ elif st.session_state.pipeline_stage == "proof":
         # COLUMN 2: MAIN PAGE SOURCE
         with c_toc_wiki:
             st.subheader("Main Page Source")
-            full_page_text = st.text_area("Wikitext", value=default_full_page, height=470, key="full_page_editor")
+            full_page_text = st.text_area("Wikitext", value=default_full_page, height=470, key="proof_full_page_editor")
             
             target_title = st.session_state['target_page']
             
@@ -272,7 +272,7 @@ elif st.session_state.pipeline_stage == "proof":
             st.subheader("Wikibase Data (JSON)")
             json_text = st.text_area("Metadata", 
                                      value=st.session_state.get("meta_json_str", "{}"), 
-                                     height=500, key="meta_editor")
+                                     height=500, key="proof_meta_editor")
             
             if st.button("☁️ Import to Bahaidata", type="primary", use_container_width=True):
                 try:
@@ -294,7 +294,7 @@ elif st.session_state.pipeline_stage == "proof":
             st.subheader("Chapter Data (JSON)")
             toc_json_text = st.text_area("Chapters", 
                                          value=st.session_state.get("toc_json_str", "[]"), 
-                                         height=400, key="toc_json_editor")
+                                         height=400, key="proof_toc_json_editor")
             
             # Parent QID Input (Auto-filled)
             parent_qid = st.text_input("Parent Book QID (P361)", 
@@ -325,7 +325,7 @@ elif st.session_state.pipeline_stage == "proof":
             st.subheader("Main Page Source")
             full_page_text = st.text_area("Wikitext", 
                                           value=default_full_page, 
-                                          height=470, key="full_page_editor")
+                                          height=470, key="proof_full_page_editor")
             
             target_title = st.session_state['target_page']
             if st.button(f"☁️ Import to {target_title}", type="primary", use_container_width=True):
