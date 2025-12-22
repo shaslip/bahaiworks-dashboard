@@ -3,14 +3,11 @@ import os
 import json
 from sqlalchemy.orm import Session
 from src.database import engine, Document
-
-# NEW IMPORTS: Connect the UI to the backend scripts we just made
 from src.gemini_processor import extract_metadata_from_pdf, extract_toc_from_pdf
 from src.wikibase_importer import import_book_to_wikibase
 
 st.set_page_config(layout="wide", page_title="Book Pipeline")
 
-# --- Helper: Navigation ---
 def go_back():
     st.switch_page("app.py")
 
@@ -25,150 +22,183 @@ doc_id = st.session_state.selected_doc_id
 with Session(engine) as session:
     record = session.get(Document, doc_id)
     if not record:
-        st.error(f"Document {doc_id} not found in database.")
+        st.error("Document not found.")
         st.stop()
     
     filename = record.filename
     file_path = record.file_path
+    # Guess a default target page title from filename (strip extension, replace _ with space)
+    default_target = os.path.splitext(filename)[0].replace("_", " ")
     txt_path = file_path.replace(".pdf", ".txt")
     has_txt = os.path.exists(txt_path)
 
-# --- 2. Pipeline State Management ---
 if "pipeline_stage" not in st.session_state:
     st.session_state.pipeline_stage = "setup" 
 
-# --- 3. UI: Header ---
+# --- UI Header ---
 c1, c2 = st.columns([3, 1])
 with c1:
     st.title(f"📖 Processing: {filename}")
 with c2:
-    if st.button("⬅️ Back to Dashboard", use_container_width=True):
-        go_back()
+    if st.button("⬅️ Back to Dashboard"): go_back()
 
 if not has_txt:
-    st.error(f"❌ Critical: No OCR text file found at {txt_path}. Please run batch_factory.py first.")
+    st.error(f"❌ Critical: No OCR text file found at {txt_path}.")
     st.stop()
-else:
-    st.success(f"✅ Base OCR Text Found ({os.path.getsize(txt_path)/1024:.1f} KB)", icon="💾")
 
 st.divider()
 
-# --- 4. STAGE 1: SETUP & SELECTION ---
+# --- STAGE 1: SETUP ---
 if st.session_state.pipeline_stage == "setup":
-    st.header("Step 1: Define Key Sections")
-    st.info("Enter the page ranges (from your PDF viewer) for high-quality Gemini extraction.")
+    st.header("Step 1: Define Targets & Source")
+    
+    # 1. Target Page Definition
+    st.subheader("📍 Target")
+    target_page = st.text_input("Bahai.works Page Title", value=default_target, help="Where will the main book page live?")
 
+    # 2. Source Ranges
+    st.subheader("📄 Page Ranges (from PDF)")
     c_cr, c_toc = st.columns(2)
     with c_cr:
-        st.subheader("©️ Copyright Info")
-        # Default value helps testing; remove in production if preferred
-        cr_pages = st.text_input("Page Range (e.g. 1-2)", help="For Title, Publisher, Date, ISBN")
-    
+        cr_pages = st.text_input("Copyright Pages", placeholder="e.g. 1-2")
     with c_toc:
-        st.subheader("📑 Table of Contents")
-        toc_pages = st.text_input("Page Range (e.g. 5-8)", help="For Chapter mapping")
+        toc_pages = st.text_input("TOC Pages", placeholder="e.g. 5-8")
 
     st.markdown("---")
 
     if st.button("🚀 Send to Gemini", type="primary"):
-        if not cr_pages and not toc_pages:
-            st.error("Please enter at least one page range.")
+        if not target_page:
+            st.error("Please define a Target Page Title.")
         else:
-            # 1. Show User Feedback
-            with st.spinner("🚀 Gemini is analyzing PDF pages... this may take a moment"):
-                
-                # 2. Run Copyright Extraction
+            st.session_state["target_page"] = target_page
+            
+            with st.spinner("🤖 Gemini is extracting metadata & TOC structure..."):
+                # Run Metadata Extraction
+                meta_json = "{}"
                 if cr_pages:
                     try:
-                        meta_result = extract_metadata_from_pdf(file_path, cr_pages)
-                        # Store as formatted JSON string for the text area
-                        st.session_state["meta_json"] = json.dumps(meta_result, indent=4)
+                        res = extract_metadata_from_pdf(file_path, cr_pages)
+                        st.session_state["meta_result"] = res # Store object
+                        meta_json = json.dumps(res, indent=4)
                     except Exception as e:
-                        st.error(f"Copyright Extraction Failed: {e}")
-                        st.session_state["meta_json"] = "{}"
+                        st.error(f"Meta Error: {e}")
 
-                # 3. Run TOC Extraction
+                # Run TOC Extraction
+                toc_json_str = "[]"
+                toc_wikitext_part = ""
                 if toc_pages:
                     try:
-                        toc_result = extract_toc_from_pdf(file_path, toc_pages)
-                        st.session_state["toc_text"] = toc_result
+                        res = extract_toc_from_pdf(file_path, toc_pages)
+                        st.session_state["toc_result"] = res # Store object
+                        toc_json_str = json.dumps(res.get("toc_json", []), indent=4)
+                        toc_wikitext_part = res.get("toc_wikitext", "")
                     except Exception as e:
-                        st.error(f"TOC Extraction Failed: {e}")
-                        st.session_state["toc_text"] = ""
-            
-                # 4. Advance Stage
+                        st.error(f"TOC Error: {e}")
+                
+                # Store raw strings for the text editors
+                st.session_state["meta_json_str"] = meta_json
+                st.session_state["toc_json_str"] = toc_json_str
+                st.session_state["toc_wikitext_part"] = toc_wikitext_part
+                
                 st.session_state.pipeline_stage = "proof"
                 st.rerun()
 
-# --- 5. STAGE 2: PROOFREADING ---
+# --- STAGE 2: PROOFREAD ---
 elif st.session_state.pipeline_stage == "proof":
-    st.header("Step 2: Proofread & Structure")
+    st.header("Step 2: Proofread & Import")
     
-    t1, t2 = st.tabs(["©️ Metadata & Copyright", "📑 Table of Contents (Wikitext)"])
+    # Retrieve Data
+    full_meta = st.session_state.get("meta_result", {})
+    meta_data = full_meta.get("data", {}) # The 'data' sub-object
     
+    # Construct the Template Block (Empty fields as requested)
+    header_template = f"""{{{{restricted use|where=|until=}}}}
+{{{{header
+ | title      = 
+ | author     = 
+ | translator = 
+ | compiler   = 
+ | section    = 
+ | previous   = 
+ | next       = 
+ | publisher  = 
+ | year       = 
+ | notes      = 
+ | categories = All publications/Books
+ | portal     = 
+}}}}
+{{{{book
+ | color = 656258
+ | image = 
+ | downloads = 
+ | translations = 
+ | pages = 
+ | links = 
+}}}}
+
+===Contents===
+"""
+    # Combine Template + Gemini's List
+    default_full_page = header_template + st.session_state.get("toc_wikitext_part", "")
+
+    t1, t2 = st.tabs(["1. Metadata & Copyright", "2. Main Page (TOC)"])
+    
+    # --- TAB 1: Metadata ---
     with t1:
-        # Load the Gemini result safely
-        full_result = {}
-        try:
-            full_result = json.loads(st.session_state.get("meta_json", "{}"))
-        except:
-            pass
-
-        # Split the screen for the two distinct tasks
-        c_talk, c_data = st.columns(2)
-        
+        c_talk, c_json = st.columns(2)
         with c_talk:
-            st.subheader("1. Talk Page Content")
-            st.caption("Cleaned text for `Talk:Title`. Verify OCR accuracy here.")
-            talk_text = st.text_area("Copyright Text", 
-                                     value=full_result.get("copyright_text", ""), 
-                                     height=500,
-                                     key="talk_editor")
+            st.subheader("Talk Page Text")
+            st.caption("Clean OCR for legal/copyright reference")
+            talk_input = st.text_area("Clean OCR", value=full_meta.get("copyright_text", ""), height=500, key="talk_editor")
+        with c_json:
+            st.subheader("Wikibase Data (JSON)")
+            st.caption("This data creates the Q-Item (Source of Truth)")
+            json_input = st.text_area("Metadata", value=json.dumps(meta_data, indent=4), height=500, key="meta_editor")
 
-        with c_data:
-            st.subheader("2. Wikibase Data")
-            st.caption("Structured JSON for `bahaidata.org`. Verify fields.")
-            # Extract just the 'data' part for editing to keep it clean
-            current_data = full_result.get("data", {})
-            meta_input = st.text_area("JSON Object", 
-                                      value=json.dumps(current_data, indent=4), 
-                                      height=500, 
-                                      key="meta_editor")
-
+    # --- TAB 2: TOC ---
     with t2:
-        st.caption("Edit the Wikitext below. This will be used for page splitting.")
-        toc_input = st.text_area("TOC Wikitext", 
-                                 value=st.session_state.get("toc_text", ""), 
-                                 height=600, 
-                                 key="toc_editor")
+        c_toc_json, c_toc_wiki = st.columns(2)
+        with c_toc_json:
+            st.subheader("Chapter Data (JSON)")
+            st.caption("For future scholarly articles processing")
+            toc_json_input = st.text_area("Chapters", value=st.session_state.get("toc_json_str", "[]"), height=600, key="toc_json_editor")
+            
+        with c_toc_wiki:
+            st.subheader("Main Page Source")
+            st.caption(f"Target: {st.session_state.get('target_page')}")
+            # This is the FULL page editor
+            full_page_input = st.text_area("Wikitext", value=default_full_page, height=600, key="full_page_editor")
 
     st.divider()
-    c_act1, c_act2 = st.columns([1, 4])
     
-    with c_act1:
+    # --- Actions ---
+    c_back, c_approve = st.columns([1, 4])
+    with c_back:
         if st.button("⬅️ Back"):
             st.session_state.pipeline_stage = "setup"
             st.rerun()
             
-    with c_act2:
-        if st.button("✅ Approve & Import", type="primary"):
+    with c_approve:
+        if st.button("✅ Approve All & Import", type="primary"):
             try:
-                # 1. Handle Wikibase Import
-                data_for_wikibase = json.loads(meta_input)
+                # 1. Wikibase Import
+                wb_data = json.loads(json_input)
+                new_qid = None
+                with st.spinner("Creating Wikibase Item..."):
+                    new_qid = import_book_to_wikibase(wb_data)
+                    st.toast(f"Created Item: {new_qid}")
                 
-                with st.spinner("Importing to Wikibase..."):
-                    new_id = import_book_to_wikibase(data_for_wikibase)
-                    st.success(f"Creating Wikibase Item: {new_id}")
+                # 2. Bahai.works Page Creation (Placeholder)
+                target = st.session_state.get("target_page")
+                # upload_to_wiki(page_title=target, content=full_page_input)
+                st.success(f"Prepared Page '{target}'")
                 
-                # 2. Handle Talk Page (Placeholder for now)
-                # In the future: upload_to_mediawiki(f"Talk:{title}", talk_text)
-                st.info(f"Ready to upload Talk Page content ({len(talk_text)} chars). Logic pending.")
+                # 3. Bahai.works Talk Page Creation (Placeholder)
+                # upload_to_wiki(page_title=f"Talk:{target}", content=talk_input)
+                st.info(f"Prepared Talk Page 'Talk:{target}'")
                 
-                # 3. Store results and move on
-                st.session_state["final_wikibase_id"] = new_id
                 st.balloons()
+                st.session_state["final_qid"] = new_qid
                 
-            except json.JSONDecodeError:
-                st.error("Invalid JSON in Wikibase Data column. Please fix formatting.")
             except Exception as e:
                 st.error(f"Import Failed: {e}")
