@@ -1,12 +1,12 @@
 import streamlit as st
 import os
 import json
-from src.mediawiki_uploader import upload_to_bahaiworks
-from src.chapter_importer import import_chapters_to_wikibase
 from sqlalchemy.orm import Session
 from src.database import engine, Document
 from src.gemini_processor import extract_metadata_from_pdf, extract_toc_from_pdf
 from src.wikibase_importer import import_book_to_wikibase
+from src.mediawiki_uploader import upload_to_bahaiworks
+from src.chapter_importer import import_chapters_to_wikibase
 from src.sitelink_manager import set_sitelink
 
 st.set_page_config(layout="wide", page_title="Book Pipeline")
@@ -76,7 +76,6 @@ if st.session_state.pipeline_stage == "setup":
     st.markdown("---")
 
     if st.button("🚀 Send to Gemini", type="primary"):
-        # We don't need to check target_page here anymore, it's global
         with st.spinner("🤖 Gemini is extracting..."):
             
             # Run Metadata
@@ -131,6 +130,7 @@ elif st.session_state.pipeline_stage == "proof":
  | pages = 
  | links = 
 }}}}
+
 ===Contents===
 """
     default_full_page = header_template + st.session_state.get("toc_wikitext_part", "")
@@ -144,7 +144,9 @@ elif st.session_state.pipeline_stage == "proof":
         # COLUMN 1: TALK PAGE
         with c_talk:
             st.subheader("Talk Page")
-            talk_text = st.text_area("Clean OCR", value=st.session_state.get("talk_text", ""), height=500, key="proof_talk_editor")
+            talk_text = st.text_area("Clean OCR", 
+                                     value=st.session_state.get("talk_text", ""), 
+                                     height=500, key="proof_talk_editor")
             
             talk_title = f"Talk:{st.session_state['target_page']}"
             if st.button(f"☁️ Import to {talk_title}", type="primary", use_container_width=True):
@@ -158,7 +160,9 @@ elif st.session_state.pipeline_stage == "proof":
         # COLUMN 2: WIKIBASE ITEM
         with c_json:
             st.subheader("Wikibase Data")
-            json_text = st.text_area("Metadata", value=st.session_state.get("meta_json_str", "{}"), height=500, key="proof_meta_editor")
+            json_text = st.text_area("Metadata", 
+                                     value=st.session_state.get("meta_json_str", "{}"), 
+                                     height=500, key="proof_meta_editor")
             
             # A. Create Item
             if st.button("1. ☁️ Create Book Item", type="primary", use_container_width=True):
@@ -186,9 +190,13 @@ elif st.session_state.pipeline_stage == "proof":
         # COLUMN 1: CHAPTER ITEMS
         with c_toc_json:
             st.subheader("Chapter Data")
-            toc_json_text = st.text_area("Chapters", value=st.session_state.get("toc_json_str", "[]"), height=400, key="proof_toc_json_editor")
+            toc_json_text = st.text_area("Chapters", 
+                                         value=st.session_state.get("toc_json_str", "[]"), 
+                                         height=400, key="proof_toc_json_editor")
             
-            parent_qid = st.text_input("Parent Book QID (P361)", value=st.session_state.get("parent_qid", ""))
+            parent_qid = st.text_input("Parent Book QID (P361)", 
+                                       value=st.session_state.get("parent_qid", ""),
+                                       help="If the book item exists, enter QID here.")
             
             # A. Import Chapters
             if st.button("1. ☁️ Import Chapters to Bahaidata", type="primary", use_container_width=True):
@@ -198,7 +206,7 @@ elif st.session_state.pipeline_stage == "proof":
                     try:
                         chapters_data = json.loads(toc_json_text)
                         with st.spinner(f"Processing {len(chapters_data)} chapters..."):
-                            # Update: Now returns a map of created items
+                            # Returns logs AND the map
                             logs, created_map = import_chapters_to_wikibase(parent_qid, chapters_data)
                             st.session_state["chapter_map"] = created_map
                             st.success(f"✅ Created {len(created_map)} Items")
@@ -212,7 +220,6 @@ elif st.session_state.pipeline_stage == "proof":
                 st.info("Next: Create pages on Bahai.works and link them.")
                 
                 # ACCESS CONTROL TAG logic
-                # Assuming the access group matches the book title (User can edit this logic if needed)
                 access_group = st.session_state['target_page'].replace(" ", "")
                 placeholder_content = f"<accesscontrol>Access:{access_group}</accesscontrol>{{{{Publicationinfo}}}}"
                 
@@ -227,7 +234,6 @@ elif st.session_state.pipeline_stage == "proof":
                         chapter_title = item['title']
                         chapter_qid = item['qid']
                         
-                        # Construct subpage title: Book_Name/Chapter_Name
                         full_page_title = f"{base_title}/{chapter_title}"
                         
                         try:
@@ -248,11 +254,12 @@ elif st.session_state.pipeline_stage == "proof":
         # COLUMN 2: MAIN PAGE SOURCE
         with c_toc_wiki:
             st.subheader("Main Page Source")
-            full_page_text = st.text_area("Wikitext", value=default_full_page, height=470, key="proof_full_page_editor")
+            full_page_text = st.text_area("Wikitext", 
+                                          value=default_full_page, 
+                                          height=470, key="proof_full_page_editor")
             
             target_title = st.session_state['target_page']
             
-            # Upload Main Page
             if st.button(f"☁️ Import to {target_title}", type="primary", use_container_width=True):
                 with st.spinner("Uploading..."):
                     try:
@@ -264,83 +271,6 @@ elif st.session_state.pipeline_stage == "proof":
                         st.session_state["final_toc_wikitext"] = full_page_text
                         st.session_state.pipeline_stage = "split" 
                         st.rerun()
-                    except Exception as e:
-                        st.error(f"Upload Error: {e}")
-
-        # COLUMN 2: WIKIBASE ITEM
-        with c_json:
-            st.subheader("Wikibase Data (JSON)")
-            json_text = st.text_area("Metadata", 
-                                     value=st.session_state.get("meta_json_str", "{}"), 
-                                     height=500, key="proof_meta_editor")
-            
-            if st.button("☁️ Import to Bahaidata", type="primary", use_container_width=True):
-                try:
-                    data = json.loads(json_text)
-                    with st.spinner("Creating Item..."):
-                        new_qid = import_book_to_wikibase(data)
-                        st.session_state["parent_qid"] = new_qid 
-                        st.success(f"✅ Created Item: {new_qid}")
-                        st.toast(f"Parent QID set to {new_qid}")
-                except Exception as e:
-                    st.error(f"Error: {e}")
-
-    # --- TAB 2: CONTENT & CHAPTERS ---
-    with t2:
-        c_toc_json, c_toc_wiki = st.columns(2)
-        
-        # COLUMN 1: CHAPTER ITEMS
-        with c_toc_json:
-            st.subheader("Chapter Data (JSON)")
-            toc_json_text = st.text_area("Chapters", 
-                                         value=st.session_state.get("toc_json_str", "[]"), 
-                                         height=400, key="proof_toc_json_editor")
-            
-            # Parent QID Input (Auto-filled)
-            parent_qid = st.text_input("Parent Book QID (P361)", 
-                                       value=st.session_state.get("parent_qid", ""),
-                                       help="If the book item exists, enter QID here.")
-            
-            if st.button("☁️ Import Chapters to Bahaidata", type="primary", use_container_width=True):
-                if not parent_qid:
-                    st.error("Please provide a Parent Book QID first.")
-                else:
-                    try:
-                        chapters_data = json.loads(toc_json_text)
-                        with st.spinner(f"Creating items for {len(chapters_data)} chapters..."):
-                            logs = import_chapters_to_wikibase(parent_qid, chapters_data)
-                            
-                        st.success("✅ Chapters Processed!")
-                        with st.expander("See Activity Log", expanded=True):
-                            for log in logs:
-                                st.write(f"- {log}")
-                                
-                    except json.JSONDecodeError:
-                        st.error("Invalid JSON in Chapters box.")
-                    except Exception as e:
-                        st.error(f"Chapter Import Failed: {e}")
-
-        # COLUMN 2: MAIN PAGE SOURCE
-        with c_toc_wiki:
-            st.subheader("Main Page Source")
-            full_page_text = st.text_area("Wikitext", 
-                                          value=default_full_page, 
-                                          height=470, key="proof_full_page_editor")
-            
-            target_title = st.session_state['target_page']
-            if st.button(f"☁️ Import to {target_title}", type="primary", use_container_width=True):
-                with st.spinner("Uploading to Bahai.works..."):
-                    try:
-                        upload_to_bahaiworks(target_title, full_page_text, summary="Initial book setup")
-                        st.success(f"✅ Uploaded to {target_title}")
-                        st.balloons()
-                        
-                        # Set stage for the next major step (Splitting)
-                        st.session_state["toc_map"] = json.loads(toc_json_text) # Store map for splitter
-                        st.session_state["final_toc_wikitext"] = full_page_text
-                        st.session_state.pipeline_stage = "split" 
-                        st.rerun()
-                        
                     except Exception as e:
                         st.error(f"Upload Error: {e}")
 
