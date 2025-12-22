@@ -2,6 +2,7 @@ import streamlit as st
 import os
 import json
 from src.mediawiki_uploader import upload_to_bahaiworks
+from src.chapter_importer import import_chapters_to_wikibase
 from sqlalchemy.orm import Session
 from src.database import engine, Document
 from src.gemini_processor import extract_metadata_from_pdf, extract_toc_from_pdf
@@ -104,7 +105,7 @@ if st.session_state.pipeline_stage == "setup":
 
 # --- STAGE 2: PROOFREAD & IMPORT ---
 elif st.session_state.pipeline_stage == "proof":
-
+    
     # Template Construction
     header_template = f"""{{{{restricted use|where=|until=}}}}
 {{{{header
@@ -169,7 +170,7 @@ elif st.session_state.pipeline_stage == "proof":
                     data = json.loads(json_text)
                     with st.spinner("Creating Item..."):
                         new_qid = import_book_to_wikibase(data)
-                        st.session_state["parent_qid"] = new_qid # SAVE QID FOR TAB 2
+                        st.session_state["parent_qid"] = new_qid 
                         st.success(f"✅ Created Item: {new_qid}")
                         st.toast(f"Parent QID set to {new_qid}")
                 except Exception as e:
@@ -195,8 +196,20 @@ elif st.session_state.pipeline_stage == "proof":
                 if not parent_qid:
                     st.error("Please provide a Parent Book QID first.")
                 else:
-                    # Placeholder for the future script you mentioned
-                    st.info("Logic for 'import_chapters_script.py' pending.")
+                    try:
+                        chapters_data = json.loads(toc_json_text)
+                        with st.spinner(f"Creating items for {len(chapters_data)} chapters..."):
+                            logs = import_chapters_to_wikibase(parent_qid, chapters_data)
+                            
+                        st.success("✅ Chapters Processed!")
+                        with st.expander("See Activity Log", expanded=True):
+                            for log in logs:
+                                st.write(f"- {log}")
+                                
+                    except json.JSONDecodeError:
+                        st.error("Invalid JSON in Chapters box.")
+                    except Exception as e:
+                        st.error(f"Chapter Import Failed: {e}")
 
         # COLUMN 2: MAIN PAGE SOURCE
         with c_toc_wiki:
@@ -212,6 +225,13 @@ elif st.session_state.pipeline_stage == "proof":
                         upload_to_bahaiworks(target_title, full_page_text, summary="Initial book setup")
                         st.success(f"✅ Uploaded to {target_title}")
                         st.balloons()
+                        
+                        # Set stage for the next major step (Splitting)
+                        st.session_state["toc_map"] = json.loads(toc_json_text) # Store map for splitter
+                        st.session_state["final_toc_wikitext"] = full_page_text
+                        st.session_state.pipeline_stage = "split" 
+                        st.rerun()
+                        
                     except Exception as e:
                         st.error(f"Upload Error: {e}")
 
