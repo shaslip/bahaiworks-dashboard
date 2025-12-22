@@ -289,13 +289,24 @@ def render_details(selected_id):
                                 ["Periodical (PDF Only)", "Unstructured (Summary + Links)", "Book (Full TOC)"],
                                 index=1)
             
+            # === NEW BOOK PIPELINE REDIRECT ===
+            if "Book" in pub_type:
+                st.info("📚 **Advanced Workflow Required**")
+                st.write("Books require the dedicated pipeline for copyright verification, TOC extraction, and chapter splitting.")
+                
+                if st.button("🚀 Launch Book Pipeline", type="primary"):
+                    st.switch_page("pages/book_pipeline.py")
+                
+                # Stop rendering the rest of this simple tab
+                return
+            # ==================================
+            
             c_meta1, c_meta2 = st.columns(2)
             with c_meta1:
                 pub_title = st.text_input("Title", value=defaults['title'])
                 pub_author = st.text_input("Author", value=defaults['author'])
             with c_meta2:
                 pub_year = st.text_input("Year", value=defaults['year'])
-                # pub_next = st.text_input("Next Link", placeholder="[[../Nr 2|Nr 2]]") 
 
             suggested_name = f"{pub_title.strip()}.pdf"
             pub_filename = st.text_input("Target Filename (MediaWiki)", value=suggested_name)
@@ -317,16 +328,12 @@ def render_details(selected_id):
             # 2. Render the button and handle logic BEFORE the text area is instantiated
             if st.button("🤖 Translate to German"):
                 with st.spinner("Translating..."):
-                    # We can safely read/write session_state here because 
-                    # the text_area widget hasn't been called yet in this frame.
                     current_text = st.session_state.get(summary_key, "")
                     german_text = translate_summary(current_text)
                     if german_text:
                         st.session_state[summary_key] = german_text
-                        # No st.rerun() needed! The widget below will pick up the new value immediately.
             
             # 3. Render the text area into the placeholder
-            # It will automatically display the value currently in st.session_state[summary_key]
             pub_summary = summary_placeholder.text_area("Summary", height=150, key=summary_key)
             
             # --- END OF FIXED BLOCK ---
@@ -367,24 +374,6 @@ def render_details(selected_id):
 == Zugang ==
 * [{{{{filepath:{pub_filename}}}}} PDF]
 * Für den Volltext siehe [[/Text]]."""
-
-
-            elif "Book" in pub_type:
-                wiki_text = f"""{header}
-{{{{book
-| color = a24229
-| image = {pub_filename} | downloads = 
-| links = 
-| pages = 
-}}}}
-
-=== Contents ===
-{summary_block}
-
-* [[/Foreword|Foreword]]
-* [[/Chapter 1|Chapter 1]]
-* [[/Chapter 2|Chapter 2]]
-"""
 
             st.code(wiki_text, language="mediawiki")
             
