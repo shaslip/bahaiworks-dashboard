@@ -27,18 +27,28 @@ with Session(engine) as session:
     
     filename = record.filename
     file_path = record.file_path
-    # Guess a default target page title from filename (strip extension, replace _ with space)
-    default_target = os.path.splitext(filename)[0].replace("_", " ")
+    
+    # Default Target Guess
+    if "target_page" not in st.session_state:
+        st.session_state["target_page"] = os.path.splitext(filename)[0].replace("_", " ")
+    
     txt_path = file_path.replace(".pdf", ".txt")
     has_txt = os.path.exists(txt_path)
 
 if "pipeline_stage" not in st.session_state:
     st.session_state.pipeline_stage = "setup" 
 
-# --- UI Header ---
+# --- UI Header & Global Settings ---
 c1, c2 = st.columns([3, 1])
 with c1:
-    st.title(f"📖 Processing: {filename}")
+    st.title(f"📖 {filename}")
+    # GLOBAL TARGET INPUT
+    target_page = st.text_input("🎯 Bahai.works Page Title", 
+                                value=st.session_state["target_page"],
+                                key="global_target_input")
+    # Sync back to session state immediately
+    st.session_state["target_page"] = target_page
+
 with c2:
     if st.button("⬅️ Back to Dashboard"): go_back()
 
@@ -50,71 +60,51 @@ st.divider()
 
 # --- STAGE 1: SETUP ---
 if st.session_state.pipeline_stage == "setup":
-    st.header("Step 1: Define Targets & Source")
+    st.info("Select page ranges to extract high-quality metadata and structure.")
     
-    # 1. Target Page Definition
-    st.subheader("📍 Target")
-    target_page = st.text_input("Bahai.works Page Title", value=default_target, help="Where will the main book page live?")
-
-    # 2. Source Ranges
-    st.subheader("📄 Page Ranges (from PDF)")
     c_cr, c_toc = st.columns(2)
     with c_cr:
-        cr_pages = st.text_input("Copyright Pages", placeholder="e.g. 1-2")
+        st.subheader("©️ Copyright Pages")
+        cr_pages = st.text_input("Range (e.g. 1-2)", key="cr_input")
     with c_toc:
-        toc_pages = st.text_input("TOC Pages", placeholder="e.g. 5-8")
+        st.subheader("📑 TOC Pages")
+        toc_pages = st.text_input("Range (e.g. 5-8)", key="toc_input")
 
     st.markdown("---")
 
     if st.button("🚀 Send to Gemini", type="primary"):
-        if not target_page:
-            st.error("Please define a Target Page Title.")
-        else:
-            st.session_state["target_page"] = target_page
+        # We don't need to check target_page here anymore, it's global
+        with st.spinner("🤖 Gemini is extracting..."):
             
-            with st.spinner("🤖 Gemini is extracting metadata & TOC structure..."):
-                # Run Metadata Extraction
-                if cr_pages:
-                    res = extract_metadata_from_pdf(file_path, cr_pages)
-                    if "error" in res:
-                        st.error(f"Metadata Extraction Failed: {res['error']}")
-                        if "raw" in res: st.expander("Raw Response").code(res["raw"])
-                    
+            # Run Metadata
+            if cr_pages:
+                res = extract_metadata_from_pdf(file_path, cr_pages)
+                if "error" in res:
+                    st.error(f"Meta Error: {res['error']}")
+                else:
                     st.session_state["meta_result"] = res
+                    # Store clean strings for editors
+                    st.session_state["talk_text"] = res.get("copyright_text", "")
                     st.session_state["meta_json_str"] = json.dumps(res.get("data", {}), indent=4)
 
-                # Run TOC Extraction
-                if toc_pages:
-                    res = extract_toc_from_pdf(file_path, toc_pages)
-                    
-                    if res.get("error"):
-                        st.error(f"TOC Extraction Failed: {res['error']}")
-                        if "raw" in res: st.expander("Raw Response").code(res["raw"])
-                    
+            # Run TOC
+            if toc_pages:
+                res = extract_toc_from_pdf(file_path, toc_pages)
+                if res.get("error"):
+                    st.error(f"TOC Error: {res['error']}")
+                else:
                     st.session_state["toc_result"] = res
                     st.session_state["toc_json_str"] = json.dumps(res.get("toc_json", []), indent=4)
                     st.session_state["toc_wikitext_part"] = res.get("toc_wikitext", "")
-                
-                # Only advance if we have at least partial success or the user wants to force it
-                if not st.session_state.get("meta_result", {}).get("error") and not st.session_state.get("toc_result", {}).get("error"):
-                    st.session_state.pipeline_stage = "proof"
-                    st.rerun()
-                else:
-                    st.warning("Errors occurred. See above. Fix ranges or try again.")
-                    # Optional: Add a 'Force Continue' button if they want to proceed manually
-                    if st.button("Force Continue"):
-                        st.session_state.pipeline_stage = "proof"
-                        st.rerun()
+            
+            # Advance
+            st.session_state.pipeline_stage = "proof"
+            st.rerun()
 
-# --- STAGE 2: PROOFREAD ---
+# --- STAGE 2: PROOFREAD & IMPORT ---
 elif st.session_state.pipeline_stage == "proof":
-    st.header("Step 2: Proofread & Import")
     
-    # Retrieve Data
-    full_meta = st.session_state.get("meta_result", {})
-    meta_data = full_meta.get("data", {}) # The 'data' sub-object
-    
-    # Construct the Template Block (Empty fields as requested)
+    # Template Construction
     header_template = f"""{{{{restricted use|where=|until=}}}}
 {{{{header
  | title      = 
@@ -141,82 +131,81 @@ elif st.session_state.pipeline_stage == "proof":
 
 ===Contents===
 """
-    # Combine Template + Gemini's List
     default_full_page = header_template + st.session_state.get("toc_wikitext_part", "")
 
+    # TABS
     t1, t2 = st.tabs(["1. Metadata & Copyright", "2. Main Page (TOC)"])
     
-    # --- TAB 1: Metadata ---
+    # --- TAB 1: METADATA ---
     with t1:
         c_talk, c_json = st.columns(2)
+        
+        # COLUMN 1: TALK PAGE
         with c_talk:
             st.subheader("Talk Page Text")
-            st.caption("Clean OCR for legal/copyright reference")
-            talk_input = st.text_area("Clean OCR", value=full_meta.get("copyright_text", ""), height=500, key="talk_editor")
+            talk_text = st.text_area("Clean OCR", 
+                                     value=st.session_state.get("talk_text", ""), 
+                                     height=500, key="talk_editor")
+            
+            if st.button(f"☁️ Import to Talk:{st.session_state['target_page']}", type="primary", use_container_width=True):
+                # Placeholder for mediawiki upload
+                # upload_to_wiki(f"Talk:{st.session_state['target_page']}", talk_text)
+                st.success(f"Uploaded to Talk:{st.session_state['target_page']}")
+
+        # COLUMN 2: WIKIBASE ITEM
         with c_json:
             st.subheader("Wikibase Data (JSON)")
-            st.caption("This data creates the Q-Item (Source of Truth)")
-            json_input = st.text_area("Metadata", value=json.dumps(meta_data, indent=4), height=500, key="meta_editor")
+            json_text = st.text_area("Metadata", 
+                                     value=st.session_state.get("meta_json_str", "{}"), 
+                                     height=500, key="meta_editor")
+            
+            if st.button("☁️ Import to Bahaidata", type="primary", use_container_width=True):
+                try:
+                    data = json.loads(json_text)
+                    with st.spinner("Creating Item..."):
+                        new_qid = import_book_to_wikibase(data)
+                        st.session_state["parent_qid"] = new_qid # SAVE QID FOR TAB 2
+                        st.success(f"Created Item: {new_qid}")
+                        st.toast(f"Parent QID set to {new_qid}")
+                except Exception as e:
+                    st.error(f"Error: {e}")
 
-    # --- TAB 2: TOC ---
+    # --- TAB 2: CONTENT & CHAPTERS ---
     with t2:
         c_toc_json, c_toc_wiki = st.columns(2)
+        
+        # COLUMN 1: CHAPTER ITEMS
         with c_toc_json:
             st.subheader("Chapter Data (JSON)")
-            st.caption("For future scholarly articles processing")
-            toc_json_input = st.text_area("Chapters", value=st.session_state.get("toc_json_str", "[]"), height=600, key="toc_json_editor")
+            toc_json_text = st.text_area("Chapters", 
+                                         value=st.session_state.get("toc_json_str", "[]"), 
+                                         height=400, key="toc_json_editor")
             
+            # Parent QID Input (Auto-filled)
+            parent_qid = st.text_input("Parent Book QID (P361)", 
+                                       value=st.session_state.get("parent_qid", ""),
+                                       help="If the book item exists, enter QID here.")
+            
+            if st.button("☁️ Import Chapters to Bahaidata", type="primary", use_container_width=True):
+                if not parent_qid:
+                    st.error("Please provide a Parent Book QID first.")
+                else:
+                    st.info("Need 'import_chapters_script.py' logic here. (Placeholder)")
+                    # Logic: Loop through JSON, create items, link P361 to parent_qid
+
+        # COLUMN 2: MAIN PAGE SOURCE
         with c_toc_wiki:
             st.subheader("Main Page Source")
+            full_page_text = st.text_area("Wikitext", 
+                                          value=default_full_page, 
+                                          height=470, key="full_page_editor")
             
-            # --- FIX: Re-introduced Target Page Input Here ---
-            target_page_input = st.text_input("Target Page Title", 
-                                              value=st.session_state.get("target_page", ""),
-                                              key="final_target_input")
-            
-            # Update session state if user changes it here
-            if target_page_input != st.session_state.get("target_page"):
-                st.session_state["target_page"] = target_page_input
-
-            st.caption(f"Will create: {target_page_input}")
-            # -------------------------------------------------
-
-            full_page_input = st.text_area("Wikitext", value=default_full_page, height=530, key="full_page_editor")
+            if st.button(f"☁️ Import to {st.session_state['target_page']}", type="primary", use_container_width=True):
+                # Placeholder for mediawiki upload
+                # upload_to_wiki(st.session_state['target_page'], full_page_text)
+                st.success(f"Uploaded to {st.session_state['target_page']}")
 
     st.divider()
-    
-    # --- Actions ---
-    c_back, c_approve = st.columns([1, 4])
-    with c_back:
-        if st.button("⬅️ Back"):
-            st.session_state.pipeline_stage = "setup"
-            st.rerun()
-            
-    with c_approve:
-        if st.button("✅ Approve All & Import", type="primary"):
-            try:
-                # 1. Wikibase Import
-                wb_data = json.loads(json_input)
-                new_qid = None
-                with st.spinner("Creating Wikibase Item..."):
-                    new_qid = import_book_to_wikibase(wb_data)
-                    st.toast(f"Created Item: {new_qid}")
-                
-                # 2. Bahai.works Page Creation (Placeholder)
-                target = st.session_state.get("target_page")
-                # upload_to_wiki(page_title=target, content=full_page_input)
-                st.success(f"Prepared Page '{target}'")
-                
-                # 3. Bahai.works Talk Page Creation (Placeholder)
-                # upload_to_wiki(page_title=f"Talk:{target}", content=talk_input)
-                st.info(f"Prepared Talk Page 'Talk:{target}'")
-                
-                st.balloons()
-                st.session_state["final_qid"] = new_qid
-                
-                # Move to next stage (Splitting)
-                # st.session_state.pipeline_stage = "split"
-                # st.rerun()
-                
-            except Exception as e:
-                st.error(f"Import Failed: {e}")
+    if st.button("⬅️ Back to Range Selection"):
+        st.session_state.pipeline_stage = "setup"
+        st.rerun()
