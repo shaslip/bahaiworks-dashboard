@@ -12,6 +12,10 @@ pdf2image==1.17.0
 pytesseract==0.3.13
 Pillow>=10.0.0
 
+# Wikibase & API
+wikibaseintegrator==0.12.0
+requests>=2.32.0
+
 # AI & Environment
 google-generativeai==0.8.3
 python-dotenv==1.0.1
