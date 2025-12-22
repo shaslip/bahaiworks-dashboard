@@ -165,9 +165,20 @@ elif st.session_state.pipeline_stage == "proof":
             
         with c_toc_wiki:
             st.subheader("Main Page Source")
-            st.caption(f"Target: {st.session_state.get('target_page')}")
-            # This is the FULL page editor
-            full_page_input = st.text_area("Wikitext", value=default_full_page, height=600, key="full_page_editor")
+            
+            # --- FIX: Re-introduced Target Page Input Here ---
+            target_page_input = st.text_input("Target Page Title", 
+                                              value=st.session_state.get("target_page", ""),
+                                              key="final_target_input")
+            
+            # Update session state if user changes it here
+            if target_page_input != st.session_state.get("target_page"):
+                st.session_state["target_page"] = target_page_input
+
+            st.caption(f"Will create: {target_page_input}")
+            # -------------------------------------------------
+
+            full_page_input = st.text_area("Wikitext", value=default_full_page, height=530, key="full_page_editor")
 
     st.divider()
     
@@ -199,6 +210,10 @@ elif st.session_state.pipeline_stage == "proof":
                 
                 st.balloons()
                 st.session_state["final_qid"] = new_qid
+                
+                # Move to next stage (Splitting)
+                # st.session_state.pipeline_stage = "split"
+                # st.rerun()
                 
             except Exception as e:
                 st.error(f"Import Failed: {e}")
