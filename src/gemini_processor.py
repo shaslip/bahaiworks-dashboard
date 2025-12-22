@@ -25,19 +25,18 @@ def parse_range_string(range_str):
 def json_to_wikitext(toc_list):
     """
     Converts the structured JSON list into MediaWiki format.
+    Format: : [[/Title|Title]]
     """
     wikitext = ""
     for item in toc_list:
         title = item.get("title", "").strip()
-        page = item.get("page_range", "").strip()
         
         # Skip empty entries
         if not title: continue
             
-        # Format: * [[/Title|Title]] ... {{p|Page}}
-        line = f"* [[/{title}|{title}]]"
-        if page:
-            line += f" ... {{{{p|{page}}}}}"
+        # Format: : [[/Title|Title]]
+        # We ignore page numbers for the visual list as requested
+        line = f": [[/{title}|{title}]]"
         wikitext += line + "\n"
     return wikitext
 
