@@ -13,7 +13,7 @@ pytesseract==0.3.13
 Pillow>=10.0.0
 
 # Wikibase & API
-wikibaseintegrator==0.12.0
+wikibaseintegrator==0.12.15
 requests>=2.32.0
 
 # AI & Environment
