@@ -1,19 +1,27 @@
+import os
 import re
+from dotenv import load_dotenv
 from wikibaseintegrator import wbi_login, WikibaseIntegrator, wbi_helpers
 from wikibaseintegrator.datatypes import String, Item, MonolingualText, Time
 from wikibaseintegrator.wbi_config import config as wbi_config
 from wikibaseintegrator.wbi_enums import ActionIfExists
 
-# --- Configuration (Hardcoded as per your script) ---
-wbi_config['MEDIAWIKI_API_URL'] = 'https://bahaidata.org/api.php'
-wbi_config['USER_AGENT'] = 'MyWikibaseBot/1.0 (https://bahaidata.org/User:Sarah)'
+# Load environment variables
+load_dotenv()
 
-# Note: In production, consider moving credentials to environment variables
-LOGIN_USER = 'Username'
-LOGIN_PASS = 'password' 
+# --- Configuration ---
+# Credentials from .env
+WB_USER = os.getenv("WIKIBASE_USER")
+WB_PASS = os.getenv("WIKIBASE_PASSWORD")
+
+if not WB_USER or not WB_PASS:
+    raise ValueError("Missing WIKIBASE_USER or WIKIBASE_PASSWORD in .env file")
+
+wbi_config['MEDIAWIKI_API_URL'] = 'https://bahaidata.org/api.php'
+wbi_config['USER_AGENT'] = f'MyWikibaseBot/1.0 (https://bahaidata.org/User:{WB_USER})'
 
 def get_wbi_instance():
-    login_instance = wbi_login.Clientlogin(user=LOGIN_USER, password=LOGIN_PASS)
+    login_instance = wbi_login.Clientlogin(user=WB_USER, password=WB_PASS)
     return WikibaseIntegrator(login=login_instance)
 
 def check_or_create_person(wbi, person_name, role):
