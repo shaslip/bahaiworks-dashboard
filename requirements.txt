@@ -1,9 +1,17 @@
+# Web Framework 
 streamlit>=1.41.1
-sqlalchemy==2.0.36
-google-generativeai==0.8.3
-pymupdf==1.24.11
-python-dotenv==1.0.1
 watchdog==5.0.3
+
+# Data Handling
 pandas==2.2.3
+sqlalchemy==2.0.36
+
+# Document & Image Processing
+pymupdf==1.24.11
+pdf2image==1.17.0
 pytesseract==0.3.13
 Pillow>=10.0.0
+
+# AI & Environment
+google-generativeai==0.8.3
+python-dotenv==1.0.1
