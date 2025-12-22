@@ -74,34 +74,37 @@ if st.session_state.pipeline_stage == "setup":
             
             with st.spinner("🤖 Gemini is extracting metadata & TOC structure..."):
                 # Run Metadata Extraction
-                meta_json = "{}"
                 if cr_pages:
-                    try:
-                        res = extract_metadata_from_pdf(file_path, cr_pages)
-                        st.session_state["meta_result"] = res # Store object
-                        meta_json = json.dumps(res, indent=4)
-                    except Exception as e:
-                        st.error(f"Meta Error: {e}")
+                    res = extract_metadata_from_pdf(file_path, cr_pages)
+                    if "error" in res:
+                        st.error(f"Metadata Extraction Failed: {res['error']}")
+                        if "raw" in res: st.expander("Raw Response").code(res["raw"])
+                    
+                    st.session_state["meta_result"] = res
+                    st.session_state["meta_json_str"] = json.dumps(res.get("data", {}), indent=4)
 
                 # Run TOC Extraction
-                toc_json_str = "[]"
-                toc_wikitext_part = ""
                 if toc_pages:
-                    try:
-                        res = extract_toc_from_pdf(file_path, toc_pages)
-                        st.session_state["toc_result"] = res # Store object
-                        toc_json_str = json.dumps(res.get("toc_json", []), indent=4)
-                        toc_wikitext_part = res.get("toc_wikitext", "")
-                    except Exception as e:
-                        st.error(f"TOC Error: {e}")
+                    res = extract_toc_from_pdf(file_path, toc_pages)
+                    
+                    if res.get("error"):
+                        st.error(f"TOC Extraction Failed: {res['error']}")
+                        if "raw" in res: st.expander("Raw Response").code(res["raw"])
+                    
+                    st.session_state["toc_result"] = res
+                    st.session_state["toc_json_str"] = json.dumps(res.get("toc_json", []), indent=4)
+                    st.session_state["toc_wikitext_part"] = res.get("toc_wikitext", "")
                 
-                # Store raw strings for the text editors
-                st.session_state["meta_json_str"] = meta_json
-                st.session_state["toc_json_str"] = toc_json_str
-                st.session_state["toc_wikitext_part"] = toc_wikitext_part
-                
-                st.session_state.pipeline_stage = "proof"
-                st.rerun()
+                # Only advance if we have at least partial success or the user wants to force it
+                if not st.session_state.get("meta_result", {}).get("error") and not st.session_state.get("toc_result", {}).get("error"):
+                    st.session_state.pipeline_stage = "proof"
+                    st.rerun()
+                else:
+                    st.warning("Errors occurred. See above. Fix ranges or try again.")
+                    # Optional: Add a 'Force Continue' button if they want to proceed manually
+                    if st.button("Force Continue"):
+                        st.session_state.pipeline_stage = "proof"
+                        st.rerun()
 
 # --- STAGE 2: PROOFREAD ---
 elif st.session_state.pipeline_stage == "proof":
