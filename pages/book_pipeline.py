@@ -1,6 +1,7 @@
 import streamlit as st
 import os
 import json
+from src.mediawiki_uploader import upload_to_bahaiworks
 from sqlalchemy.orm import Session
 from src.database import engine, Document
 from src.gemini_processor import extract_metadata_from_pdf, extract_toc_from_pdf
@@ -103,7 +104,7 @@ if st.session_state.pipeline_stage == "setup":
 
 # --- STAGE 2: PROOFREAD & IMPORT ---
 elif st.session_state.pipeline_stage == "proof":
-    
+
     # Template Construction
     header_template = f"""{{{{restricted use|where=|until=}}}}
 {{{{header
@@ -147,10 +148,14 @@ elif st.session_state.pipeline_stage == "proof":
                                      value=st.session_state.get("talk_text", ""), 
                                      height=500, key="talk_editor")
             
-            if st.button(f"☁️ Import to Talk:{st.session_state['target_page']}", type="primary", use_container_width=True):
-                # Placeholder for mediawiki upload
-                # upload_to_wiki(f"Talk:{st.session_state['target_page']}", talk_text)
-                st.success(f"Uploaded to Talk:{st.session_state['target_page']}")
+            talk_title = f"Talk:{st.session_state['target_page']}"
+            if st.button(f"☁️ Import to {talk_title}", type="primary", use_container_width=True):
+                with st.spinner("Uploading to Bahai.works..."):
+                    try:
+                        upload_to_bahaiworks(talk_title, talk_text, summary="Initial OCR upload")
+                        st.success(f"✅ Uploaded to {talk_title}")
+                    except Exception as e:
+                        st.error(f"Upload Error: {e}")
 
         # COLUMN 2: WIKIBASE ITEM
         with c_json:
@@ -165,7 +170,7 @@ elif st.session_state.pipeline_stage == "proof":
                     with st.spinner("Creating Item..."):
                         new_qid = import_book_to_wikibase(data)
                         st.session_state["parent_qid"] = new_qid # SAVE QID FOR TAB 2
-                        st.success(f"Created Item: {new_qid}")
+                        st.success(f"✅ Created Item: {new_qid}")
                         st.toast(f"Parent QID set to {new_qid}")
                 except Exception as e:
                     st.error(f"Error: {e}")
@@ -190,8 +195,8 @@ elif st.session_state.pipeline_stage == "proof":
                 if not parent_qid:
                     st.error("Please provide a Parent Book QID first.")
                 else:
-                    st.info("Need 'import_chapters_script.py' logic here. (Placeholder)")
-                    # Logic: Loop through JSON, create items, link P361 to parent_qid
+                    # Placeholder for the future script you mentioned
+                    st.info("Logic for 'import_chapters_script.py' pending.")
 
         # COLUMN 2: MAIN PAGE SOURCE
         with c_toc_wiki:
@@ -200,10 +205,15 @@ elif st.session_state.pipeline_stage == "proof":
                                           value=default_full_page, 
                                           height=470, key="full_page_editor")
             
-            if st.button(f"☁️ Import to {st.session_state['target_page']}", type="primary", use_container_width=True):
-                # Placeholder for mediawiki upload
-                # upload_to_wiki(st.session_state['target_page'], full_page_text)
-                st.success(f"Uploaded to {st.session_state['target_page']}")
+            target_title = st.session_state['target_page']
+            if st.button(f"☁️ Import to {target_title}", type="primary", use_container_width=True):
+                with st.spinner("Uploading to Bahai.works..."):
+                    try:
+                        upload_to_bahaiworks(target_title, full_page_text, summary="Initial book setup")
+                        st.success(f"✅ Uploaded to {target_title}")
+                        st.balloons()
+                    except Exception as e:
+                        st.error(f"Upload Error: {e}")
 
     st.divider()
     if st.button("⬅️ Back to Range Selection"):
