@@ -22,20 +22,16 @@ def parse_range_string(range_str):
 
 def extract_metadata_from_pdf(pdf_path, page_range_str):
     """
-    1. Converts PDF pages to images.
-    2. Sends images to Gemini.
-    3. Returns a JSON dictionary matching the Wikibase importer keys.
+    Returns a JSON object with:
+    {
+        "copyright_text": "The raw, cleaned text from the pages...",
+        "data": { "TITLE": "...", "AUTHOR": "...", ... }
+    }
     """
     pages_to_process = parse_range_string(page_range_str)
     
-    # Extract images (pdf2image uses 1-based indexing, same as humans)
-    # We grab only the requested pages to save memory/bandwidth
     images = []
-    # Note: convert_from_path might be slow for huge PDFs if not optimized, 
-    # but efficient enough for grabbing pages 1-5.
-    # We loop to grab specific pages because they might be non-contiguous
     for p_num in pages_to_process:
-        # first_page and last_page are inclusive 1-based indices
         img_list = convert_from_path(pdf_path, first_page=p_num, last_page=p_num)
         if img_list:
             images.append(img_list[0])
@@ -46,31 +42,31 @@ def extract_metadata_from_pdf(pdf_path, page_range_str):
     model = genai.GenerativeModel('gemini-3-flash-preview')
     
     prompt = """
-    Analyze these images of a book's copyright/title pages.
-    Extract the following metadata into a pure JSON object. 
-    Do not use Markdown formatting (no ```json). 
+    Analyze these images of a book's copyright/title pages. 
+    Output a single JSON object with exactly two keys:
     
-    Keys required:
-    - TITLE (The short title)
-    - FULL_TITLE (Subtitle included)
-    - AUTHOR (Comma separated names)
-    - EDITOR (Comma separated names)
-    - TRANSLATOR (Comma separated names)
-    - COMPILER (Comma separated names)
-    - PUBLISHER
-    - COUNTRY (Country of publication)
-    - PUBYEAR (Year only, e.g. 1995)
-    - PAGES (Total pages if listed, else null)
-    - ISBN10
-    - ISBN13
+    1. "copyright_text": A string containing the full, verbatim text from these pages, but cleaned of OCR artifacts. This will be posted to a Wiki Talk page, so preserve line breaks where logical.
     
-    If a field is not found, return an empty string "".
+    2. "data": A flat JSON object with these specific keys (leave blank if not found):
+       - TITLE (The short title)
+       - FULL_TITLE (Subtitle included)
+       - AUTHOR (Comma separated names)
+       - EDITOR (Comma separated names)
+       - TRANSLATOR (Comma separated names)
+       - COMPILER (Comma separated names)
+       - PUBLISHER
+       - COUNTRY (Country of publication)
+       - PUBYEAR (Year only, e.g. 1995)
+       - PAGES (Total pages if listed)
+       - ISBN10
+       - ISBN13
+    
+    Do not use Markdown formatting (no ```json). Just the raw JSON string.
     """
     
     response = model.generate_content([prompt, *images])
     
     try:
-        # Clean potential markdown just in case
         clean_text = response.text.replace("```json", "").replace("```", "").strip()
         return json.loads(clean_text)
     except Exception as e:
