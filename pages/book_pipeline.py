@@ -104,15 +104,37 @@ if st.session_state.pipeline_stage == "setup":
 elif st.session_state.pipeline_stage == "proof":
     st.header("Step 2: Proofread & Structure")
     
-    t1, t2 = st.tabs(["©️ Metadata (JSON)", "📑 Table of Contents (Wikitext)"])
+    t1, t2 = st.tabs(["©️ Metadata & Copyright", "📑 Table of Contents (Wikitext)"])
     
     with t1:
-        st.caption("Edit the JSON below. This will be sent to Wikibase.")
-        meta_input = st.text_area("Metadata JSON", 
-                                  value=st.session_state.get("meta_json", "{}"), 
-                                  height=400, 
-                                  key="meta_editor")
+        # Load the Gemini result safely
+        full_result = {}
+        try:
+            full_result = json.loads(st.session_state.get("meta_json", "{}"))
+        except:
+            pass
+
+        # Split the screen for the two distinct tasks
+        c_talk, c_data = st.columns(2)
         
+        with c_talk:
+            st.subheader("1. Talk Page Content")
+            st.caption("Cleaned text for `Talk:Title`. Verify OCR accuracy here.")
+            talk_text = st.text_area("Copyright Text", 
+                                     value=full_result.get("copyright_text", ""), 
+                                     height=500,
+                                     key="talk_editor")
+
+        with c_data:
+            st.subheader("2. Wikibase Data")
+            st.caption("Structured JSON for `bahaidata.org`. Verify fields.")
+            # Extract just the 'data' part for editing to keep it clean
+            current_data = full_result.get("data", {})
+            meta_input = st.text_area("JSON Object", 
+                                      value=json.dumps(current_data, indent=4), 
+                                      height=500, 
+                                      key="meta_editor")
+
     with t2:
         st.caption("Edit the Wikitext below. This will be used for page splitting.")
         toc_input = st.text_area("TOC Wikitext", 
@@ -120,6 +142,7 @@ elif st.session_state.pipeline_stage == "proof":
                                  height=600, 
                                  key="toc_editor")
 
+    st.divider()
     c_act1, c_act2 = st.columns([1, 4])
     
     with c_act1:
@@ -128,21 +151,24 @@ elif st.session_state.pipeline_stage == "proof":
             st.rerun()
             
     with c_act2:
-        if st.button("✅ Approve & Import to Wikibase", type="primary"):
+        if st.button("✅ Approve & Import", type="primary"):
             try:
-                # Parse JSON from text area
-                data = json.loads(meta_input)
+                # 1. Handle Wikibase Import
+                data_for_wikibase = json.loads(meta_input)
                 
-                with st.spinner("Connecting to Wikibase..."):
-                    # Call the importer
-                    new_id = import_book_to_wikibase(data)
-                    
-                st.success(f"Successfully created Item: {new_id}")
+                with st.spinner("Importing to Wikibase..."):
+                    new_id = import_book_to_wikibase(data_for_wikibase)
+                    st.success(f"Creating Wikibase Item: {new_id}")
+                
+                # 2. Handle Talk Page (Placeholder for now)
+                # In the future: upload_to_mediawiki(f"Talk:{title}", talk_text)
+                st.info(f"Ready to upload Talk Page content ({len(talk_text)} chars). Logic pending.")
+                
+                # 3. Store results and move on
+                st.session_state["final_wikibase_id"] = new_id
                 st.balloons()
                 
-                # TODO: Save the TOC to the database or file for the next step (Splitting)
-                
             except json.JSONDecodeError:
-                st.error("Invalid JSON in Metadata tab. Please fix formatting.")
+                st.error("Invalid JSON in Wikibase Data column. Please fix formatting.")
             except Exception as e:
                 st.error(f"Import Failed: {e}")
