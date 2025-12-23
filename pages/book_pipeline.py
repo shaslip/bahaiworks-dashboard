@@ -209,69 +209,73 @@ elif st.session_state.pipeline_stage == "proof":
         with c_actions:
             st.subheader("3. Execute")
             
+            target_title = st.session_state['target_page']
             parent_qid = st.text_input("Parent QID", value=st.session_state.get("parent_qid", ""))
             
             st.markdown("---")
-            st.write("**A. Bahaidata**")
-            
-            # ACTION 1: Import Chapters (Optional)
-            if st.button("Import Chapter Items", help="Creates Q-items for each chapter. Optional."):
-                if not parent_qid:
-                    st.error("Need Parent QID")
-                else:
-                    try:
-                        with st.spinner("Creating Items..."):
-                            logs, created_map = import_chapters_to_wikibase(parent_qid, updated_toc_list)
-                            st.session_state["chapter_qid_map"] = created_map
-                            st.success(f"Created {len(created_map)} Items")
-                    except Exception as e: st.error(str(e))
-            
-            st.markdown("---")
-            st.write("**B. Bahai.works**")
+            st.write("**A. Bahai.works**")
 
-            # ACTION 2: Create Pages
-            if st.button("Create Pages & Links", type="primary", help="Creates subpages (Book/Chapter). Links them if QIDs exist."):
+            # ACTION 1: Upload Main Page
+            if st.button(f"1. Create {target_title}", type="primary", width='stretch'):
                 try:
-                    base_title = st.session_state['target_page']
-                    access_group = base_title.replace(" ", "")
+                    upload_to_bahaiworks(target_title, full_wikitext, "Setup")
+                    st.success(f"✅ Created {target_title}")
+                except Exception as e: st.error(str(e))
+
+            # ACTION 2: Create Subpages
+            if st.button("2. Create Chapter Placeholders", width='stretch'):
+                try:
+                    access_group = target_title.replace(" ", "")
                     content = f"<accesscontrol>Access:{access_group}</accesscontrol>{{{{Publicationinfo}}}}"
-                    
-                    # Do we have QIDs?
-                    qid_map = st.session_state.get("chapter_qid_map", [])
-                    # Convert list of dicts to a lookup dict for easy access: {'Title': 'Q123'}
-                    qid_lookup = {item['title']: item['qid'] for item in qid_map}
                     
                     progress = st.progress(0)
                     
                     for i, item in enumerate(updated_toc_list):
-                        title = item['title']
-                        full_title = f"{base_title}/{title}"
-                        
-                        # 1. Create Page
+                        full_title = f"{target_title}/{item['title']}"
+                        # Only create the page (Linking happens in Step 3 now)
                         upload_to_bahaiworks(full_title, content, "Chapter placeholder")
-                        
-                        # 2. Link (if QID exists)
-                        if title in qid_lookup:
-                            set_sitelink(qid_lookup[title], full_title)
-                        
                         progress.progress((i+1)/len(updated_toc_list))
                     
-                    st.success("Pages Created!")
+                    st.success("✅ Placeholders Created")
                 except Exception as e: st.error(str(e))
 
-            # ACTION 3: Upload Main Page
-            if st.button("Upload Main Page", type="primary"):
-                try:
-                    upload_to_bahaiworks(st.session_state['target_page'], full_wikitext, "Setup")
-                    st.success("Main Page Live!")
-                    
-                    # Prepare for Splitter
-                    st.session_state["toc_map"] = updated_toc_list
-                    st.session_state.pipeline_stage = "split"
-                    st.rerun()
-                except Exception as e: st.error(str(e))
-
-    st.divider()
-    if st.button("⬅️ Back"):
-        st.session_state.pipeline_stage = "setup"
-        st.rerun()
+            st.markdown("---")
+            st.write("**B. Bahaidata**")
+            
+            # ACTION 3: Import & Link (Scholarly Pipeline)
+            # Only show if authors exist, or let user decide
+            if st.button("3. Import & Link Chapter Items", type="primary", width='stretch', help="Creates items and links them to the pages created in Step 2."):
+                if not parent_qid:
+                    st.error("Need Parent QID")
+                else:
+                    try:
+                        with st.spinner("Creating Items & Linking..."):
+                            # 1. Create Items
+                            logs, created_map = import_chapters_to_wikibase(parent_qid, updated_toc_list)
+                            st.session_state["chapter_qid_map"] = created_map
+                            
+                            # 2. Link Items immediately
+                            link_logs = []
+                            for item in created_map:
+                                qid = item['qid']
+                                title = item['title']
+                                full_page_url = f"{target_title}/{title}"
+                                
+                                success, msg = set_sitelink(qid, full_page_url)
+                                if success: link_logs.append(f"🔗 Linked {qid} -> {title}")
+                                else: link_logs.append(f"❌ Link Fail {qid}: {msg}")
+                            
+                            st.success(f"✅ Processed {len(created_map)} Chapters")
+                            with st.expander("Activity Log"):
+                                st.write(logs)
+                                st.write(link_logs)
+                                
+                    except Exception as e: st.error(str(e))
+            
+            st.markdown("---")
+            
+            # FINAL: Move to Splitter
+            if st.button("🏁 Proceed to Splitter", use_container_width=True):
+                st.session_state["toc_map"] = updated_toc_list
+                st.session_state.pipeline_stage = "split"
+                st.rerun()
