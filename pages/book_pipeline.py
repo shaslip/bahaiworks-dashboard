@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+import re
 import json
 import pandas as pd
 from sqlalchemy.orm import Session
@@ -137,13 +138,31 @@ elif st.session_state.pipeline_stage == "proof":
         for item in st.session_state["toc_json_list"]:
             original_title = item.get("title", "")
             
-            # Use existing values if we already have them, otherwise default to title
-            p_name = item.get("page_name", original_title)
-            d_title = item.get("display_title", original_title)
+            # --- NEW LOGIC: Prefix Extraction ---
+            # 1. Check if we already have a prefix stored (from a previous edit)
+            # 2. If not, try to detect it from the title (e.g., "1. ", "1/ ", "1 ")
+            prefix = item.get("prefix", "")
+            clean_title = original_title
+
+            if not prefix:
+                # Regex explanation: 
+                # ^(\d+       -> Starts with digits
+                # (?:[./]\s* -> Followed by . or / and optional space
+                # | \s+))     -> OR followed by just whitespace
+                match = re.match(r"^(\d+(?:[./]\s*|\s+))", original_title)
+                if match:
+                    prefix = match.group(1) # The "1. " part
+                    clean_title = original_title[len(prefix):].strip() # The rest
+            
+            # Use existing values if we already have them, otherwise use the cleaned title
+            # Note: We prioritize the cleaned title for defaults
+            p_name = item.get("page_name", clean_title)
+            d_title = item.get("display_title", clean_title)
             
             authors_str = ", ".join(item.get("author", []))
             
             raw_data.append({
+                "Prefix": prefix,  # New Column
                 "Page Name (URL)": p_name,
                 "Display Title": d_title,
                 "Page Range": item.get("page_range", ""),
@@ -158,9 +177,22 @@ elif st.session_state.pipeline_stage == "proof":
         # --- COLUMN 1: MASTER DATA ---
         with c_editor:
             st.subheader("1. Edit Chapter Data")
-            st.caption("Page Name = URL slug. Display Title = Link Text & Header.")
+            st.caption("Prefix handles numbering (e.g. '1.'). Page Name is the clean URL slug.")
             
-            edited_df = st.data_editor(df, num_rows="dynamic", height=600)
+            # Reorder columns to put Prefix first
+            column_config = {
+                "Prefix": st.column_config.TextColumn("Prefix", width="small"),
+                "Page Name (URL)": st.column_config.TextColumn("Page Name (URL)", width="medium"),
+                "Display Title": st.column_config.TextColumn("Display Title", width="medium"),
+            }
+            
+            edited_df = st.data_editor(
+                df, 
+                num_rows="dynamic", 
+                use_container_width=True, 
+                height=600,
+                column_config=column_config
+            )
             
             # Reconstruct JSON
             updated_toc_list = []
@@ -170,17 +202,22 @@ elif st.session_state.pipeline_stage == "proof":
                 auth_list = [a.strip() for a in row["Authors"].split(",") if a.strip()]
                 p_name = row["Page Name (URL)"]
                 d_title = row["Display Title"]
+                prefix = row["Prefix"]
+                
+                if prefix is None: prefix = "" # Handle NaNs
                 
                 updated_toc_list.append({
-                    "title": d_title,         # Used for Wikibase Label & Text Search
-                    "page_name": p_name,      # Used for URL / Sitelink
-                    "display_title": d_title, # Redundant but explicit
+                    "title": d_title,             # Used for Wikibase Label & Text Search (Clean)
+                    "page_name": p_name,          # Used for URL / Sitelink (Clean)
+                    "display_title": d_title,     # Clean
+                    "prefix": prefix,             # Store prefix so it persists on rerun
                     "page_range": row["Page Range"],
                     "author": auth_list
                 })
                 
-                # Build Wikitext Preview (Pipe Syntax)
-                computed_toc_wikitext += f"\n:[[/{p_name}|{d_title}]]"
+                # Build Wikitext Preview (Prefix outside link)
+                # Format: :1. [[/PageName|DisplayTitle]]
+                computed_toc_wikitext += f"\n:{prefix}[[\{p_name}|{d_title}]]"
             
             st.session_state["toc_json_list"] = updated_toc_list
 
@@ -212,7 +249,7 @@ elif st.session_state.pipeline_stage == "proof":
 }}}}
 
 ===Contents===
-"""     
+"""      
             full_wikitext = header_template + computed_toc_wikitext
             st.code(full_wikitext, language="mediawiki")
 
@@ -233,27 +270,13 @@ elif st.session_state.pipeline_stage == "proof":
                     st.success(f"✅ Created {target_title}")
                 except Exception as e: st.error(str(e))
 
-            # ACTION 2: Create Subpages (Using Page Name for URL)
-            if st.button("2. Create Chapter Placeholders", width='stretch'):
-                try:
-                    access_group = target_title.replace(" ", "")
-                    content = f"<accesscontrol>Access:{access_group}</accesscontrol>{{{{Publicationinfo}}}}"
-                    
-                    progress = st.progress(0)
-                    for i, item in enumerate(updated_toc_list):
-                        # URL uses page_name
-                        full_title = f"{target_title}/{item['page_name']}"
-                        upload_to_bahaiworks(full_title, content, "Chapter placeholder")
-                        progress.progress((i+1)/len(updated_toc_list))
-                    
-                    st.success("✅ Placeholders Created")
-                except Exception as e: st.error(str(e))
+            # REMOVED: Create Chapter Placeholders (Duplicate functionality)
 
             st.markdown("---")
             st.write("**B. Bahaidata**")
             
-            # ACTION 3a: Simple Link
-            if st.button("3a. Link Book Item Only", width='stretch'):
+            # ACTION 2: Connect Book Item
+            if st.button("Connect Book item", width='stretch'):
                 if not parent_qid: st.error("Need Parent QID")
                 else:
                     try:
@@ -262,8 +285,8 @@ elif st.session_state.pipeline_stage == "proof":
                         else: st.error(msg)
                     except Exception as e: st.error(str(e))
 
-            # ACTION 3b: Import & Link Items
-            if st.button("3b. Import & Link Chapter Items", type="primary", width='stretch'):
+            # ACTION 3: Create & Connect Chapter Items
+            if st.button("Create and connect chapter items", type="primary", width='stretch'):
                 if not parent_qid: st.error("Need Parent QID")
                 else:
                     try:
