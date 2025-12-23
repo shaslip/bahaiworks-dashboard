@@ -101,7 +101,7 @@ elif st.session_state.pipeline_stage == "proof":
         with c_talk:
             st.subheader("Talk Page")
             talk_text = st.text_area("Clean OCR", value=st.session_state.get("talk_text", ""), height=500, key="talk_edit")
-            if st.button(f"☁️ Import to Talk:{target_page}", type="primary", use_container_width=True):
+            if st.button(f"☁️ Import to Talk:{target_page}", type="primary", width='stretch'):
                 try:
                     upload_to_bahaiworks(f"Talk:{target_page}", talk_text, "Init OCR")
                     st.success("✅ Uploaded")
@@ -113,7 +113,7 @@ elif st.session_state.pipeline_stage == "proof":
             
             c_btn1, c_btn2 = st.columns(2)
             with c_btn1:
-                if st.button("1. Create Item", type="primary", use_container_width=True):
+                if st.button("1. Create Item", type="primary", width='stretch'):
                     try:
                         qid = import_book_to_wikibase(json.loads(json_text))
                         st.session_state["parent_qid"] = qid
@@ -121,7 +121,7 @@ elif st.session_state.pipeline_stage == "proof":
                     except Exception as e: st.error(str(e))
             with c_btn2:
                 if "parent_qid" in st.session_state:
-                    if st.button("2. Link Page", use_container_width=True):
+                    if st.button("2. Link Page", width='stretch'):
                         ok, msg = set_sitelink(st.session_state["parent_qid"], target_page)
                         if ok: st.success("Linked")
                         else: st.error(msg)
