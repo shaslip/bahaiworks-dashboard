@@ -411,12 +411,14 @@ elif st.session_state.pipeline_stage == "split":
                 for i, item in enumerate(toc_list):
                     final_split_data.append({
                         "title": item['title'],
+                        "page_name": item.get('page_name', item['title']), # Capture page_name
                         "start_idx": st.session_state["splitter_indices"][i]
                     })
 
                 # 3. Process splits
                 for i, chapter in enumerate(final_split_data):
-                    ch_title = chapter['title']
+                    ch_title = chapter['title']          # Display Title (for logs)
+                    ch_page_name = chapter['page_name']  # URL Slug (for upload)
                     start_idx = chapter['start_idx']
                     
                     # End index is the start of the next chapter
@@ -437,7 +439,8 @@ elif st.session_state.pipeline_stage == "split":
                     full_content = header_content + raw_text
                     
                     # 6. Upload
-                    full_title = f"{target_base}/{ch_title}"
+                    # FIXED: Use ch_page_name instead of ch_title for the URL
+                    full_title = f"{target_base}/{ch_page_name}"
                     upload_to_bahaiworks(full_title, full_content, "Splitter Upload")
                     
                     progress_bar.progress((i + 1) / len(final_split_data))
