@@ -183,7 +183,6 @@ elif st.session_state.pipeline_stage == "proof":
             edited_df = st.data_editor(
                 df, 
                 num_rows="dynamic", 
-                use_container_width=True, 
                 height=600,
                 column_config=column_config
             )
