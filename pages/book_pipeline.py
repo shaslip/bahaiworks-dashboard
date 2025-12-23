@@ -183,6 +183,7 @@ elif st.session_state.pipeline_stage == "proof":
             edited_df = st.data_editor(
                 df, 
                 num_rows="dynamic", 
+                width='stretch',
                 height=600,
                 column_config=column_config
             )
@@ -213,7 +214,7 @@ elif st.session_state.pipeline_stage == "proof":
                 # Build Wikitext Preview based on Level
                 if level == 1:
                     # Chapter: :1. [[/PageName|DisplayTitle]]
-                    computed_toc_wikitext += f"\n:{prefix}[[\{p_name}|{d_title}]]"
+                    computed_toc_wikitext += f"\n:{prefix}[[/{p_name}|{d_title}]]"
                 else:
                     # Subtopic: :: 1. DisplayTitle (No Link)
                     computed_toc_wikitext += f"\n::{prefix}{d_title}"
