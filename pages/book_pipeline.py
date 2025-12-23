@@ -137,32 +137,26 @@ elif st.session_state.pipeline_stage == "proof":
         raw_data = []
         for item in st.session_state["toc_json_list"]:
             original_title = item.get("title", "")
+            level = item.get("level", 1) # Default to Level 1 (Chapter)
             
-            # --- NEW LOGIC: Prefix Extraction ---
-            # 1. Check if we already have a prefix stored (from a previous edit)
-            # 2. If not, try to detect it from the title (e.g., "1. ", "1/ ", "1 ")
+            # --- Prefix Extraction ---
             prefix = item.get("prefix", "")
             clean_title = original_title
 
             if not prefix:
-                # Regex explanation: 
-                # ^(\d+       -> Starts with digits
-                # (?:[./]\s* -> Followed by . or / and optional space
-                # | \s+))     -> OR followed by just whitespace
                 match = re.match(r"^(\d+(?:[./]\s*|\s+))", original_title)
                 if match:
-                    prefix = match.group(1) # The "1. " part
-                    clean_title = original_title[len(prefix):].strip() # The rest
+                    prefix = match.group(1) 
+                    clean_title = original_title[len(prefix):].strip()
             
-            # Use existing values if we already have them, otherwise use the cleaned title
-            # Note: We prioritize the cleaned title for defaults
             p_name = item.get("page_name", clean_title)
             d_title = item.get("display_title", clean_title)
             
             authors_str = ", ".join(item.get("author", []))
             
             raw_data.append({
-                "Prefix": prefix,  # New Column
+                "Level": level,    # NEW: 1=Chapter, 2=Subtopic
+                "Prefix": prefix,
                 "Page Name (URL)": p_name,
                 "Display Title": d_title,
                 "Page Range": item.get("page_range", ""),
@@ -177,10 +171,10 @@ elif st.session_state.pipeline_stage == "proof":
         # --- COLUMN 1: MASTER DATA ---
         with c_editor:
             st.subheader("1. Edit Chapter Data")
-            st.caption("Prefix handles numbering (e.g. '1.'). Page Name is the clean URL slug.")
+            st.caption("Level 1 = Linked Chapter. Level 2 = Indented Subtopic (Not linked, Not split).")
             
-            # Reorder columns to put Prefix first
             column_config = {
+                "Level": st.column_config.NumberColumn("Lvl", min_value=1, max_value=3, width="small"),
                 "Prefix": st.column_config.TextColumn("Prefix", width="small"),
                 "Page Name (URL)": st.column_config.TextColumn("Page Name (URL)", width="medium"),
                 "Display Title": st.column_config.TextColumn("Display Title", width="medium"),
@@ -203,21 +197,27 @@ elif st.session_state.pipeline_stage == "proof":
                 p_name = row["Page Name (URL)"]
                 d_title = row["Display Title"]
                 prefix = row["Prefix"]
+                level = int(row["Level"]) # Ensure int
                 
-                if prefix is None: prefix = "" # Handle NaNs
+                if prefix is None: prefix = ""
                 
                 updated_toc_list.append({
-                    "title": d_title,             # Used for Wikibase Label & Text Search (Clean)
-                    "page_name": p_name,          # Used for URL / Sitelink (Clean)
-                    "display_title": d_title,     # Clean
-                    "prefix": prefix,             # Store prefix so it persists on rerun
+                    "title": d_title,            
+                    "page_name": p_name,          
+                    "display_title": d_title,     
+                    "prefix": prefix,
+                    "level": level,              # Store Level
                     "page_range": row["Page Range"],
                     "author": auth_list
                 })
                 
-                # Build Wikitext Preview (Prefix outside link)
-                # Format: :1. [[/PageName|DisplayTitle]]
-                computed_toc_wikitext += f"\n:{prefix}[[\{p_name}|{d_title}]]"
+                # Build Wikitext Preview based on Level
+                if level == 1:
+                    # Chapter: :1. [[/PageName|DisplayTitle]]
+                    computed_toc_wikitext += f"\n:{prefix}[[\{p_name}|{d_title}]]"
+                else:
+                    # Subtopic: :: 1. DisplayTitle (No Link)
+                    computed_toc_wikitext += f"\n::{prefix}{d_title}"
             
             st.session_state["toc_json_list"] = updated_toc_list
 
@@ -249,7 +249,7 @@ elif st.session_state.pipeline_stage == "proof":
 }}}}
 
 ===Contents===
-"""      
+"""
             full_wikitext = header_template + computed_toc_wikitext
             st.code(full_wikitext, language="mediawiki")
 
@@ -291,18 +291,20 @@ elif st.session_state.pipeline_stage == "proof":
                 else:
                     try:
                         with st.spinner("Processing..."):
+                            # FILTER: Only process Level 1 items for Wikibase
+                            items_to_import = [x for x in updated_toc_list if x.get('level', 1) == 1]
+                            
                             # This uses 'title' (Display Title) for Wikibase Label
-                            logs, created_map = import_chapters_to_wikibase(parent_qid, updated_toc_list)
+                            logs, created_map = import_chapters_to_wikibase(parent_qid, items_to_import)
                             
                             # Lookup: Display Title -> Page Name
-                            title_to_url = {x['title']: x['page_name'] for x in updated_toc_list}
+                            title_to_url = {x['title']: x['page_name'] for x in items_to_import}
                             
                             link_logs = []
                             for item in created_map:
                                 qid = item['qid']
-                                d_title = item['title'] # Display Title
+                                d_title = item['title'] 
                                 
-                                # Retrieve URL slug
                                 url_slug = title_to_url.get(d_title, d_title)
                                 full_page_url = f"{target_title}/{url_slug}"
                                 
@@ -310,7 +312,7 @@ elif st.session_state.pipeline_stage == "proof":
                                 if success: link_logs.append(f"🔗 {qid}->{url_slug}")
                                 else: link_logs.append(f"❌ Fail {qid}")
                             
-                            st.success(f"✅ Processed {len(created_map)} Chapters")
+                            st.success(f"✅ Processed {len(created_map)} Chapters (Ignored {len(updated_toc_list) - len(items_to_import)} subtopics)")
                             with st.expander("Logs"):
                                 st.write(logs)
                                 st.write(link_logs)
@@ -434,11 +436,19 @@ elif st.session_state.pipeline_stage == "split":
                 # 2. Build the final cut-list based on the verified INDICES
                 final_split_data = []
                 for i, item in enumerate(toc_list):
-                    final_split_data.append({
-                        "title": item['title'],
-                        "page_name": item.get('page_name', item['title']), # Capture page_name
-                        "start_idx": st.session_state["splitter_indices"][i]
-                    })
+                    # FILTER: Only split Level 1 items.
+                    # Subtopics (Level 2) are skipped here, meaning their pages 
+                    # will automatically be included in the duration of the previous Level 1 item.
+                    if item.get('level', 1) == 1:
+                        final_split_data.append({
+                            "title": item['title'],
+                            "page_name": item.get('page_name', item['title']), 
+                            "start_idx": st.session_state["splitter_indices"][i]
+                        })
+
+                if not final_split_data:
+                    st.error("No Level 1 chapters found to split!")
+                    st.stop()
 
                 # 3. Process splits
                 for i, chapter in enumerate(final_split_data):
