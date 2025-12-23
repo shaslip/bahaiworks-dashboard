@@ -294,9 +294,9 @@ elif st.session_state.pipeline_stage == "proof":
 # --- STAGE 3: SPLITTER ---
 elif st.session_state.pipeline_stage == "split":
     st.header("Step 3: Verify & Split")
-    st.info("Review the start of each chapter. If the text looks wrong (e.g. middle of a sentence), correct the Page Number.")
+    st.info("Review the start of each chapter. Use + / - to find the correct start page.")
 
-    # 1. Load & Parse Text
+    # 1. Load & Parse Text (Once)
     if "page_map" not in st.session_state:
         with st.spinner("Indexing text file..."):
             p_map, p_order = parse_text_file(txt_path)
@@ -306,129 +306,139 @@ elif st.session_state.pipeline_stage == "split":
     page_map = st.session_state["page_map"]
     page_order = st.session_state["page_order"]
     
-    # 2. Get TOC Data (from Step 2)
+    # 2. Initialize Page Choices (Once)
     toc_list = st.session_state.get("toc_map", [])
     
-    # 3. The Review Grid
-    # We use a form so we can gather all corrected page numbers at the end
-    with st.form("splitter_form"):
-        
-        final_split_data = [] # Store corrected data here
-        
+    # We use a distinct session state dict to track your edits to page numbers
+    if "splitter_choices" not in st.session_state:
+        choices = {}
         for i, item in enumerate(toc_list):
-            col_title, col_page, col_preview = st.columns([2, 1, 4])
-            
             title = item['title']
-            raw_range = item['page_range']
+            raw_range = item.get('page_range', "")
             
-            # Determine Initial Page Guess
-            start_page_guess = "1"
-            
-            # A. Try to extract start number from range string (e.g. "66-80" -> "66")
+            # Default Guess Logic
+            guess = "1"
             if "-" in str(raw_range):
-                start_page_guess = str(raw_range).split("-")[0].strip()
+                guess = str(raw_range).split("-")[0].strip()
             elif raw_range:
-                start_page_guess = str(raw_range).strip()
+                guess = str(raw_range).strip()
             
-            # B. If it looks like Front Matter (Roman numerals or text), try to auto-find
-            # Heuristic: If guess is NOT a digit, or if the title is "Preface", etc.
-            if not start_page_guess.isdigit() or title.lower() in ["preface", "contents", "introduction", "foreword"]:
-                found_page = find_best_match_for_title(title, page_map, page_order)
-                if found_page:
-                    start_page_guess = found_page
+            # Front Matter Heuristic
+            if not guess.isdigit() or title.lower() in ["preface", "contents", "introduction"]:
+                found = find_best_match_for_title(title, page_map, page_order)
+                if found: guess = found
+            
+            # Fallback: if guess not in text, default to first page in file
+            if guess not in page_order and page_order:
+                guess = page_order[0]
+                
+            choices[i] = guess
+        st.session_state["splitter_choices"] = choices
 
-            with col_title:
-                st.subheader(title)
-                st.caption(f"TOC Range: {raw_range}")
-                
-            with col_page:
-                # User can edit this. We use a key to track it.
-                # Note: We use text_input because pages can be "iv", "ix", etc.
-                selected_page = st.text_input(
-                    "Start Page", 
-                    value=start_page_guess, 
-                    key=f"page_input_{i}"
-                )
-            
-            with col_preview:
-                # Fetch content based on the (potentially edited) page label
-                preview_text = page_map.get(selected_page, "❌ Page tag not found in text file.")
-                
-                # Show first 400 chars
-                st.text_area(
-                    "Text Preview", 
-                    value=preview_text[:400] + "...", 
-                    height=150,
-                    disabled=True, # Read-only
-                    key=f"preview_{i}"
-                )
-            
-            st.divider()
-            
-            # Store the final decision for the processor
-            final_split_data.append({
-                "title": title,
-                "start_page": selected_page
-            })
+    # 3. Helper to handle +/- clicks
+    def adjust_page(index, direction):
+        current_page = st.session_state["splitter_choices"][index]
+        try:
+            # Find where we are in the physical file
+            current_idx = page_order.index(current_page)
+            # Move up or down
+            new_idx = current_idx + direction
+            # Bounds check
+            if 0 <= new_idx < len(page_order):
+                st.session_state["splitter_choices"][index] = page_order[new_idx]
+        except ValueError:
+            # If current page isn't in list (weird), default to start
+            if page_order: st.session_state["splitter_choices"][index] = page_order[0]
 
-        # Actions
-        c_back, c_run = st.columns([1, 4])
-        with c_back:
-            if st.form_submit_button("⬅️ Back"):
-                st.session_state.pipeline_stage = "proof"
-                st.rerun()
-                
-        with c_run:
-            if st.form_submit_button("✂️ Split & Upload to Bahai.works", type="primary"):
-                # Processing Logic
-                target_base = st.session_state["target_page"]
-                
-                progress_bar = st.progress(0)
-                status_box = st.empty()
-                
-                try:
-                    for i, chapter in enumerate(final_split_data):
-                        ch_title = chapter['title']
-                        start_page = chapter['start_page']
-                        
-                        status_box.write(f"Processing: {ch_title} (Starts {start_page})...")
-                        
-                        # 1. Get Start Index
-                        if start_page not in page_order:
-                            st.error(f"Critical Error: Page '{start_page}' not found for '{ch_title}'. Aborting.")
-                            st.stop()
-                            
-                        start_idx = page_order.index(start_page)
-                        
-                        # 2. Get End Index (Start of next chapter)
-                        # If there is a next chapter, its start page is our end limit.
-                        if i + 1 < len(final_split_data):
-                            next_start_page = final_split_data[i+1]['start_page']
-                            if next_start_page in page_order:
-                                end_idx = page_order.index(next_start_page)
-                            else:
-                                # Fallback: if next chapter page is missing, just go to end? 
-                                # Or maybe use the numeric sequence?
-                                # For now, let's assume valid sequential pages.
-                                end_idx = len(page_order) 
-                        else:
-                            # Last chapter goes to end of file
-                            end_idx = len(page_order)
-                            
-                        # 3. Concatenate all pages in this range
-                        chapter_content = ""
-                        for p_idx in range(start_idx, end_idx):
-                            p_label = page_order[p_idx]
-                            chapter_content += page_map[p_label]
-                        
-                        # 4. Upload
-                        full_page_title = f"{target_base}/{ch_title}"
-                        upload_to_bahaiworks(full_page_title, chapter_content, "Bot Splitter Upload")
-                        
-                        progress_bar.progress((i + 1) / len(final_split_data))
-                        
-                    status_box.success("✅ All chapters split and uploaded successfully!")
-                    st.balloons()
+    # 4. Render Grid (No Form = Instant Updates)
+    for i, item in enumerate(toc_list):
+        current_choice = st.session_state["splitter_choices"][i]
+        
+        c_title, c_nav, c_preview = st.columns([2, 1, 4])
+        
+        with c_title:
+            st.subheader(item['title'])
+            st.caption(f"TOC Range: {item.get('page_range', 'N/A')}")
+        
+        with c_nav:
+            st.write(f"**Start Page: {current_choice}**")
+            
+            # Navigation Buttons
+            c_minus, c_plus = st.columns(2)
+            with c_minus:
+                if st.button("◀", key=f"prev_{i}", use_container_width=True):
+                    adjust_page(i, -1)
+                    st.rerun()
+            with c_plus:
+                if st.button("▶", key=f"next_{i}", use_container_width=True):
+                    adjust_page(i, 1)
+                    st.rerun()
+
+        with c_preview:
+            # Fetch content
+            preview_text = page_map.get(current_choice, "❌ Page tag not found.")
+            st.text_area("Preview", value=preview_text[:500] + "...", height=120, key=f"pview_{i}", disabled=True)
+            
+        st.divider()
+
+    # 5. Actions
+    c_back, c_run = st.columns([1, 4])
+    with c_back:
+        if st.button("⬅️ Back"):
+            st.session_state.pipeline_stage = "proof"
+            st.rerun()
+            
+    with c_run:
+        if st.button("✂️ Split & Upload to Bahai.works", type="primary"):
+            target_base = st.session_state["target_page"]
+            progress_bar = st.progress(0)
+            status_box = st.empty()
+            
+            try:
+                # Build the final list from the session state choices
+                final_split_data = []
+                for i, item in enumerate(toc_list):
+                    final_split_data.append({
+                        "title": item['title'],
+                        "start_page": st.session_state["splitter_choices"][i]
+                    })
+
+                for i, chapter in enumerate(final_split_data):
+                    ch_title = chapter['title']
+                    start_page = chapter['start_page']
                     
-                except Exception as e:
-                    st.error(f"Splitter Failed: {e}")
+                    status_box.write(f"Processing: {ch_title} (Starts {start_page})...")
+                    
+                    # Logic to slice text
+                    if start_page not in page_order:
+                        st.error(f"Error: Page {start_page} not found.")
+                        st.stop()
+                        
+                    start_idx = page_order.index(start_page)
+                    
+                    # End index is the start of the next chapter
+                    if i + 1 < len(final_split_data):
+                        next_start = final_split_data[i+1]['start_page']
+                        if next_start in page_order:
+                            end_idx = page_order.index(next_start)
+                        else:
+                            end_idx = len(page_order)
+                    else:
+                        end_idx = len(page_order)
+                        
+                    # Concatenate
+                    content = ""
+                    for p_idx in range(start_idx, end_idx):
+                        content += page_map[page_order[p_idx]]
+                    
+                    # Upload
+                    full_title = f"{target_base}/{ch_title}"
+                    upload_to_bahaiworks(full_title, content, "Splitter Upload")
+                    
+                    progress_bar.progress((i + 1) / len(final_split_data))
+                    
+                status_box.success("✅ Done! All chapters uploaded.")
+                st.balloons()
+                
+            except Exception as e:
+                st.error(f"Failed: {e}")
