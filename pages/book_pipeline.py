@@ -387,11 +387,17 @@ elif st.session_state.pipeline_stage == "split":
     with c_run:
         if st.button("✂️ Split & Upload to Bahai.works", type="primary"):
             target_base = st.session_state["target_page"]
+            
+            # 1. Reconstruct the Access Header
+            # We must prepend this to every page so we don't lose protection
+            access_group = target_base.replace(" ", "")
+            header_content = f"<accesscontrol>Access:{access_group}</accesscontrol>{{{{Publicationinfo}}}}\n"
+            
             progress_bar = st.progress(0)
             status_box = st.empty()
             
             try:
-                # 1. Build the final cut-list based on the verified INDICES
+                # 2. Build the final cut-list based on the verified INDICES
                 final_split_data = []
                 for i, item in enumerate(toc_list):
                     final_split_data.append({
@@ -399,7 +405,7 @@ elif st.session_state.pipeline_stage == "split":
                         "start_idx": st.session_state["splitter_indices"][i]
                     })
 
-                # 2. Process splits
+                # 3. Process splits
                 for i, chapter in enumerate(final_split_data):
                     ch_title = chapter['title']
                     start_idx = chapter['start_idx']
@@ -408,24 +414,26 @@ elif st.session_state.pipeline_stage == "split":
                     if i + 1 < len(final_split_data):
                         end_idx = final_split_data[i+1]['start_idx']
                     else:
-                        # Last chapter goes to the very end of the file
                         end_idx = len(page_order)
                     
                     status_box.write(f"Processing {ch_title}...")
                     
-                    # 3. Concatenate all pages in this range
-                    content = ""
+                    # 4. Concatenate text
+                    raw_text = ""
                     for p_idx in range(start_idx, end_idx):
                         p_label = page_order[p_idx]
-                        content += page_map[p_label]
+                        raw_text += page_map[p_label]
                     
-                    # 4. Upload
+                    # 5. Combine Header + Text
+                    full_content = header_content + raw_text
+                    
+                    # 6. Upload
                     full_title = f"{target_base}/{ch_title}"
-                    upload_to_bahaiworks(full_title, content, "Splitter Upload")
+                    upload_to_bahaiworks(full_title, full_content, "Splitter Upload")
                     
                     progress_bar.progress((i + 1) / len(final_split_data))
                     
-                status_box.success("✅ All chapters split and uploaded!")
+                status_box.success("✅ All chapters split and uploaded (headers preserved)!")
                 st.balloons()
                 
             except Exception as e:
