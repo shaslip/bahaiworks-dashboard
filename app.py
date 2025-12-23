@@ -490,7 +490,15 @@ with tab4:
 
 # 4. Render Sidebar (Caller)
 with st.sidebar:
+    # Existing code for document details...
     if st.session_state.selected_doc_id is not None:
         render_details(st.session_state.selected_doc_id)
     else:
         st.info("Select a document from the table to view details.")
+
+    # --- ADD THIS SECTION BELOW ---
+    st.markdown("---")
+    st.subheader("🛠️ Utilities")
+    
+    if st.button("⚡ Open Misc Tasks", width="stretch"):
+        st.switch_page("pages/misc_tasks.py")
