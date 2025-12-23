@@ -275,7 +275,7 @@ elif st.session_state.pipeline_stage == "proof":
             st.markdown("---")
             
             # FINAL: Move to Splitter
-            if st.button("🏁 Proceed to Splitter", use_container_width=True):
+            if st.button("🏁 Proceed to Splitter", width='stretch'):
                 st.session_state["toc_map"] = updated_toc_list
                 st.session_state.pipeline_stage = "split"
                 st.rerun()
