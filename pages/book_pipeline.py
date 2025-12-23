@@ -151,7 +151,7 @@ elif st.session_state.pipeline_stage == "proof":
         with c_editor:
             st.subheader("1. Edit Chapter Data (Master)")
             st.caption("Fix titles and ranges here. This drives everything else.")
-            edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True, height=600)
+            edited_df = st.data_editor(df, num_rows="dynamic", width='stretch', height=600)
             
             # Reconstruct JSON from Editor
             updated_toc_list = []
