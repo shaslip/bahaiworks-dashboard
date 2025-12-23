@@ -411,13 +411,6 @@ elif st.session_state.pipeline_stage == "split":
             
         st.divider()
 
-        with c_preview:
-            # Grab content for preview
-            preview_text = page_map.get(current_label, "Error: Content missing")
-            st.text_area("Preview", value=preview_text[:400]+"...", height=120, key=f"pview_{i}", disabled=True)
-            
-        st.divider()
-
     # 5. Actions
     c_back, c_run = st.columns([1, 4])
     with c_back:
