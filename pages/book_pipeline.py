@@ -1,9 +1,10 @@
 import streamlit as st
 import os
 import json
+import pandas as pd
 from sqlalchemy.orm import Session
 from src.database import engine, Document
-from src.gemini_processor import extract_metadata_from_pdf, extract_toc_from_pdf
+from src.gemini_processor import extract_metadata_from_pdf, extract_toc_from_pdf, json_to_wikitext
 from src.wikibase_importer import import_book_to_wikibase
 from src.mediawiki_uploader import upload_to_bahaiworks
 from src.chapter_importer import import_chapters_to_wikibase
@@ -31,7 +32,6 @@ with Session(engine) as session:
     filename = record.filename
     file_path = record.file_path
     
-    # Default Target Guess
     if "target_page" not in st.session_state:
         st.session_state["target_page"] = os.path.splitext(filename)[0].replace("_", " ")
     
@@ -41,15 +41,13 @@ with Session(engine) as session:
 if "pipeline_stage" not in st.session_state:
     st.session_state.pipeline_stage = "setup" 
 
-# --- UI Header & Global Settings ---
+# --- UI Header ---
 c1, c2 = st.columns([3, 1])
 with c1:
     st.title(f"📖 {filename}")
-    # GLOBAL TARGET INPUT
     target_page = st.text_input("🎯 Bahai.works Page Title", 
                                 value=st.session_state["target_page"],
                                 key="global_target_input")
-    # Sync back to session state immediately
     st.session_state["target_page"] = target_page
 
 with c2:
@@ -77,37 +75,107 @@ if st.session_state.pipeline_stage == "setup":
 
     if st.button("🚀 Send to Gemini", type="primary"):
         with st.spinner("🤖 Gemini is extracting..."):
-            
-            # Run Metadata
             if cr_pages:
                 res = extract_metadata_from_pdf(file_path, cr_pages)
-                if "error" in res:
-                    st.error(f"Meta Error: {res['error']}")
-                else:
+                if "error" not in res:
                     st.session_state["meta_result"] = res
-                    # Store clean strings for editors
                     st.session_state["talk_text"] = res.get("copyright_text", "")
                     st.session_state["meta_json_str"] = json.dumps(res.get("data", {}), indent=4)
 
-            # Run TOC
             if toc_pages:
                 res = extract_toc_from_pdf(file_path, toc_pages)
-                if res.get("error"):
-                    st.error(f"TOC Error: {res['error']}")
-                else:
-                    st.session_state["toc_result"] = res
-                    st.session_state["toc_json_str"] = json.dumps(res.get("toc_json", []), indent=4)
-                    st.session_state["toc_wikitext_part"] = res.get("toc_wikitext", "")
+                if "error" not in res:
+                    st.session_state["toc_json_list"] = res.get("toc_json", [])
             
-            # Advance
             st.session_state.pipeline_stage = "proof"
             st.rerun()
 
 # --- STAGE 2: PROOFREAD & IMPORT ---
 elif st.session_state.pipeline_stage == "proof":
     
-    # Template Construction
-    header_template = f"""{{{{restricted use|where=|until=}}}}
+    t1, t2 = st.tabs(["1. Metadata (Book Item)", "2. Content (Chapters & Pages)"])
+    
+    # --- TAB 1: METADATA ---
+    with t1:
+        c_talk, c_json = st.columns(2)
+        with c_talk:
+            st.subheader("Talk Page")
+            talk_text = st.text_area("Clean OCR", value=st.session_state.get("talk_text", ""), height=500, key="talk_edit")
+            if st.button(f"☁️ Import to Talk:{target_page}", type="primary", use_container_width=True):
+                try:
+                    upload_to_bahaiworks(f"Talk:{target_page}", talk_text, "Init OCR")
+                    st.success("✅ Uploaded")
+                except Exception as e: st.error(str(e))
+
+        with c_json:
+            st.subheader("Wikibase Item")
+            json_text = st.text_area("JSON", value=st.session_state.get("meta_json_str", "{}"), height=500, key="meta_edit")
+            
+            c_btn1, c_btn2 = st.columns(2)
+            with c_btn1:
+                if st.button("1. Create Item", type="primary", use_container_width=True):
+                    try:
+                        qid = import_book_to_wikibase(json.loads(json_text))
+                        st.session_state["parent_qid"] = qid
+                        st.success(f"Created: {qid}")
+                    except Exception as e: st.error(str(e))
+            with c_btn2:
+                if "parent_qid" in st.session_state:
+                    if st.button("2. Link Page", use_container_width=True):
+                        ok, msg = set_sitelink(st.session_state["parent_qid"], target_page)
+                        if ok: st.success("Linked")
+                        else: st.error(msg)
+
+    # --- TAB 2: CONTENT (The New Workflow) ---
+    with t2:
+        # Prepare Data for Editor
+        if "toc_json_list" not in st.session_state:
+            st.session_state["toc_json_list"] = []
+        
+        # Flatten authors list to string for editing
+        raw_data = []
+        for item in st.session_state["toc_json_list"]:
+            authors_str = ", ".join(item.get("author", []))
+            raw_data.append({
+                "Title": item.get("title", ""),
+                "Page Range": item.get("page_range", ""),
+                "Authors": authors_str
+            })
+        
+        df = pd.DataFrame(raw_data)
+
+        # Layout: Data Editor (Left) | Actions (Right)
+        c_editor, c_preview, c_actions = st.columns([2, 2, 1])
+        
+        # --- COLUMN 1: MASTER DATA ---
+        with c_editor:
+            st.subheader("1. Edit Chapter Data (Master)")
+            st.caption("Fix titles and ranges here. This drives everything else.")
+            edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True, height=600)
+            
+            # Reconstruct JSON from Editor
+            updated_toc_list = []
+            for index, row in edited_df.iterrows():
+                # Split authors back into list
+                auth_list = [a.strip() for a in row["Authors"].split(",") if a.strip()]
+                updated_toc_list.append({
+                    "title": row["Title"],
+                    "page_range": row["Page Range"],
+                    "author": auth_list
+                })
+            
+            # Sync back to session state so it persists
+            st.session_state["toc_json_list"] = updated_toc_list
+            
+            # Auto-Compute Wikitext from the Master Data
+            computed_toc_wikitext = json_to_wikitext(updated_toc_list)
+
+        # --- COLUMN 2: PREVIEW ---
+        with c_preview:
+            st.subheader("2. Page Preview (Computed)")
+            st.caption("Read-only view of the TOC. Edit the header if needed.")
+            
+            header_template = f"""{{{{restricted use|where=|until=}}}}
 {{{{header
  | title      = 
  | author     = 
@@ -132,149 +200,78 @@ elif st.session_state.pipeline_stage == "proof":
 }}}}
 
 ===Contents===
-"""
-    default_full_page = header_template + st.session_state.get("toc_wikitext_part", "")
+"""     
+            # We combine the static header with the dynamic TOC
+            full_wikitext = header_template + computed_toc_wikitext
+            st.code(full_wikitext, language="mediawiki")
 
-    t1, t2 = st.tabs(["1. Metadata & Copyright", "2. Main Page (TOC)"])
-    
-    # --- TAB 1: METADATA ---
-    with t1:
-        c_talk, c_json = st.columns(2)
-        
-        # COLUMN 1: TALK PAGE
-        with c_talk:
-            st.subheader("Talk Page")
-            talk_text = st.text_area("Clean OCR", 
-                                     value=st.session_state.get("talk_text", ""), 
-                                     height=500, key="proof_talk_editor")
+        # --- COLUMN 3: ACTIONS ---
+        with c_actions:
+            st.subheader("3. Execute")
             
-            talk_title = f"Talk:{st.session_state['target_page']}"
-            if st.button(f"☁️ Import to {talk_title}", type="primary", use_container_width=True):
-                with st.spinner("Uploading..."):
-                    try:
-                        upload_to_bahaiworks(talk_title, talk_text, summary="Initial OCR upload")
-                        st.success(f"✅ Uploaded to {talk_title}")
-                    except Exception as e:
-                        st.error(f"Upload Error: {e}")
-
-        # COLUMN 2: WIKIBASE ITEM
-        with c_json:
-            st.subheader("Wikibase Data")
-            json_text = st.text_area("Metadata", 
-                                     value=st.session_state.get("meta_json_str", "{}"), 
-                                     height=500, key="proof_meta_editor")
+            parent_qid = st.text_input("Parent QID", value=st.session_state.get("parent_qid", ""))
             
-            # A. Create Item
-            if st.button("1. ☁️ Create Book Item", type="primary", use_container_width=True):
-                try:
-                    data = json.loads(json_text)
-                    with st.spinner("Creating Item..."):
-                        new_qid = import_book_to_wikibase(data)
-                        st.session_state["parent_qid"] = new_qid 
-                        st.success(f"✅ Created Item: {new_qid}")
-                except Exception as e:
-                    st.error(f"Error: {e}")
-
-            # B. Link Item (Only appears if we have a QID)
-            if "parent_qid" in st.session_state:
-                target_title = st.session_state['target_page']
-                if st.button(f"2. 🔗 Link {st.session_state['parent_qid']} to '{target_title}'", use_container_width=True):
-                    success, msg = set_sitelink(st.session_state["parent_qid"], target_title)
-                    if success: st.success(msg)
-                    else: st.error(msg)
-
-    # --- TAB 2: CONTENT & CHAPTERS ---
-    with t2:
-        c_toc_json, c_toc_wiki = st.columns(2)
-        
-        # COLUMN 1: CHAPTER ITEMS
-        with c_toc_json:
-            st.subheader("Chapter Data")
-            toc_json_text = st.text_area("Chapters", 
-                                         value=st.session_state.get("toc_json_str", "[]"), 
-                                         height=400, key="proof_toc_json_editor")
+            st.markdown("---")
+            st.write("**A. Bahaidata**")
             
-            parent_qid = st.text_input("Parent Book QID (P361)", 
-                                       value=st.session_state.get("parent_qid", ""),
-                                       help="If the book item exists, enter QID here.")
-            
-            # A. Import Chapters
-            if st.button("1. ☁️ Import Chapters to Bahaidata", type="primary", use_container_width=True):
+            # ACTION 1: Import Chapters (Optional)
+            if st.button("Import Chapter Items", help="Creates Q-items for each chapter. Optional."):
                 if not parent_qid:
-                    st.error("Parent QID required.")
+                    st.error("Need Parent QID")
                 else:
                     try:
-                        chapters_data = json.loads(toc_json_text)
-                        with st.spinner(f"Processing {len(chapters_data)} chapters..."):
-                            # Returns logs AND the map
-                            logs, created_map = import_chapters_to_wikibase(parent_qid, chapters_data)
-                            st.session_state["chapter_map"] = created_map
-                            st.success(f"✅ Created {len(created_map)} Items")
-                            with st.expander("Log"):
-                                st.write(logs)
-                    except Exception as e:
-                        st.error(f"Failed: {e}")
+                        with st.spinner("Creating Items..."):
+                            logs, created_map = import_chapters_to_wikibase(parent_qid, updated_toc_list)
+                            st.session_state["chapter_qid_map"] = created_map
+                            st.success(f"Created {len(created_map)} Items")
+                    except Exception as e: st.error(str(e))
+            
+            st.markdown("---")
+            st.write("**B. Bahai.works**")
 
-            # B. Create Pages & Sitelinks (Only appears if we have the map)
-            if "chapter_map" in st.session_state:
-                st.info("Next: Create pages on Bahai.works and link them.")
-                
-                # ACCESS CONTROL TAG logic
-                access_group = st.session_state['target_page'].replace(" ", "")
-                placeholder_content = f"<accesscontrol>Access:{access_group}</accesscontrol>{{{{Publicationinfo}}}}"
-                
-                if st.button("2. 📄 Create Pages & 🔗 Connect Links", type="primary", use_container_width=True):
-                    chapter_map = st.session_state["chapter_map"]
+            # ACTION 2: Create Pages
+            if st.button("Create Pages & Links", type="primary", help="Creates subpages (Book/Chapter). Links them if QIDs exist."):
+                try:
                     base_title = st.session_state['target_page']
+                    access_group = base_title.replace(" ", "")
+                    content = f"<accesscontrol>Access:{access_group}</accesscontrol>{{{{Publicationinfo}}}}"
                     
-                    progress_bar = st.progress(0)
-                    log_container = st.container()
+                    # Do we have QIDs?
+                    qid_map = st.session_state.get("chapter_qid_map", [])
+                    # Convert list of dicts to a lookup dict for easy access: {'Title': 'Q123'}
+                    qid_lookup = {item['title']: item['qid'] for item in qid_map}
                     
-                    for i, item in enumerate(chapter_map):
-                        chapter_title = item['title']
-                        chapter_qid = item['qid']
-                        
-                        full_page_title = f"{base_title}/{chapter_title}"
-                        
-                        try:
-                            # 1. Create Page
-                            upload_to_bahaiworks(full_page_title, placeholder_content, summary="Chapter placeholder")
-                            
-                            # 2. Create Sitelink
-                            set_sitelink(chapter_qid, full_page_title)
-                            
-                            log_container.write(f"✅ {full_page_title} <-> {chapter_qid}")
-                        except Exception as e:
-                            log_container.error(f"❌ Error on {chapter_title}: {e}")
-                        
-                        progress_bar.progress((i + 1) / len(chapter_map))
+                    progress = st.progress(0)
                     
-                    st.success("Batch Operation Complete!")
+                    for i, item in enumerate(updated_toc_list):
+                        title = item['title']
+                        full_title = f"{base_title}/{title}"
+                        
+                        # 1. Create Page
+                        upload_to_bahaiworks(full_title, content, "Chapter placeholder")
+                        
+                        # 2. Link (if QID exists)
+                        if title in qid_lookup:
+                            set_sitelink(qid_lookup[title], full_title)
+                        
+                        progress.progress((i+1)/len(updated_toc_list))
+                    
+                    st.success("Pages Created!")
+                except Exception as e: st.error(str(e))
 
-        # COLUMN 2: MAIN PAGE SOURCE
-        with c_toc_wiki:
-            st.subheader("Main Page Source")
-            full_page_text = st.text_area("Wikitext", 
-                                          value=default_full_page, 
-                                          height=470, key="proof_full_page_editor")
-            
-            target_title = st.session_state['target_page']
-            
-            if st.button(f"☁️ Import to {target_title}", type="primary", use_container_width=True):
-                with st.spinner("Uploading..."):
-                    try:
-                        upload_to_bahaiworks(target_title, full_page_text, summary="Initial setup")
-                        st.success(f"✅ Uploaded to {target_title}")
-                        
-                        # Set stage for Splitting
-                        st.session_state["toc_map"] = json.loads(toc_json_text)
-                        st.session_state["final_toc_wikitext"] = full_page_text
-                        st.session_state.pipeline_stage = "split" 
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Upload Error: {e}")
+            # ACTION 3: Upload Main Page
+            if st.button("Upload Main Page", type="primary"):
+                try:
+                    upload_to_bahaiworks(st.session_state['target_page'], full_wikitext, "Setup")
+                    st.success("Main Page Live!")
+                    
+                    # Prepare for Splitter
+                    st.session_state["toc_map"] = updated_toc_list
+                    st.session_state.pipeline_stage = "split"
+                    st.rerun()
+                except Exception as e: st.error(str(e))
 
     st.divider()
-    if st.button("⬅️ Back to Range Selection"):
+    if st.button("⬅️ Back"):
         st.session_state.pipeline_stage = "setup"
         st.rerun()
