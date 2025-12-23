@@ -321,6 +321,9 @@ elif st.session_state.pipeline_stage == "proof":
             st.markdown("---")
             if st.button("🏁 Proceed to Splitter", width='stretch'):
                 st.session_state["toc_map"] = updated_toc_list
+                if "splitter_indices" in st.session_state:
+                    del st.session_state["splitter_indices"]
+                    
                 st.session_state.pipeline_stage = "split"
                 st.rerun()
 
@@ -340,7 +343,9 @@ elif st.session_state.pipeline_stage == "split":
     page_order = st.session_state["page_order"]
     
     # 2. Initialize Indices (Once)
-    toc_list = st.session_state.get("toc_map", [])
+    # FIX: Filter here! Only keep Level 1 items for the entire Splitter stage.
+    full_toc = st.session_state.get("toc_map", [])
+    toc_list = [item for item in full_toc if item.get('level', 1) == 1]
     
     if "splitter_indices" not in st.session_state:
         indices = {}
