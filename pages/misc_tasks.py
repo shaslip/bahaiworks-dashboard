@@ -19,13 +19,46 @@ tab_author, tab_maintenance = st.tabs(["👤 Author Manager", "🔧 System Maint
 # --- HELPER FUNCTIONS ---
 
 def get_lastname_firstname(full_name):
-    """Converts 'Aaron Emmel' to 'Emmel, Aaron'"""
-    parts = full_name.strip().split()
-    if len(parts) == 1:
-        return parts[0]
+    """
+    Parses names into 'Lastname, Firstname' format.
+    Handles suffixes like Jr., Sr., III.
+    
+    Examples:
+    - Robert Gulick, Jr.        -> Gulick, Jr., Robert
+    - Burton W. F. Trafton, Jr. -> Trafton, Jr., Burton W. F.
+    - Haji Mirza Haydar-‘Ali    -> Haydar-‘Ali, Haji Mirza
+    """
+    # 1. Basic cleanup
+    name = full_name.strip()
+    parts = name.split()
+    
+    if len(parts) <= 1:
+        return name
+
+    # 2. Define suffixes to look for (case-insensitive matching)
+    # We strip dots/commas for comparison, so 'Jr.' matches 'jr'
+    suffixes = ['jr', 'sr', 'ii', 'iii', 'iv', 'v', 'vi']
+    
+    last_word_cleaned = parts[-1].lower().replace('.', '').replace(',', '')
+    
+    # 3. Check if the last word is a suffix
+    if last_word_cleaned in suffixes:
+        if len(parts) >= 3:
+            # Case: "Robert Gulick, Jr."
+            suffix = parts[-1]              # "Jr."
+            lastname = parts[-2].rstrip(',') # "Gulick" (remove comma if attached)
+            firstname = " ".join(parts[:-2]) # "Robert"
+            
+            return f"{lastname}, {suffix}, {firstname}"
+        else:
+            # Fallback for short names like "Smith Jr." -> "Smith, Jr."
+            return f"{parts[-2]}, {parts[-1]}"
+            
     else:
+        # 4. Standard Case (Western or hyphenated Eastern)
+        # Case: "Haji Mirza Haydar-‘Ali"
         lastname = parts[-1]
-        firstname = ' '.join(parts[:-1])
+        firstname = " ".join(parts[:-1])
         return f"{lastname}, {firstname}"
 
 def format_author_page(name, book_title=None, book_year=None, use_dynamic=True):
