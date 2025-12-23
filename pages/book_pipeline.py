@@ -160,8 +160,7 @@ elif st.session_state.pipeline_stage == "proof":
             st.subheader("1. Edit Chapter Data")
             st.caption("Page Name = URL slug. Display Title = Link Text & Header.")
             
-            # FIXED: Removed width='stretch', used use_container_width=True
-            edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True, height=600)
+            edited_df = st.data_editor(df, num_rows="dynamic", height=600)
             
             # Reconstruct JSON
             updated_toc_list = []
@@ -371,13 +370,23 @@ elif st.session_state.pipeline_stage == "split":
             
             c_minus, c_plus = st.columns(2)
             with c_minus:
-                if st.button("◀", key=f"prev_{i}", width='stretch'): # using width='stretch' as requested
+                if st.button("◀", key=f"prev_{i}", width='stretch'): 
                     adjust_index(i, -1)
                     st.rerun()
             with c_plus:
                 if st.button("▶", key=f"next_{i}", width='stretch'):
                     adjust_index(i, 1)
                     st.rerun()
+
+        with c_preview:
+            # Grab content for preview
+            preview_text = page_map.get(current_label, "Error: Content missing")
+            
+            # FIXED: Added current_idx to the key. 
+            # This forces Streamlit to treat it as a new widget and update the value when the page changes.
+            st.text_area("Preview", value=preview_text[:400]+"...", height=120, key=f"pview_{i}_{current_idx}", disabled=True)
+            
+        st.divider()
 
         with c_preview:
             # Grab content for preview
