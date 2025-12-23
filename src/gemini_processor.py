@@ -25,18 +25,25 @@ def parse_range_string(range_str):
 def json_to_wikitext(toc_list):
     """
     Converts the structured JSON list into MediaWiki format.
-    Format: : [[/Title|Title]]
+    Format: 
+    - Level 1 (Chapters): : [[/Title|Title]]
+    - Level 2+ (Subtopics): :: Title (No link)
     """
     wikitext = ""
     for item in toc_list:
         title = item.get("title", "").strip()
+        level = item.get("level", 1) # Default to 1 if missing
         
         # Skip empty entries
         if not title: continue
             
-        # Format: : [[/Title|Title]]
-        # We ignore page numbers for the visual list as requested
-        line = f": [[/{title}|{title}]]"
+        if level == 1:
+            # Main Chapter: Link it
+            line = f": [[/{title}|{title}]]"
+        else:
+            # Subtopic: Indent using :: and do not link
+            line = f":: {title}"
+            
         wikitext += line + "\n"
     return wikitext
 
@@ -94,6 +101,11 @@ def extract_toc_from_pdf(pdf_path, page_range_str):
     - "title": The chapter title string.
     - "author": A list of strings (["Name"]) or [] if none.
     - "page_range": String (e.g., "5-10" or just "5"). Infer the end page if possible.
+    - "level": Integer. 1 for main chapters, 2 for indented sub-topics/sections.
+    
+    IMPORTANT: Look closely at visual indentation. 
+    - Bold, larger, or left-aligned text is usually Level 1.
+    - Indented text or smaller text under a main header is Level 2.
     
     Output strictly valid JSON.
     """
