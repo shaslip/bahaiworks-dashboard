@@ -242,9 +242,19 @@ elif st.session_state.pipeline_stage == "proof":
             st.markdown("---")
             st.write("**B. Bahaidata**")
             
-            # ACTION 3: Import & Link (Scholarly Pipeline)
-            # Only show if authors exist, or let user decide
-            if st.button("3. Import & Link Chapter Items", type="primary", width='stretch', help="Creates items and links them to the pages created in Step 2."):
+            # ACTION 3a: Simple Link (Main Book Only)
+            if st.button("3a. Link Book Item Only", width='stretch', help="Links the Parent QID to the Main Bahai.works page. Use this if you are NOT creating chapter items."):
+                if not parent_qid:
+                    st.error("Need Parent QID")
+                else:
+                    try:
+                        success, msg = set_sitelink(parent_qid, target_title)
+                        if success: st.success(f"✅ Linked {parent_qid} -> {target_title}")
+                        else: st.error(msg)
+                    except Exception as e: st.error(str(e))
+
+            # ACTION 3b: Import & Link (Scholarly Pipeline)
+            if st.button("3b. Import & Link Chapter Items", type="primary", width='stretch', help="Creates items for every chapter and links them to the subpages."):
                 if not parent_qid:
                     st.error("Need Parent QID")
                 else:
