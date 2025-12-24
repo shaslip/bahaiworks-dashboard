@@ -101,24 +101,25 @@ elif st.session_state.pipeline_stage == "proof":
     with t1:
         c_talk, c_json = st.columns(2)
         with c_talk:
-        st.subheader("Talk Page")
-        talk_text = st.text_area("Clean OCR", value=st.session_state.get("talk_text", ""), height=500, key="talk_edit")
-        
-        if st.button(f"☁️ Import to Talk:{target_page}", type="primary", width='stretch'):
-            try:
-                # UPDATED: Added check_exists=True
-                upload_to_bahaiworks(
-                    f"Talk:{target_page}", 
-                    talk_text, 
-                    "Init OCR", 
-                    check_exists=True
-                )
-                st.success("✅ Uploaded")
+            # FIXED INDENTATION STARTING HERE
+            st.subheader("Talk Page")
+            talk_text = st.text_area("Clean OCR", value=st.session_state.get("talk_text", ""), height=500, key="talk_edit")
             
-            except FileExistsError:
-                st.warning(f"⚠️ Talk:{target_page} already exists. OCR text was NOT uploaded.")
-            except Exception as e: 
-                st.error(str(e))
+            if st.button(f"☁️ Import to Talk:{target_page}", type="primary", width='stretch'):
+                try:
+                    # UPDATED: Added check_exists=True
+                    upload_to_bahaiworks(
+                        f"Talk:{target_page}", 
+                        talk_text, 
+                        "Init OCR", 
+                        check_exists=True
+                    )
+                    st.success("✅ Uploaded")
+                
+                except FileExistsError:
+                    st.warning(f"⚠️ Talk:{target_page} already exists. OCR text was NOT uploaded.")
+                except Exception as e: 
+                    st.error(str(e))
 
         with c_json:
             st.subheader("Wikibase Item")
