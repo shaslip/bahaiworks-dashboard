@@ -338,47 +338,65 @@ def render_prep_tab(docs):
                 
                 # Action
                 if c4.button("Process", key=f"proc_{doc.id}"):
+                    current_path = doc.file_path
+                    current_name = doc.filename
+                    
+                    # 1. Handle Split
                     if is_dbl:
                         with st.spinner("Splitting..."):
-                            s_start, s_end = analyze_split_boundaries(doc.file_path)
+                            s_start, s_end = analyze_split_boundaries(current_path)
                             split_name = f"split_{doc.filename}"
-                            split_path = os.path.join(os.path.dirname(doc.file_path), split_name)
+                            split_path = os.path.join(os.path.dirname(current_path), split_name)
                             
-                            if split_pdf_doubles(doc.file_path, split_path, s_start, s_end):
-                                with Session(engine) as session:
-                                    d = session.get(Document, doc.id)
-                                    d.file_path = split_path
-                                    d.filename = split_name
-                                    session.commit()
+                            if split_pdf_doubles(current_path, split_path, s_start, s_end):
+                                current_path = split_path
+                                current_name = split_name
                                 st.success("Split Complete!")
                             else:
                                 st.error("Split Failed")
-                                
-                    st.toast(f"Configuration Saved: Offset {new_offset}")
+                                return # Stop if split fails
+
+                    # 2. Persist State & Offset
+                    with Session(engine) as session:
+                        d = session.get(Document, doc.id)
+                        d.file_path = current_path
+                        d.filename = current_name
+                        d.status = "READY_FOR_OCR"  # <--- NEW STATUS
+                        
+                        # Save Offset in justification field so we can read it later
+                        # Remove old offset tags if any to prevent duplicates
+                        clean_just = d.ai_justification or ""
+                        clean_just = re.sub(r"\[OFFSET:\d+\]", "", clean_just).strip()
+                        d.ai_justification = f"{clean_just}\n[OFFSET:{new_offset}]"
+                        
+                        session.commit()
+                    
+                    st.toast(f"Saved: {doc.filename} -> Ready for OCR")
+                    time.sleep(0.5)
+                    st.rerun()
 
 # --- TAB 3: EXECUTION ---
-def render_exec_tab(docs):
+def render_exec_tab():
     st.header("Step 3: Execution")
-    st.info("Run OCR on prepared files.")
-
-    # In a real scenario, we'd filter this list to only those "Approved" in Tab 2
+    
+    # 1. Fetch only Ready docs
+    with Session(engine) as session:
+        ready_docs = session.scalars(
+            select(Document).where(Document.status == "READY_FOR_OCR")
+        ).all()
+    
+    st.info(f"Queued for OCR: {len(ready_docs)} documents")
     
     if st.button("🚀 Start Batch OCR"):
-        st.write("Processing...")
-        ocr_bar = st.progress(0)
-        
-        for i, doc in enumerate(docs):
-            # Here we would need to retrieve the 'offset' we decided on in Tab 2.
-            # Ideally, Tab 2 saves that offset to the Document model (e.g. doc.page_offset)
-            # For this skeleton, we'll re-calculate or assume 1 if missing.
+        # ... loop through ready_docs ...
+            # Parse Offset
+            offset_match = re.search(r"\[OFFSET:(\d+)\]", doc.ai_justification or "")
+            start_index = int(offset_match.group(1)) if offset_match else 1
             
-            ocr = OcrEngine(doc.file_path)
-            
-            # Dummy config - in reality, fetch from DB
             config = OcrConfig(
                 has_cover_image=True,
-                first_numbered_page_index=1, # Should come from Tab 2
-                language='eng' 
+                first_numbered_page_index=start_index, # <--- USED HERE
+                language=doc.language or 'eng'
             )
             
             try:
