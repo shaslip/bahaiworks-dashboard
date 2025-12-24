@@ -340,10 +340,11 @@ def render_prep_tab(docs):
                 if c4.button("Process", key=f"proc_{doc.id}"):
                     current_path = doc.file_path
                     current_name = doc.filename
-                    
+                    final_offset = new_offset # Default to user input
+
                     # 1. Handle Split
                     if is_dbl:
-                        with st.spinner("Splitting..."):
+                        with st.spinner("Splitting & Re-calibrating..."):
                             s_start, s_end = analyze_split_boundaries(current_path)
                             split_name = f"split_{doc.filename}"
                             split_path = os.path.join(os.path.dirname(current_path), split_name)
@@ -351,28 +352,35 @@ def render_prep_tab(docs):
                             if split_pdf_doubles(current_path, split_path, s_start, s_end):
                                 current_path = split_path
                                 current_name = split_name
+                                
+                                # --- FIX: Re-run Offset Detection on the NEW file ---
+                                with fitz.open(current_path) as pdf:
+                                    recalc_start, _ = calculate_start_offset(current_path, len(pdf))
+                                    final_offset = recalc_start if recalc_start else 0
+                                    st.toast(f"🔄 Re-calculated Offset: {final_offset}")
+                                # ----------------------------------------------------
+                                
                                 st.success("Split Complete!")
                             else:
                                 st.error("Split Failed")
-                                return # Stop if split fails
+                                return 
 
                     # 2. Persist State & Offset
                     with Session(engine) as session:
                         d = session.get(Document, doc.id)
                         d.file_path = current_path
                         d.filename = current_name
-                        d.status = "READY_FOR_OCR"  # <--- NEW STATUS
+                        d.status = "READY_FOR_OCR"
                         
-                        # Save Offset in justification field so we can read it later
-                        # Remove old offset tags if any to prevent duplicates
                         clean_just = d.ai_justification or ""
                         clean_just = re.sub(r"\[OFFSET:\d+\]", "", clean_just).strip()
-                        d.ai_justification = f"{clean_just}\n[OFFSET:{new_offset}]"
+                        
+                        # Use final_offset (the re-calculated one)
+                        d.ai_justification = f"{clean_just}\n[OFFSET:{final_offset}]"
                         
                         session.commit()
                     
-                    st.toast(f"Saved: {doc.filename} -> Ready for OCR")
-                    time.sleep(0.5)
+                    time.sleep(1.0) # Give user time to see the toast
                     st.rerun()
 
 # --- TAB 3: EXECUTION ---
