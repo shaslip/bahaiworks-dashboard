@@ -337,11 +337,12 @@ if "selected_doc_id" not in st.session_state:
     st.session_state.selected_doc_id = None
 
 # UPDATED: Added tab4 for "Completed"
-tab1, tab2, tab3, tab4 = st.tabs(["All Files", "High Priority Only", "Digitized", "Completed"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["All Files", "High Priority Only", "Ready for OCR", "Digitized", "Completed"])
 display_cols = ['id', 'filename', 'status', 'priority_score', 'language']
 
+# --- TAB 1: ALL FILES ---
 with tab1:
-    # UPDATED: Filter out 'Completed' status
+    # Filter out 'Completed' status so they don't clutter the main view
     filtered_df = df[df['status'] != 'COMPLETED']
 
     event = st.dataframe(
@@ -354,12 +355,11 @@ with tab1:
     )
     if len(event.selection['rows']) > 0:
         idx = event.selection['rows'][0]
-        # UPDATED: Use filtered_df to get the correct ID
         st.session_state.selected_doc_id = int(filtered_df.iloc[idx]['id'])
 
+# --- TAB 2: HIGH PRIORITY ---
 with tab2:
     if not df.empty and 'priority_score' in df.columns:
-        # UPDATED: Filter priority >= 8 AND exclude "Completed" status
         high_pri_df = df[(df['priority_score'] >= 8) & (df['status'] != 'COMPLETED')]
         
         event_hp = st.dataframe(
@@ -376,7 +376,27 @@ with tab2:
     else:
         st.info("No documents evaluated yet.")
 
+# --- TAB 3: READY FOR OCR ---
 with tab3:
+    if not df.empty:
+        ready_df = df[df['status'] == 'READY_FOR_OCR']
+        
+        event_ready = st.dataframe(
+            ready_df[display_cols], 
+            width="stretch", 
+            hide_index=True,
+            selection_mode="single-row",
+            on_select="rerun",
+            key="ready_table"
+        )
+        if len(event_ready.selection['rows']) > 0:
+            idx = event_ready.selection['rows'][0]
+            st.session_state.selected_doc_id = int(ready_df.iloc[idx]['id'])
+    else:
+        st.info("No documents waiting for OCR.")
+
+# --- TAB 4: DIGITIZED ---
+with tab4:
     if not df.empty:
         digitized_df = df[df['status'] == 'DIGITIZED']
         event_dig = st.dataframe(
@@ -393,7 +413,8 @@ with tab3:
     else:
         st.info("No digitized documents found.")
 
-with tab4:
+# --- TAB 5: COMPLETED ---
+with tab5:
     if not df.empty:
         completed_df = df[df['status'] == 'COMPLETED']
         event_comp = st.dataframe(
