@@ -67,45 +67,62 @@ EXCLUSION_LIST = [
 def get_lastname_firstname(full_name):
     """
     Parses names into 'Lastname, Firstname' format.
-    Handles suffixes like Jr., Sr., III.
     
-    Examples:
-    - Robert Gulick, Jr.        -> Gulick, Jr., Robert
-    - Burton W. F. Trafton, Jr. -> Trafton, Jr., Burton W. F.
-    - Haji Mirza Haydar-‘Ali    -> Haydar-‘Ali, Haji Mirza
+    1. Handles suffixes (Jr., Sr., III) -> 'Trafton, Jr., Burton'
+    2. Handles particles (de, van, von) -> 'de Araujo, Victor'
     """
-    # 1. Basic cleanup
+    # 1. Clean and Split
     name = full_name.strip()
     parts = name.split()
     
     if len(parts) <= 1:
         return name
 
-    # 2. Define suffixes to look for (case-insensitive matching)
-    # We strip dots/commas for comparison, so 'Jr.' matches 'jr'
-    suffixes = ['jr', 'sr', 'ii', 'iii', 'iv', 'v', 'vi']
+    # 2. Extract Suffixes (Case-insensitive check)
+    suffixes = ['jr', 'jr.', 'sr', 'sr.', 'ii', 'iii', 'iv', 'v', 'vi']
+    suffix = ""
     
-    last_word_cleaned = parts[-1].lower().replace('.', '').replace(',', '')
+    # Check the last word to see if it's a suffix
+    last_word_norm = parts[-1].lower().replace(',', '').replace('.', '')
     
-    # 3. Check if the last word is a suffix
-    if last_word_cleaned in suffixes:
-        if len(parts) >= 3:
-            # Case: "Robert Gulick, Jr."
-            suffix = parts[-1]              # "Jr."
-            lastname = parts[-2].rstrip(',') # "Gulick" (remove comma if attached)
-            firstname = " ".join(parts[:-2]) # "Robert"
-            
-            return f"{lastname}, {suffix}, {firstname}"
-        else:
-            # Fallback for short names like "Smith Jr." -> "Smith, Jr."
-            return f"{parts[-2]}, {parts[-1]}"
-            
+    # We strip '.' from the check list above to match "Jr." or "Jr"
+    if last_word_norm in [s.replace('.', '') for s in suffixes]:
+        suffix = parts[-1].replace(',', '') # Store the suffix (e.g. "Jr.")
+        parts = parts[:-1] # Remove suffix from the working list
+        # Clean any trailing comma from the new last word (e.g., "Gulick," -> "Gulick")
+        parts[-1] = parts[-1].rstrip(',')
+
+    # 3. Handle Connectors/Particles
+    # These are words that signal the start of a Last Name
+    connectors = {"de", "dos", "da", "do", "von", "van", "den", "der"}
+    
+    split_index = -1
+    
+    # Find the *first* occurrence of a connector to start the Last Name there
+    for i, part in enumerate(parts):
+        # We generally assume a connector won't be the very first name (Index 0)
+        # unless it's a mononym, but for safety we check i > 0 usually.
+        # However, "De Man" is a valid name. Let's stick to your logic:
+        if part.lower() in connectors:
+            split_index = i
+            break
+    
+    if split_index > 0: 
+        # Case: "Victor [de] Araujo"
+        firstname_part = " ".join(parts[:split_index])
+        lastname_part = " ".join(parts[split_index:])
     else:
-        # 4. Standard Case (Western or hyphenated Eastern)
-        # Case: "Haji Mirza Haydar-‘Ali"
-        lastname = parts[-1]
-        firstname = " ".join(parts[:-1])
-        return f"{lastname}, {firstname}"
+        # Standard Case: Split at the very last word
+        firstname_part = " ".join(parts[:-1])
+        lastname_part = parts[-1]
+
+    # 4. Final formatting
+    if suffix:
+        # Format: Lastname, Suffix, Firstname
+        return f"{lastname_part}, {suffix}, {firstname_part}"
+    else:
+        # Format: Lastname, Firstname
+        return f"{lastname_part}, {firstname_part}"
 
 def format_author_page(name, book_title=None, book_year=None, use_dynamic=True):
     """
