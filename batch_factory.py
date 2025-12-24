@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from src.database import engine, Document
 from src.ocr_engine import OcrEngine, OcrConfig
 from src.auto_config import calculate_start_offset
-from src.processor import merge_pdf_pair
+from src.processor import merge_pdf_pair, analyze_split_boundaries, split_pdf_doubles
 
 def run_factory():
     print("🏭 Starting Bahai.works Automation Factory...")
@@ -17,19 +17,17 @@ def run_factory():
     if len(sys.argv) > 1:
         try:
             target_id = int(sys.argv[1])
-            print(f"   🎯 TARGET MODE: Overriding queue to process Document ID: {target_id}")
+            print(f"    🎯 TARGET MODE: Overriding queue to process Document ID: {target_id}")
         except ValueError:
-            print("   ⚠️ Invalid ID provided. Falling back to priority queue.")
+            print("    ⚠️ Invalid ID provided. Falling back to priority queue.")
 
     print("    Scanning database...")
     
     with Session(engine) as session:
         # LOGIC BRANCH: Specific ID vs. High Priority Queue
         if target_id:
-            # Fetch specifically requested document (ignoring status flags so you can force-run it)
             stm = select(Document).where(Document.id == target_id)
         else:
-            # Standard High Priority Queue
             stm = select(Document).where(
                 Document.priority_score >= 8,
                 Document.status.notin_(["DIGITIZED", "COMPLETED"])
@@ -43,19 +41,14 @@ def run_factory():
 
         print(f"    Found {len(queue)} documents to process.")
         
-        # INTERACTIVE FLAG: Starts true, turns false if you type 'a'
-        # If in Target Mode, we default to False (just run it), or you can keep it True.
         ask_permission = True 
         
         # Regex for identifying split parts
         split_pattern = re.compile(r"^(.*?)\s*-\s*(Cover|Inhalt gesamt)\.pdf$", re.IGNORECASE)
 
         for i, doc in enumerate(queue, 1):
-            # Refresh doc status in case it was modified by a previous merge in this loop
             session.refresh(doc)
             
-            # If manually targeted, we might want to allow reprocessing even if DIGITIZED
-            # But standard logic skips it.
             if doc.status == "DIGITIZED" and not target_id:
                 print(f"\n[{i}/{len(queue)}] Skipping {doc.filename} (Already processed via merge partner).")
                 continue
@@ -131,11 +124,10 @@ def run_factory():
                         continue
                 else:
                     print("    ⚠️ Partner file not found in DB. Skipping.")
-                    # Optional: Mark as MISSING_PART here if desired
                     continue
             # --- MERGE LOGIC END ---
 
-            # 2. Get Total Pages (using the potentially merged file)
+            # 2. Get Total Pages
             try:
                 with fitz.open(current_path) as pdf:
                     total_pages = len(pdf)
@@ -145,8 +137,35 @@ def run_factory():
 
             # 3. Auto-Calibrate (The "Detective")
             print("    🔍 Triangulating page offset...")
-            start_page = calculate_start_offset(current_path, total_pages)
+            start_page, is_double_page = calculate_start_offset(current_path, total_pages)
             
+            # --- SPLIT LOGIC START ---
+            if is_double_page:
+                print("    👯 Double-page spread detected! Initiating split sequence...")
+                
+                # A. Find Boundaries
+                print("    📏 Analyzing boundaries (Covers vs Content)...")
+                split_start, split_end = analyze_split_boundaries(current_path)
+                print(f"       -> Splitting pages {split_start} to {split_end}")
+                
+                # B. Execute Split
+                split_filename = f"split_{os.path.basename(current_path)}"
+                split_path = os.path.join(os.path.dirname(current_path), split_filename)
+                
+                print(f"    🔪 Splitting PDF to: {split_filename}")
+                if split_pdf_doubles(current_path, split_path, split_start, split_end):
+                    current_path = split_path
+                    
+                    # C. Re-Calibrate
+                    print("    🔄 Re-calculating offset for new layout...")
+                    with fitz.open(current_path) as pdf:
+                        total_pages = len(pdf)
+                    start_page, _ = calculate_start_offset(current_path, total_pages)
+                else:
+                    print("    ❌ Split failed. Skipping.")
+                    continue
+            # --- SPLIT LOGIC END ---
+
             if start_page:
                 print(f"    ✅ LOCK: 'Page 1' starts at PDF Page {start_page}")
                 
