@@ -173,10 +173,11 @@ def render_prep_tab(docs):
 
     # --- BATCH CONFIG ---
     total_count = len(docs)
-    batch_docs = docs[:21] # Slice first 21 (20 + 1 buffer)
+    display_batch = docs[:21]      # Show 21 to catch edge cases
+    processing_batch = docs[:20]   # Only process the standard 20
 
     # 1. Queue Review Table
-    st.subheader(f"📋 Document Queue ({min(len(batch_docs), 20)}/{total_count})")
+    st.subheader(f"📋 Document Queue ({min(len(display_batch), 20)}/{total_count})")
     
     selected_doc_id = None
     
@@ -186,7 +187,7 @@ def render_prep_tab(docs):
             "Filename": d.filename,
             "Priority": d.priority_score,
             "Language": d.language
-        } for d in batch_docs]
+        } for d in display_batch]
         
         event = st.dataframe(
             queue_data,
@@ -215,11 +216,11 @@ def render_prep_tab(docs):
         st.sidebar.info("Select a document in the table to view details.")
 
     # 3. Analysis Action (Uses batch_docs only)
-    if st.button(f"🕵️ Run Analysis on Batch ({len(batch_docs)})", type="primary"):
+    if st.button(f"🕵️ Run Analysis on Batch ({len(processing_batch)})", type="primary"):
         progress = st.progress(0)
         results = []
         
-        for i, doc in enumerate(batch_docs):
+        for i, doc in enumerate(processing_batch):
             import fitz
             try:
                 with fitz.open(doc.file_path) as pdf:
@@ -236,7 +237,7 @@ def render_prep_tab(docs):
             except Exception as e:
                 st.error(f"Error reading {doc.filename}: {e}")
             
-            progress.progress((i + 1) / len(batch_docs))
+            progress.progress((i + 1) / len(processing_batch))
             
         st.session_state['prep_results'] = results
 
