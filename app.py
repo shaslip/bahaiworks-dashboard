@@ -44,7 +44,7 @@ def load_data():
 
 def get_metrics(df):
     total = len(df)
-    pending = len(df[df['status'] == 'PENDING'])
+    pending = len(df[df['status'].isin(['PENDING', 'READY_FOR_OCR'])]) 
     digitized = len(df[df['status'] == 'DIGITIZED'])
     completed = len(df[df['status'] == 'COMPLETED'])
     high_priority = len(df[df['priority_score'] >= 8]) if not df.empty else 0
