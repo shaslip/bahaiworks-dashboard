@@ -40,27 +40,42 @@ def extract_single_page(pdf_path, page_num, output_dir):
         return None
 
 def get_printed_page_number(image_path):
-    """Asks Gemini to find the page number."""
-    model = genai.GenerativeModel('gemini-3-flash-preview')
+    """Asks Gemini for page number AND double-page detection."""
+    # Using the model string from your file
+    model = genai.GenerativeModel('gemini-3-flash-preview') 
+    
     try:
         with Image.open(image_path) as img:
-            # UPDATED: Prompt is slightly more instructive
-            prompt = "Look at the corners (header/footer) of this page image. Return ONLY the digit of the printed page number. If there is no page number, return 'NONE'."
+            prompt = (
+                "Two tasks:\n"
+                "1. Look at the corners. Return the printed page number digit. If none, return 'NONE'.\n"
+                "2. Is this image a 'double-page spread' (scanned with two physical book pages visible on one PDF page)?\n"
+                "Reply in this format: {PageNumber}|{YES/NO}"
+            )
             response = model.generate_content([prompt, img])
             raw_text = response.text.strip()
             
-            # UPDATED: We return both the clean number AND the raw text for debugging
-            clean_text = ''.join(filter(str.isdigit, raw_text))
+            # Parse: "45|YES" or "NONE|NO"
+            parts = raw_text.split('|')
             
-            if clean_text and clean_text.isdigit():
-                return int(clean_text), raw_text
-            return None, raw_text
+            # Extract Number
+            clean_text = ''.join(filter(str.isdigit, parts[0]))
+            page_num = int(clean_text) if clean_text.isdigit() else None
+            
+            # Extract Double Page Status
+            is_double = False
+            if len(parts) > 1:
+                is_double = parts[1].strip().upper() == "YES"
+
+            return page_num, raw_text, is_double
+
     except Exception as e:
-        return None, str(e)
+        return None, str(e), False
 
 def calculate_start_offset(pdf_path, total_pages):
     """
-    Triangulates the 'Page 1' PDF index.
+    Triangulates 'Page 1' index and detects double-page spreads.
+    Returns: (offset, is_double_page_bool)
     """
     temp_dir = f".temp_calib_{os.path.basename(pdf_path)}"
     if not os.path.exists(temp_dir):
@@ -75,6 +90,8 @@ def calculate_start_offset(pdf_path, total_pages):
     print(f"      Probing PDF pages: {probes}")
     
     offsets = []
+    double_page_votes = 0
+    valid_samples = 0
     
     try:
         for pdf_page in probes:
@@ -83,28 +100,35 @@ def calculate_start_offset(pdf_path, total_pages):
             img_path = extract_single_page(pdf_path, pdf_page, temp_dir)
             
             if img_path:
-                printed_num, raw_response = get_printed_page_number(img_path)
+                printed_num, raw_response, is_double = get_printed_page_number(img_path)
+                valid_samples += 1
                 
+                if is_double:
+                    double_page_votes += 1
+
                 if printed_num is not None:
                     offset = pdf_page - printed_num
                     offsets.append(offset)
-                    print(f"      - PDF Pg {pdf_page} -> printed '{printed_num}' (Offset: {offset})")
+                    print(f"      - PDF Pg {pdf_page} -> printed '{printed_num}' (Offset: {offset}) [Double: {is_double}]")
                 else:
-                    # UPDATED: Print the RAW response so you know why it failed
-                    print(f"      - PDF Pg {pdf_page} -> printed 'None' | Raw AI Response: '{raw_response}'")
+                    print(f"      - PDF Pg {pdf_page} -> printed 'None' | Raw: '{raw_response}'")
+
+        # Determine Double Page Consensus (>50%)
+        is_double_page_detected = False
+        if valid_samples > 0:
+            is_double_page_detected = double_page_votes >= (valid_samples / 2)
 
         if not offsets:
-            return None
+            return None, is_double_page_detected
 
         counts = Counter(offsets)
         most_common_offset, frequency = counts.most_common(1)[0]
         
-        # Cleanup ONLY if successful. If failed, we keep files for inspection.
         if frequency >= 2:
             final_start = 1 + most_common_offset
-            print(f"      > Consensus found! Offset {most_common_offset}")
+            print(f"      > Consensus found! Offset {most_common_offset}. Double Page: {is_double_page_detected}")
             shutil.rmtree(temp_dir, ignore_errors=True)
-            return final_start
+            return final_start, is_double_page_detected
         else:
              print(f"      > No consensus. Offsets found: {offsets}")
              print(f"      > DEBUG: Kept images in {temp_dir} for inspection.")
@@ -112,4 +136,4 @@ def calculate_start_offset(pdf_path, total_pages):
     except Exception as e:
         print(f"      Calibration crash: {e}")
             
-    return None
+    return None, False
