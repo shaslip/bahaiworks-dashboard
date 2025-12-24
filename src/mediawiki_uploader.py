@@ -46,16 +46,46 @@ def get_csrf_token(session):
     })
     return csrf_token_response.json()['query']['tokens']['csrftoken']
 
-def upload_to_bahaiworks(title, content, summary="Bot upload via Dashboard"):
+def page_exists(session, title):
+    """
+    Checks if a page exists on the wiki.
+    """
+    params = {
+        'action': 'query',
+        'titles': title,
+        'format': 'json'
+    }
+    response = session.get(API_URL, params=params)
+    data = response.json()
+    
+    # MediaWiki returns a negative pageid (e.g., "-1") if the page is missing
+    pages = data.get('query', {}).get('pages', {})
+    for page_id in pages:
+        if int(page_id) < 0:
+            return False
+    return True
+
+def upload_to_bahaiworks(title, content, summary="Bot upload via Dashboard", check_exists=False):
     """
     Uploads text to a specific page on bahai.works.
     Returns the API response.
+    
+    Args:
+        title (str): Page title
+        content (str): Wiki text
+        summary (str): Edit summary
+        check_exists (bool): If True, raises FileExistsError if page already exists.
     """
     session = requests.Session()
     
     try:
         # Authenticate
         csrf_token = get_csrf_token(session)
+        
+        # Safety Check: Page Existence
+        if check_exists:
+            if page_exists(session, title):
+                raise FileExistsError(f"Page '{title}' already exists on bahai.works. Operation aborted.")
         
         # Post Edit
         create_params = {
@@ -75,4 +105,5 @@ def upload_to_bahaiworks(title, content, summary="Bot upload via Dashboard"):
         return data
         
     except Exception as e:
-        raise Exception(f"Upload failed: {e}")
+        # Pass through the FileExistsError or wrap other exceptions
+        raise e
