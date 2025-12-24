@@ -6,6 +6,7 @@ from PIL import Image
 import google.generativeai as genai
 from dotenv import load_dotenv
 import shutil
+import re
 
 Image.MAX_IMAGE_PIXELS = None
 
@@ -134,8 +135,11 @@ def calculate_start_offset(pdf_path, total_pages):
         else:
              print(f"      > No consensus. Offsets found: {offsets}")
              print(f"      > DEBUG: Kept images in {temp_dir} for inspection.")
+             # CHANGED: Return the detected status even if offsets failed
+             return None, is_double_page_detected
             
     except Exception as e:
         print(f"      Calibration crash: {e}")
             
-    return None, False
+    # CHANGED: Fallback return
+    return None, is_double_page_detected
