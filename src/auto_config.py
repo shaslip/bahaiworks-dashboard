@@ -7,6 +7,8 @@ import google.generativeai as genai
 from dotenv import load_dotenv
 import shutil
 
+Image.MAX_IMAGE_PIXELS = None
+
 # Load env variables directly
 load_dotenv()
 api_key = os.getenv("GEMINI_API_KEY")
