@@ -54,10 +54,10 @@ def open_local_file(path):
 
 def get_pending_docs():
     with Session(engine) as session:
-        # Fetch anything not DIGITIZED or COMPLETED
+        # CHANGED: Order by Document.id instead of filename
         stm = select(Document).where(
             Document.status.notin_(["DIGITIZED", "COMPLETED"])
-        ).order_by(Document.filename)
+        ).order_by(Document.id) 
         return session.scalars(stm).all()
 
 # --- TAB 1: MERGE & AUDIT ---
@@ -171,20 +171,23 @@ def render_prep_tab(docs):
     st.header("Step 2: Calibration & Splitting")
     st.info("Analyze page offsets and detect/split double-page spreads.")
 
-    # 1. Queue Review Table with Selection
-    st.subheader(f"📋 Document Queue ({len(docs)} files)")
+    # --- BATCH CONFIG ---
+    total_count = len(docs)
+    batch_docs = docs[:21] # Slice first 21 (20 + 1 buffer)
+
+    # 1. Queue Review Table
+    st.subheader(f"📋 Document Queue ({min(len(batch_docs), 20)}/{total_count})")
     
     selected_doc_id = None
     
-    if docs:
+    if batch_docs:
         queue_data = [{
             "ID": d.id,
             "Filename": d.filename,
             "Priority": d.priority_score,
             "Language": d.language
-        } for d in docs]
+        } for d in batch_docs]
         
-        # Enable selection
         event = st.dataframe(
             queue_data,
             column_order=["ID", "Filename", "Priority", "Language"],
@@ -195,7 +198,6 @@ def render_prep_tab(docs):
             key="prep_queue_table"
         )
         
-        # Capture Selection
         if len(event.selection['rows']) > 0:
             idx = event.selection['rows'][0]
             selected_doc_id = queue_data[idx]["ID"]
@@ -212,11 +214,12 @@ def render_prep_tab(docs):
     else:
         st.sidebar.info("Select a document in the table to view details.")
 
-    if st.button("🕵️ Run Analysis on All Files", type="primary"):
+    # 3. Analysis Action (Uses batch_docs only)
+    if st.button(f"🕵️ Run Analysis on Batch ({len(batch_docs)})", type="primary"):
         progress = st.progress(0)
         results = []
         
-        for i, doc in enumerate(docs):
+        for i, doc in enumerate(batch_docs):
             import fitz
             try:
                 with fitz.open(doc.file_path) as pdf:
@@ -233,11 +236,11 @@ def render_prep_tab(docs):
             except Exception as e:
                 st.error(f"Error reading {doc.filename}: {e}")
             
-            progress.progress((i + 1) / len(docs))
+            progress.progress((i + 1) / len(batch_docs))
             
         st.session_state['prep_results'] = results
 
-    # 3. Results Grid
+    # 4. Results Grid
     if 'prep_results' in st.session_state:
         results = st.session_state['prep_results']
         
