@@ -80,22 +80,20 @@ def render_merge_tab(docs):
     st.subheader(f"🧩 Proposed Merges ({len(matches)})")
     
     if matches:
-        # Table Headers
-        h1, h2, h3, h4 = st.columns([2, 2, 2, 1])
-        h1.caption("**Target Filename**")
-        h2.caption("**Cover Source**")
-        h3.caption("**Content Source**")
-        h4.caption("**Action**")
+        # Table Headers - Adjusted ratios since Target is gone
+        h1, h2, h3 = st.columns([3, 3, 1])
+        h1.caption("**Cover Source**")
+        h2.caption("**Content Source**")
+        h3.caption("**Action**")
         st.divider()
 
         # Table Rows
         for i, m in enumerate(matches):
-            c1, c2, c3, c4 = st.columns([2, 2, 2, 1])
-            c1.write(f"**{m['base_name']}**")
-            c2.write(m['cover'].filename)
-            c3.write(m['content'].filename)
+            c1, c2, c3 = st.columns([3, 3, 1])
+            c1.write(m['cover'].filename)
+            c2.write(m['content'].filename)
             
-            if c4.button("📂 Folder", key=f"f_{i}"):
+            if c3.button("📂 Folder", key=f"f_{i}"):
                 open_local_file(os.path.dirname(m['content'].file_path))
                 
         st.divider()
@@ -125,6 +123,9 @@ def render_merge_tab(docs):
             st.success(f"Merged {merged_count} documents!")
             st.rerun()
 
+    else:
+        st.info("No auto-merge pairs detected.")
+
     # 3. Unmatched Files (Searchable)
     st.subheader(f"📂 Unmatched Files ({len(singles)})")
     
@@ -144,6 +145,7 @@ def render_merge_tab(docs):
                 pass
             else:
                 st.error("Invalid selection.")
+
 # --- TAB 2: PREP (Calibration & Splitting) ---
 def render_prep_tab(docs):
     st.header("Step 2: Calibration & Splitting")
