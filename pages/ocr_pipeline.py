@@ -159,21 +159,80 @@ def render_merge_tab(docs):
     st.subheader(f"📂 Unmatched Files ({len(singles)})")
     
     with st.expander("Manual Merge Tools", expanded=False):
+        # --- Method A: Search & Select ---
+        st.markdown("#### Option A: Search by Name")
         filter_text = st.text_input("🔍 Search Unmatched Files", placeholder="Type year or title...").lower()
         filtered = [d for d in singles if filter_text in d.filename.lower()] if filter_text else singles[:100]
 
         mc1, mc2 = st.columns(2)
         with mc1:
-            sel_cover = st.selectbox("Cover", filtered, format_func=lambda x: x.filename, key="m_cov")
+            sel_cover = st.selectbox("Cover", filtered, format_func=lambda x: f"[{x.id}] {x.filename}", key="m_cov")
         with mc2:
-            sel_content = st.selectbox("Content", filtered, format_func=lambda x: x.filename, key="m_con")
+            sel_content = st.selectbox("Content", filtered, format_func=lambda x: f"[{x.id}] {x.filename}", key="m_con")
             
         if st.button("Merge Selected Pair"):
             if sel_cover and sel_content and sel_cover.id != sel_content.id:
-                # Manual merge implementation
-                pass
+                # Reuse logic
+                new_filename = f"{sel_content.filename.replace('.pdf', '')}_merged.pdf"
+                new_path = os.path.join(os.path.dirname(sel_cover.file_path), new_filename)
+                
+                if merge_pdf_pair(sel_cover.file_path, sel_content.file_path, new_path):
+                    with Session(engine) as session:
+                        master = session.get(Document, sel_content.id)
+                        secondary = session.get(Document, sel_cover.id)
+                        
+                        master.file_path = new_path
+                        master.filename = new_filename
+                        secondary.status = "COMPLETED"
+                        secondary.ai_justification = f"Manually merged into {master.id}"
+                        session.commit()
+                    st.success("Merged!")
+                    st.rerun()
+                else:
+                    st.error("Merge failed on disk.")
             else:
                 st.error("Invalid selection.")
+
+        st.divider()
+
+        # --- Method B: ID Entry ---
+        st.markdown("#### Option B: Direct ID Input")
+        id_col1, id_col2, id_col3 = st.columns([1, 1, 1])
+        with id_col1:
+            cover_id_input = st.number_input("Cover ID", min_value=1, step=1, key="id_cov_in")
+        with id_col2:
+            body_id_input = st.number_input("Body ID", min_value=1, step=1, key="id_bod_in")
+        with id_col3:
+            st.write("") # Spacer
+            st.write("") # Spacer
+            if st.button("🔗 Merge IDs", type="primary"):
+                if cover_id_input == body_id_input:
+                    st.error("IDs must be different.")
+                else:
+                    with Session(engine) as session:
+                        doc_cover = session.get(Document, cover_id_input)
+                        doc_body = session.get(Document, body_id_input)
+                        
+                        if not doc_cover or not doc_body:
+                            st.error("One or both IDs not found.")
+                        else:
+                            # Logic: Merge Cover INTO Body (Body keeps ID/Metadata)
+                            # Remove suffix if present to make clean name
+                            clean_name = re.sub(r"\s*-\s*(Inhalt gesamt|Cover)", "", doc_body.filename, flags=re.IGNORECASE)
+                            if not clean_name.endswith(".pdf"): clean_name += ".pdf"
+
+                            new_path = os.path.join(os.path.dirname(doc_body.file_path), clean_name)
+                            
+                            if merge_pdf_pair(doc_cover.file_path, doc_body.file_path, new_path):
+                                doc_body.file_path = new_path
+                                doc_body.filename = clean_name
+                                doc_cover.status = "COMPLETED"
+                                doc_cover.ai_justification = f"ID Merge: Merged into {doc_body.id}"
+                                session.commit()
+                                st.success(f"Merged IDs {cover_id_input} + {body_id_input} -> {clean_name}")
+                                st.rerun()
+                            else:
+                                st.error("Merge failed (file access error).")
 
 # --- TAB 2: PREP (Calibration & Splitting) ---
 def render_prep_tab(docs):
