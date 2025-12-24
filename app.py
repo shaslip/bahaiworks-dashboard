@@ -217,7 +217,7 @@ def render_details(selected_id):
                 st.write("Books require the dedicated pipeline for copyright verification, TOC extraction, and chapter splitting.")
                 
                 if st.button("🚀 Launch Book Pipeline", type="primary"):
-                    st.switch_page("pages/book_pipeline.py")
+                    st.switch_page("pages/03_book_pipeline.py")
                 
                 # Stop rendering the rest of this simple tab
                 return
@@ -423,4 +423,4 @@ with st.sidebar:
     st.subheader("🛠️ Utilities")
     
     if st.button("⚡ Open Misc Tasks", width="stretch"):
-        st.switch_page("pages/misc_tasks.py")
+        st.switch_page("pages/04_misc_tasks.py")
