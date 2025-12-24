@@ -144,28 +144,44 @@ with tab_author:
                 status = st.empty()
 
                 try:
-                    # Step 1
+                    # Step 1: Author Page (Safe Mode: ON)
                     status.write(f"Creating {p_author}...")
-                    upload_to_bahaiworks(p_author, txt_author, "Created Author page (Misc Tool)")
+                    upload_to_bahaiworks(
+                        p_author, 
+                        txt_author, 
+                        "Created Author page (Misc Tool)", 
+                        check_exists=True  # <--- PREVENTS OVERWRITE
+                    )
                     prog.progress(33)
 
-                    # Step 2
+                    # Step 2: Main Category (Safe Mode: ON)
                     status.write(f"Creating {p_cat_main}...")
-                    upload_to_bahaiworks(p_cat_main, txt_cat_main, "Created Author Category (Misc Tool)")
+                    upload_to_bahaiworks(
+                        p_cat_main, 
+                        txt_cat_main, 
+                        "Created Author Category (Misc Tool)", 
+                        check_exists=True  # <--- PREVENTS OVERWRITE
+                    )
                     prog.progress(66)
 
-                    # Step 3
+                    # Step 3: Works Category (Safe Mode: ON)
                     status.write(f"Creating {p_cat_works}...")
-                    upload_to_bahaiworks(p_cat_works, txt_cat_works, "Created Text of Works Category (Misc Tool)")
+                    upload_to_bahaiworks(
+                        p_cat_works, 
+                        txt_cat_works, 
+                        "Created Text of Works Category (Misc Tool)", 
+                        check_exists=True  # <--- PREVENTS OVERWRITE
+                    )
                     prog.progress(100)
 
                     status.success(f"✅ Successfully created all pages for {author_name}!")
                     st.balloons()
 
+                except FileExistsError as e:
+                    status.error(f"⚠️ Safety Stop: {e}")
+                    prog.empty()
                 except Exception as e:
                     status.error(f"Error: {e}")
-                    # In production, you might want to check for 'articleexists' error specifically 
-                    # inside upload_to_bahaiworks or catch it here if the API raises it.
 
 with tab_maintenance:
     st.write("Future database cleanup scripts or logs will go here.")
