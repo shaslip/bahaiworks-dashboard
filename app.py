@@ -137,65 +137,7 @@ def render_details(selected_id):
         st.divider()
 
         # === TABS ===
-        tab_ai, tab_pub = st.tabs(["🤖 AI Analyst", "📝 Publisher"])
-
-        # -------------------------
-        # TAB 1: AI EVALUATION
-        # -------------------------
-        with tab_ai:
-            if pd.notna(record.priority_score):
-                st.metric("Priority Score", f"{record.priority_score}/10")
-                st.write(f"**Language:** {record.language}")
-                st.info(f"**Summary:** {record.summary}")
-                
-                with st.expander("Justification"):
-                    st.caption(record.ai_justification)
-                
-                st.divider()
-                st.subheader("Manual Controls")
-                
-                c1, c2 = st.columns(2)
-                with c1:
-                    new_score = st.number_input(
-                        "Set Score", min_value=1, max_value=10, 
-                        value=int(record.priority_score), label_visibility="collapsed"
-                    )
-                with c2:
-                    if st.button("💾 Save"):
-                        record.priority_score = new_score
-                        if "Manually Overridden" not in (record.ai_justification or ""):
-                            record.ai_justification = (record.ai_justification or "") + "\n[Manually Overridden]"
-                        session.commit()
-                        st.rerun()
-
-                if st.button("🔄 Re-run AI"):
-                    with st.spinner("Re-processing..."):
-                        images = extract_preview_images(record.file_path)
-                        if images:
-                            result = evaluate_document(images)
-                            if result:
-                                record.priority_score = result['priority_score']
-                                record.summary = result['summary']
-                                record.language = result['language']
-                                record.ai_justification = result['ai_justification']
-                                record.status = "EVALUATED"
-                                session.commit()
-                                st.rerun()
-            else:
-                st.warning("Status: Pending Analysis")
-                if st.button("✨ Run AI Evaluation", type="primary"):
-                    with st.spinner("Analyzing..."):
-                        images = extract_preview_images(record.file_path)
-                        if images:
-                            result = evaluate_document(images)
-                            if result:
-                                record.priority_score = result['priority_score']
-                                record.summary = result['summary']
-                                record.language = result['language']
-                                record.ai_justification = result['ai_justification']
-                                record.status = "EVALUATED"
-                                session.commit()
-                                st.rerun()
+        tab_pub = st.tabs(["📝 Publisher"])
 
         # -------------------------
         # TAB 2: PUBLISHER (NEW)
