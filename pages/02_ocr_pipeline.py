@@ -538,4 +538,4 @@ with tab2:
     render_prep_tab(all_pending)
 
 with tab3:
-    render_exec_tab(all_pending)
+    render_exec_tab()
