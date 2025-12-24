@@ -151,7 +151,31 @@ def render_prep_tab(docs):
     st.header("Step 2: Calibration & Splitting")
     st.info("Analyze page offsets and detect/split double-page spreads.")
 
-    if st.button("🕵️ Run Analysis on All Files"):
+    # 1. Queue Review Table
+    st.subheader(f"📋 Document Queue ({len(docs)} files)")
+    if docs:
+        # Create lightweight list of dicts for display
+        queue_data = [{
+            "ID": d.id,
+            "Filename": d.filename,
+            "Priority": d.priority_score,
+            "Language": d.language
+        } for d in docs]
+        
+        st.dataframe(
+            queue_data,
+            column_order=["ID", "Filename", "Priority", "Language"],
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+        st.warning("No documents ready for processing. Check Step 1.")
+        return
+
+    st.divider()
+
+    # 2. Analysis Action
+    if st.button("🕵️ Run Analysis on All Files", type="primary"):
         progress = st.progress(0)
         results = []
         
@@ -161,7 +185,6 @@ def render_prep_tab(docs):
                 with fitz.open(doc.file_path) as pdf:
                     total = len(pdf)
                 
-                # Re-using the logic from batch_factory
                 start, is_double = calculate_start_offset(doc.file_path, total)
                 
                 results.append({
@@ -177,7 +200,7 @@ def render_prep_tab(docs):
             
         st.session_state['prep_results'] = results
 
-    # Display Results Grid
+    # 3. Results Grid
     if 'prep_results' in st.session_state:
         results = st.session_state['prep_results']
         
@@ -195,7 +218,6 @@ def render_prep_tab(docs):
                 
                 # Action
                 if c4.button("Process", key=f"proc_{doc.id}"):
-                    # IF Double: Run Split, Update Path
                     if is_dbl:
                         with st.spinner("Splitting..."):
                             s_start, s_end = analyze_split_boundaries(doc.file_path)
@@ -203,7 +225,6 @@ def render_prep_tab(docs):
                             split_path = os.path.join(os.path.dirname(doc.file_path), split_name)
                             
                             if split_pdf_doubles(doc.file_path, split_path, s_start, s_end):
-                                # Update DB
                                 with Session(engine) as session:
                                     d = session.get(Document, doc.id)
                                     d.file_path = split_path
@@ -213,8 +234,6 @@ def render_prep_tab(docs):
                             else:
                                 st.error("Split Failed")
                                 
-                    # Save Offset Config to DB (We might need a temp field or just rely on runtime config)
-                    # For now, we assume we just pass to step 3, but saving to a 'notes' field helps
                     st.toast(f"Configuration Saved: Offset {new_offset}")
 
 # --- TAB 3: EXECUTION ---
