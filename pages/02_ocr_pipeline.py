@@ -439,10 +439,10 @@ def render_prep_tab(docs):
                     st.rerun()
 
 # --- TAB 3: EXECUTION ---
-def render_exec_tab(docs):
+def render_exec_tab():
     st.header("Step 3: Execution")
     
-    # 1. Fetch only Ready docs
+    # 1. Fetch Ready Docs
     with Session(engine) as session:
         ready_docs = session.scalars(
             select(Document).where(Document.status == "READY_FOR_OCR")
@@ -450,31 +450,81 @@ def render_exec_tab(docs):
     
     st.info(f"Queued for OCR: {len(ready_docs)} documents")
     
-    if st.button("🚀 Start Batch OCR"):
-        # ... loop through ready_docs ...
-            # Parse Offset
+    # Show queue details with badges
+    if ready_docs:
+        with st.expander("View Queue Details", expanded=False):
+            for d in ready_docs:
+                ranges_match = re.search(r"\[RANGES:([\d\-,]+)\]", d.ai_justification or "")
+                badge = " 🎨 (Has Illustrations)" if ranges_match else ""
+                st.write(f"• {d.filename}{badge}")
+
+    # 2. Batch Execution
+    if st.button(f"🚀 Start Batch OCR ({len(ready_docs)})", type="primary"):
+        progress_bar = st.progress(0, text="Initializing...")
+        
+        # Import here to avoid circular dependencies if any
+        from src.ocr_engine import OcrEngine, OcrConfig
+        
+        for i, doc in enumerate(ready_docs):
+            status_text = f"Processing {i+1}/{len(ready_docs)}: {doc.filename}..."
+            progress_bar.progress(i / len(ready_docs), text=status_text)
+            
+            # --- A. Parse Configuration from DB Tags ---
+            # 1. Offset (Start of Page 1)
             offset_match = re.search(r"\[OFFSET:(\d+)\]", doc.ai_justification or "")
-            start_index = int(offset_match.group(1)) if offset_match else 1
-            
-            config = OcrConfig(
-                has_cover_image=True,
-                first_numbered_page_index=start_index, # <--- USED HERE
-                language=doc.language or 'eng'
-            )
-            
+            # Default to 14 if missing (legacy default), or 0 if you prefer
+            start_index = int(offset_match.group(1)) if offset_match else 1 
+
+            # 2. Ranges (String "10-15,20-22" -> List [(10,15), (20,22)])
+            ranges_list = []
+            range_str_match = re.search(r"\[RANGES:([\d\-,]+)\]", doc.ai_justification or "")
+            if range_str_match:
+                try:
+                    raw_ranges = range_str_match.group(1).split(',')
+                    for r in raw_ranges:
+                        if '-' in r:
+                            start, end = r.split('-')
+                            ranges_list.append((int(start.strip()), int(end.strip())))
+                except ValueError:
+                    st.warning(f"Could not parse ranges for {doc.filename}, skipping ranges.")
+
+            # --- B. Initialize Engine ---
             try:
-                ocr.generate_images()
-                ocr.run_ocr(config)
+                config = OcrConfig(
+                    has_cover_image=True, # Assuming True for now
+                    first_numbered_page_index=start_index,
+                    illustration_ranges=ranges_list,
+                    language=doc.language or 'eng'
+                )
                 
+                engine_instance = OcrEngine(doc.file_path)
+                
+                # --- C. Run OCR ---
+                # Generate images first
+                engine_instance.generate_images()
+                
+                # Run extraction
+                output_path = engine_instance.run_ocr(config)
+                
+                # Cleanup
+                engine_instance.cleanup()
+                
+                # --- D. Update Database ---
                 with Session(engine) as session:
+                    # Re-fetch fresh object to avoid detachment issues
                     d = session.get(Document, doc.id)
                     d.status = "DIGITIZED"
+                    d.ai_justification = (d.ai_justification or "") + "\n[OCR: Completed]"
                     session.commit()
                     
             except Exception as e:
-                st.error(f"Failed {doc.filename}: {e}")
-                
-            ocr_bar.progress((i + 1) / len(docs))
+                st.error(f"Failed on {doc.filename}: {e}")
+                continue
+            
+        progress_bar.progress(1.0, text="Batch Complete!")
+        st.success("OCR Batch Finished! Files moved to 'Digitized'.")
+        time.sleep(2)
+        st.rerun()
 
 # --- Main Layout ---
 tab1, tab2, tab3 = st.tabs(["1. Merge", "2. Prep", "3. Execute"])
