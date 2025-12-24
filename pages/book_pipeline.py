@@ -266,11 +266,17 @@ elif st.session_state.pipeline_stage == "proof":
             # ACTION 1: Upload Main Page
             if st.button(f"1. Create {target_title}", type="primary", width='stretch'):
                 try:
-                    upload_to_bahaiworks(target_title, full_wikitext, "Setup")
+                    upload_to_bahaiworks(
+                        target_title, 
+                        full_wikitext, 
+                        "Setup (Book Pipeline)", 
+                        check_exists=True 
+                    )
                     st.success(f"✅ Created {target_title}")
-                except Exception as e: st.error(str(e))
-
-            # REMOVED: Create Chapter Placeholders (Duplicate functionality)
+                except FileExistsError:
+                     st.error(f"⚠️ Page '{target_title}' already exists. Setup aborted to prevent overwrite.")
+                except Exception as e: 
+                    st.error(str(e))
 
             st.markdown("---")
             st.write("**B. Bahaidata**")
