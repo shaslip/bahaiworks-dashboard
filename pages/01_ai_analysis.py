@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import os
+import platform
+import subprocess
 from sqlalchemy.orm import Session
 from sqlalchemy import select, desc
 
@@ -15,31 +17,45 @@ st.set_page_config(page_title="AI Analyst", layout="wide")
 st.title("🤖 AI Analyst")
 
 # --- Helper Functions ---
+def open_local_file(path):
+    """Platform-independent file opener."""
+    if os.path.exists(path):
+        try:
+            if platform.system() == "Linux":
+                subprocess.call(["xdg-open", path])
+            elif platform.system() == "Darwin":
+                subprocess.call(["open", path])
+            elif platform.system() == "Windows":
+                os.startfile(path)
+        except Exception as e:
+            st.error(f"Error opening file: {e}")
+    else:
+        st.error("File not found on disk.")
+
 def get_analysis_queue():
-    """Fetch documents that need analysis (Pending or Evaluated, but not Completed)."""
+    """Fetch documents that need analysis (Pending or Evaluated)."""
     with Session(engine) as session:
-        # We prioritize PENDING, then EVALUATED (for review), excluding COMPLETED
+        # Sort: PENDING first, then by ID
         stm = select(Document).where(
             Document.status != 'COMPLETED'
         ).order_by(
-            Document.status, # PENDING comes before EVALUATED alphabetically? No, 'E' < 'P'. 
-            # Let's sort by NULL priority first, then ID
-            Document.priority_score.nullsfirst(),
+            Document.status.desc(), # PENDING > EVALUATED
             Document.id
         )
         return session.scalars(stm).all()
 
 def render_sidebar_details(doc):
-    """Simple file info for the sidebar."""
     st.sidebar.header("📄 File Details")
     st.sidebar.write(f"**Filename:** {doc.filename}")
     st.sidebar.caption(f"ID: {doc.id}")
     
     c1, c2 = st.sidebar.columns(2)
     with c1:
-        if st.button("📄 Open", key="sb_open"):
-            # You might need to import your 'open_local_file' helper here or copy it
-            pass 
+        if st.sidebar.button("📄 Open", key="sb_open"):
+            open_local_file(doc.file_path)
+    with c2:
+        if st.sidebar.button("📂 Folder", key="sb_fold"):
+            open_local_file(os.path.dirname(doc.file_path))
     
     st.sidebar.divider()
 
@@ -47,13 +63,14 @@ def render_sidebar_details(doc):
 
 # 1. Fetch Data
 docs = get_analysis_queue()
+pending_docs = [d for d in docs if d.status == 'PENDING']
 queue_count = len(docs)
-pending_count = len([d for d in docs if d.status == 'PENDING'])
+pending_count = len(pending_docs)
 
 # 2. Queue Table
 st.subheader(f"Analysis Queue ({pending_count} Pending / {queue_count} Total)")
 
-# Batch slice for display
+# Display only top 50 to keep UI fast
 display_docs = docs[:50]
 
 queue_data = [{
@@ -84,14 +101,11 @@ st.divider()
 
 # 3. Work Area
 if selected_doc_id:
-    # Fetch fresh object
+    # Single Document Mode
     with Session(engine) as session:
         record = session.get(Document, selected_doc_id)
-        
-        # Render Sidebar Info
         render_sidebar_details(record)
         
-        # --- AI ANALYST WORKSPACE (Migrated from app.py) ---
         st.header(f"Analyzing: {record.filename}")
         
         col_left, col_right = st.columns([1, 1])
@@ -146,10 +160,49 @@ if selected_doc_id:
                     st.rerun()
 
 else:
-    st.info("👈 Select a document from the table to begin analysis.")
+    # Bulk Action Mode
+    st.info("👈 Select a document from the table to inspect individually.")
+    st.markdown("### Bulk Operations")
     
-    # Optional: Bulk Action
     if pending_count > 0:
-        if st.button(f"⚡ Batch Run Next 5 Pending Files"):
-            # Batch logic implementation would go here
-            st.info("Batch implementation pending.")
+        if st.button(f"🚀 Run AI Analysis on ALL Pending ({pending_count} files)", type="primary"):
+            progress_bar = st.progress(0, text="Starting Batch Job...")
+            status_text = st.empty()
+            
+            # Re-fetch strictly pending docs to be safe
+            with Session(engine) as session:
+                # We fetch IDs first to avoid keeping session open too long
+                p_stm = select(Document.id).where(Document.status == 'PENDING')
+                p_ids = session.scalars(p_stm).all()
+                
+                total = len(p_ids)
+                success_count = 0
+                
+                for i, doc_id in enumerate(p_ids):
+                    # Process one by one
+                    doc = session.get(Document, doc_id)
+                    status_text.write(f"Processing ({i+1}/{total}): {doc.filename}...")
+                    
+                    try:
+                        images = extract_preview_images(doc.file_path)
+                        if images:
+                            result = evaluate_document(images)
+                            if result:
+                                doc.priority_score = result['priority_score']
+                                doc.summary = result['summary']
+                                doc.language = result['language']
+                                doc.ai_justification = result['ai_justification']
+                                doc.status = "EVALUATED"
+                                session.commit()
+                                success_count += 1
+                    except Exception as e:
+                        print(f"Failed on {doc_id}: {e}")
+                        # Continue to next file even if one fails
+                        continue
+                    
+                    progress_bar.progress((i + 1) / total)
+            
+            st.success(f"Batch Complete! Successfully analyzed {success_count} documents.")
+            st.rerun()
+    else:
+        st.success("🎉 No pending documents! Queue is clear.")
