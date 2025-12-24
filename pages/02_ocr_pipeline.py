@@ -63,9 +63,9 @@ def open_local_file(path):
 
 def get_pending_docs():
     with Session(engine) as session:
-        # CHANGED: Order by Document.id instead of filename
+        # CHANGED: Added "READY_FOR_OCR" to the exclusion list
         stm = select(Document).where(
-            Document.status.notin_(["DIGITIZED", "COMPLETED"])
+            Document.status.notin_(["DIGITIZED", "COMPLETED", "READY_FOR_OCR"])
         ).order_by(Document.id) 
         return session.scalars(stm).all()
 
@@ -376,7 +376,7 @@ def render_prep_tab(docs):
                     st.rerun()
 
 # --- TAB 3: EXECUTION ---
-def render_exec_tab():
+def render_exec_tab(docs):
     st.header("Step 3: Execution")
     
     # 1. Fetch only Ready docs
