@@ -29,17 +29,72 @@ def render_details(selected_id):
         
         b1, b2 = st.sidebar.columns(2)
         with b1:
-            if st.button("📄 Open File", width="stretch", key="sb_open_file"):
+            if st.sidebar.button("📄 Open File", width="stretch", key="sb_open_file"):
                 open_local_file(record.file_path)
         with b2:
-            if st.button("📂 Open Folder", width="stretch", key="sb_open_folder"):
+            if st.sidebar.button("📂 Open Folder", width="stretch", key="sb_open_folder"):
                 open_local_file(os.path.dirname(record.file_path))
         
         st.sidebar.divider()
+
+        # --- MANUAL CONFIGURATION (For irregular books) ---
+        with st.sidebar.expander("🛠️ Manual Pagination", expanded=True):
+            st.caption("Use this if auto-detection fails or if the book has unnumbered illustration pages.")
+            
+            # 1. Page 1 Location
+            # We ask for the "Human" page number (1-based) and convert to 0-based index for the system
+            current_offset_match = re.search(r"\[OFFSET:(\d+)\]", record.ai_justification or "")
+            default_page_one = int(current_offset_match.group(1)) + 1 if current_offset_match else 1
+            
+            page_one_loc = st.number_input(
+                "PDF Page # of 'Page 1'", 
+                min_value=1, 
+                value=default_page_one,
+                help="Enter the PDF page number where the printed 'Page 1' begins."
+            )
+            
+            # 2. Unnumbered Ranges
+            # Parse existing ranges from justification if they exist
+            # Format in DB: [RANGES:48-55,102-105]
+            existing_ranges_match = re.search(r"\[RANGES:([\d\-,]+)\]", record.ai_justification or "")
+            default_ranges = existing_ranges_match.group(1) if existing_ranges_match else ""
+            
+            ranges_str = st.text_area(
+                "Unnumbered Ranges", 
+                value=default_ranges,
+                placeholder="e.g. 10-15, 48-52",
+                help="Comma-separated ranges of PDF page numbers that are images/illustrations and skip numbering."
+            )
+            
+            if st.button("💾 Save & Mark Ready", type="primary", key="save_manual_cfg"):
+                # Clean up old tags
+                clean_just = record.ai_justification or ""
+                clean_just = re.sub(r"\[OFFSET:\d+\]", "", clean_just)
+                clean_just = re.sub(r"\[RANGES:[\d\-,]+\]", "", clean_just).strip()
+                
+                # Format new tags
+                # Convert 1-based input to 0-based index for the engine
+                new_start_index = page_one_loc - 1
+                
+                # Append tags
+                clean_just += f"\n[OFFSET:{new_start_index}]"
+                if ranges_str.strip():
+                    # Basic validation could go here
+                    clean_just += f"\n[RANGES:{ranges_str.strip()}]"
+                
+                record.ai_justification = clean_just
+                record.status = "READY_FOR_OCR"
+                session.commit()
+                
+                st.toast(f"Saved! Page 1 starts at index {new_start_index}")
+                time.sleep(1)
+                st.rerun()
+
+        st.sidebar.divider()
         
-        # --- NEW FUNCTIONALITY ---
+        # --- Management ---
         st.sidebar.subheader("Management")
-        if st.sidebar.button("🗑️ Mark as Duplicate / Complete", width="stretch", type="primary", key="sb_mark_comp"):
+        if st.sidebar.button("🗑️ Mark as Duplicate / Complete", width="stretch", key="sb_mark_comp"):
             record.status = "COMPLETED"
             record.ai_justification = "Manually archived from OCR Pipeline (Duplicate/Skipped)"
             session.commit()
