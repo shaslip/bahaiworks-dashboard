@@ -195,32 +195,39 @@ def render_merge_tab(docs):
 
         st.divider()
 
-        # --- Method B: ID Entry ---
         st.markdown("#### Option B: Direct ID Input")
         id_col1, id_col2, id_col3 = st.columns([1, 1, 1])
+        
         with id_col1:
-            cover_id_input = st.number_input("Cover ID", min_value=1, step=1, key="id_cov_in")
+            # CHANGED: Use text_input so there are no +/- buttons
+            cover_id_str = st.text_input("Cover ID", key="id_cov_in")
         with id_col2:
-            body_id_input = st.number_input("Body ID", min_value=1, step=1, key="id_bod_in")
+            body_id_str = st.text_input("Body ID", key="id_bod_in")
+            
         with id_col3:
             st.write("") # Spacer
             st.write("") # Spacer
             if st.button("🔗 Merge IDs", type="primary"):
-                if cover_id_input == body_id_input:
+                # 1. Validation
+                if not cover_id_str.isdigit() or not body_id_str.isdigit():
+                    st.error("Please enter valid numeric IDs.")
+                elif cover_id_str == body_id_str:
                     st.error("IDs must be different.")
                 else:
+                    cover_id = int(cover_id_str)
+                    body_id = int(body_id_str)
+
                     with Session(engine) as session:
-                        doc_cover = session.get(Document, cover_id_input)
-                        doc_body = session.get(Document, body_id_input)
+                        doc_cover = session.get(Document, cover_id)
+                        doc_body = session.get(Document, body_id)
                         
                         if not doc_cover or not doc_body:
-                            st.error("One or both IDs not found.")
+                            st.error(f"Could not find IDs: {cover_id}, {body_id}")
                         else:
-                            # Logic: Merge Cover INTO Body (Body keeps ID/Metadata)
-                            # Remove suffix if present to make clean name
+                            # 2. Merge Logic
                             clean_name = re.sub(r"\s*-\s*(Inhalt gesamt|Cover)", "", doc_body.filename, flags=re.IGNORECASE)
                             if not clean_name.endswith(".pdf"): clean_name += ".pdf"
-
+                            
                             new_path = os.path.join(os.path.dirname(doc_body.file_path), clean_name)
                             
                             if merge_pdf_pair(doc_cover.file_path, doc_body.file_path, new_path):
@@ -229,7 +236,11 @@ def render_merge_tab(docs):
                                 doc_cover.status = "COMPLETED"
                                 doc_cover.ai_justification = f"ID Merge: Merged into {doc_body.id}"
                                 session.commit()
-                                st.success(f"Merged IDs {cover_id_input} + {body_id_input} -> {clean_name}")
+                                
+                                # 3. Success Feedback
+                                st.toast(f"✅ Done! Merged {cover_id} + {body_id} -> {clean_name}")
+                                import time
+                                time.sleep(1.5) # Slight pause so you see the toast
                                 st.rerun()
                             else:
                                 st.error("Merge failed (file access error).")
