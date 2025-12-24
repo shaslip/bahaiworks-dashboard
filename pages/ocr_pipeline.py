@@ -17,7 +17,6 @@ st.set_page_config(page_title="OCR Assembly Line", layout="wide")
 
 st.title("🏭 OCR Assembly Line")
 
-@st.fragment
 def render_details(selected_id):
     with Session(engine) as session:
         record = session.get(Document, selected_id)
@@ -189,7 +188,7 @@ def render_prep_tab(docs):
         event = st.dataframe(
             queue_data,
             column_order=["ID", "Filename", "Priority", "Language"],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             selection_mode="single-row",
             on_select="rerun",
