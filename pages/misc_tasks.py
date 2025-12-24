@@ -1,5 +1,6 @@
 import streamlit as st
 import re
+import requests
 from src.mediawiki_uploader import upload_to_bahaiworks
 
 st.set_page_config(
@@ -15,6 +16,51 @@ if st.button("← Back to Dashboard"):
 st.markdown("---")
 
 tab_author, tab_book, tab_maintenance = st.tabs(["👤 Author Manager", "📖 Book Manager", "🔧 System Maintenance"])
+
+# --- Author page maintenance and exclusions ---
+AUTHORS_PAGE_HEADER = """{{header
+ | title      = Authors
+ | author     =
+ | translator =
+ | section    = 
+ | previous   = 
+ | next       = 
+ | notes      = Provided below is an incomplete, but growing list of Bahá’í authors and their works. Also included are authors who have published articles in books or periodicals such as [[World Order]]. 
+}}
+{| class="wikitable" style="float:right; margin-left: 10px;"
+! Number of listed authors
+|-
+| style="text-align:center;" | {{#expr: {{PAGESINCATEGORY:Authors-A}} + {{PAGESINCATEGORY:Authors-B}} + {{PAGESINCATEGORY:Authors-C}} + {{PAGESINCATEGORY:Authors-D}} + {{PAGESINCATEGORY:Authors-E}} + {{PAGESINCATEGORY:Authors-F}} + {{PAGESINCATEGORY:Authors-G}} + {{PAGESINCATEGORY:Authors-H}} + {{PAGESINCATEGORY:Authors-I}} + {{PAGESINCATEGORY:Authors-J}} + {{PAGESINCATEGORY:Authors-K}} + {{PAGESINCATEGORY:Authors-L}} + {{PAGESINCATEGORY:Authors-M}} + {{PAGESINCATEGORY:Authors-N}} + {{PAGESINCATEGORY:Authors-O}} + {{PAGESINCATEGORY:Authors-P}} + {{PAGESINCATEGORY:Authors-Q}} + {{PAGESINCATEGORY:Authors-R}} + {{PAGESINCATEGORY:Authors-S}} + {{PAGESINCATEGORY:Authors-T}} + {{PAGESINCATEGORY:Authors-U}} + {{PAGESINCATEGORY:Authors-V}} + {{PAGESINCATEGORY:Authors-W}} + {{PAGESINCATEGORY:Authors-X}} + {{PAGESINCATEGORY:Authors-Y}} + {{PAGESINCATEGORY:Authors-X}} }}
+|}
+* [[Author:Bahá’u’lláh|Bahá’u’lláh]]
+* [[Author:The Báb|The Báb]]
+* [[Author:‘Abdu’l-Bahá|‘Abdu’l-Bahá]]
+* [[Author:Shoghi Effendi|Shoghi Effendi]]
+* [[Author:Universal House of Justice|Universal House of Justice]]
+* [[Author:Institutional authors|Other institutional authors]]
+
+
+{{CompactTOC}}
+"""
+
+EXCLUSION_LIST = [
+    "Author:‘Abdu’l-Bahá", "Author:Association for Bahá’í Studies North America", "Author:The Báb",
+    "Author:Bahá’u’lláh", "Author:Bahá’í Canada Publications", "Author:Bahá’í International Community",
+    "Author:Bahá’í Publishing Trust, United States", "Author:Bahá’í World Centre",
+    "Author:Canadian Bahá’í Community National Office", "Author:Child Education Committee",
+    "Author:Shoghi Effendi", "Author:Steve Gregg", "Author:Marriage and Family Development Committee",
+    "Author:National Bahá’í Women’s group", "Author:National Bahá’í Youth Committee, United States",
+    "Author:National Community Development Committee", "Author:National Education Committee, United States",
+    "Author:National Programming Committee", "Author:National Reference Library Committee",
+    "Author:NSA, United Kingdom", "Author:National Spiritual Assembly of the United States",
+    "Author:National Spiritual Assembly of the British Isles", "Author:National Teaching Committee, United States",
+    "Author:Office of Public Information", "Author:Office of Social and Economic Development",
+    "Author:Office of the Treasurer, United States", "Author:Charles Mason Remey", "Author:Research Department",
+    "Author:Study Aids Committee, United States", "Author:Study Outline Committee, United States",
+    "Author:NSA, Australia", "Author:NSA, British Isles", "Author:NSA, United States",
+    "Author:NSA, United States and Canada", "Author:NSA, Iran", "Author:NSA, South Africa",
+    "Author:Universal House of Justice"
+]
 
 # --- HELPER FUNCTIONS ---
 
@@ -226,5 +272,82 @@ with tab_book:
                 except Exception as e:
                     st.error(f"Error: {e}")
 
+# --- TAB: MAINTENANCE ---
 with tab_maintenance:
-    st.write("Future database cleanup scripts or logs will go here.")
+    st.header("🔧 System Maintenance")
+    
+    st.subheader("Update 'Authors' Index Page")
+    st.info("Scans categories Authors-A through Authors-Z, formats the list, and updates the [[Authors]] page.")
+    
+    if st.button("🔄 Scan & Update [[Authors]]", type="primary"):
+        status_box = st.empty()
+        prog_bar = st.progress(0)
+        
+        full_wikitext = AUTHORS_PAGE_HEADER
+        
+        try:
+            # Iterate A-Z
+            letters = [chr(i) for i in range(ord('A'), ord('Z') + 1)]
+            
+            for i, letter in enumerate(letters):
+                status_box.write(f"Scanning Category:Authors-{letter}...")
+                
+                # Fetch members via public API (faster, no auth needed for read)
+                cat_url = "https://bahai.works/api.php"
+                params = {
+                    'action': 'query',
+                    'list': 'categorymembers',
+                    'cmtitle': f'Category:Authors-{letter}',
+                    'format': 'json',
+                    'cmlimit': 'max'
+                }
+                
+                # Retrieve all pages in category
+                members = []
+                while True:
+                    resp = requests.get(cat_url, params=params).json()
+                    members.extend([p['title'] for p in resp.get('query', {}).get('categorymembers', [])])
+                    if 'continue' not in resp:
+                        break
+                    params['cmcontinue'] = resp['continue']['cmcontinue']
+                
+                # Filter exclusions
+                valid_members = [m for m in members if m not in EXCLUSION_LIST]
+                
+                # Only write header if we have content (Fixes "Problem 3")
+                if valid_members:
+                    full_wikitext += f"==== {letter} ====\n"
+                    
+                    for page_title in valid_members:
+                        # Strip "Author:" prefix for the display name logic
+                        clean_name = page_title.replace("Author:", "")
+                        
+                        # Use our robust parser (Fixes "Problem 2")
+                        display_name = get_lastname_firstname(clean_name)
+                        
+                        full_wikitext += f"* [[{page_title}|{display_name}]]\n"
+                    
+                    full_wikitext += "\n\n"
+                
+                prog_bar.progress((i + 1) / 26)
+
+            # Upload
+            status_box.write("Uploading result...")
+            
+            # Using your existing uploader with overwrite protection DISABLED 
+            # (because we WANT to update this specific index page)
+            upload_to_bahaiworks(
+                "Authors", 
+                full_wikitext, 
+                "Automated update of Authors index (Maintenance Tool)", 
+                check_exists=False 
+            )
+            
+            status_box.success("✅ [[Authors]] page has been updated!")
+            st.balloons()
+            
+            with st.expander("View Generated Source"):
+                st.code(full_wikitext, language="mediawiki")
+
+        except Exception as e:
+            status_box.error(f"Error: {e}")
