@@ -4,17 +4,12 @@ import subprocess
 import platform
 import os
 import re
-import glob
 from sqlalchemy.orm import Session
 from sqlalchemy import select, desc
 from src.evaluator import evaluate_document, translate_summary
-
-# Local imports
 from src.database import engine, Document
 from src.processor import extract_preview_images
 from src.evaluator import evaluate_document
-# NEW IMPORT:
-from src.ocr_engine import OcrEngine, OcrConfig
 
 # --- Configuration ---
 st.set_page_config(
@@ -142,7 +137,7 @@ def render_details(selected_id):
         st.divider()
 
         # === TABS ===
-        tab_ai, tab_ocr, tab_pub = st.tabs(["🤖 AI Analyst", "🏭 OCR Factory", "📝 Publisher"])
+        tab_ai, tab_pub = st.tabs(["🤖 AI Analyst", "📝 Publisher"])
 
         # -------------------------
         # TAB 1: AI EVALUATION
@@ -203,80 +198,7 @@ def render_details(selected_id):
                                 st.rerun()
 
         # -------------------------
-        # TAB 2: OCR FACTORY
-        # -------------------------
-        with tab_ocr:
-            ocr = OcrEngine(record.file_path)
-            
-            # 1. Image Generation Check
-            has_images = os.path.exists(ocr.cache_dir) and len(glob.glob(os.path.join(ocr.cache_dir, "*.png"))) > 0
-            
-            if not has_images:
-                st.info("Step 1: Generate PNGs from PDF.")
-                if st.button("📸 Generate Images", type="primary"):
-                    with st.spinner("Running pdftoppm..."):
-                        count = ocr.generate_images()
-                        st.success(f"Generated {count} images!")
-                        st.rerun()
-            else:
-                st.success("✅ Images Ready")
-                
-                # Spot Checker
-                with st.expander("🔍 Spot Checker (Verify Pages)"):
-                    check_page = st.number_input("Check Page #", min_value=1, value=1)
-                    images = sorted(glob.glob(os.path.join(ocr.cache_dir, "*.png")), key=ocr._natural_sort_key)
-                    if 0 <= check_page-1 < len(images):
-                        st.image(images[check_page-1], caption=f"Image {check_page}")
-                    else:
-                        st.error("Page out of range")
-
-                # Configuration Form
-                with st.form("ocr_config_form"):
-                    st.subheader("Step 2: Configuration")
-                    
-                    lang_opts = ["eng", "fas", "deu", "fra", "spa", "rus"]
-                    default_idx = 0
-                    if record.language and "German" in record.language: default_idx = 2
-                    if record.language and "Persian" in record.language: default_idx = 1
-                    
-                    sel_lang = st.selectbox("Language", lang_opts, index=default_idx)
-                    has_cover = st.checkbox("Has Cover Image?", value=True)
-                    first_num = st.number_input("Start of 'Page 1'", min_value=1, value=14, 
-                                                help="The image number where the printed 'Page 1' begins.")
-                    illus_text = st.text_input("Illustration Ranges", placeholder="e.g. 48-55, 102-105", 
-                                               help="Ranges will be labeled 'illus.X'")
-                    
-                    submitted = st.form_submit_button("🚀 Start OCR Job", type="primary")
-                
-                if submitted:
-                    ranges = parse_ranges(illus_text)
-                    config = OcrConfig(
-                        has_cover_image=has_cover,
-                        first_numbered_page_index=int(first_num),
-                        illustration_ranges=ranges,
-                        language=sel_lang
-                    )
-                    
-                    progress_bar = st.progress(0, text="Starting Tesseract...")
-                    
-                    def update_prog(curr, total):
-                        progress_bar.progress(curr / total, text=f"Processing Page {curr}/{total}")
-
-                    try:
-                        final_path = ocr.run_ocr(config, progress_callback=update_prog)
-                        st.success(f"OCR Complete! Saved to: {os.path.basename(final_path)}")
-                        record.status = "DIGITIZED"
-                        session.commit()
-                        
-                        if st.button("🧹 Cleanup Temp Images"):
-                            ocr.cleanup()
-                            st.rerun()
-                            
-                    except Exception as e:
-                        st.error(f"OCR Failed: {e}")
-
-        # -------------------------
-        # TAB 3: PUBLISHER (NEW)
+        # TAB 2: PUBLISHER (NEW)
         # -------------------------
         with tab_pub:
             st.subheader("🌐 Wikitext Generator")
