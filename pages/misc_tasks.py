@@ -14,7 +14,7 @@ if st.button("← Back to Dashboard"):
 
 st.markdown("---")
 
-tab_author, tab_maintenance = st.tabs(["👤 Author Manager", "🔧 System Maintenance"])
+tab_author, tab_book, tab_maintenance = st.tabs(["👤 Author Manager", "📖 Book Manager", "🔧 System Maintenance"])
 
 # --- HELPER FUNCTIONS ---
 
@@ -88,6 +88,12 @@ def format_author_cat_page(name):
 def format_works_cat_page(name):
     """Generates content for Category:Text_of_works_by_Name"""
     return f"{{{{Textof_desc}}}}\n[[Category:{name}]]"
+
+def format_ac_message(title, cover_file):
+    return f"""{{{{AC-Template
+| title    = {title}
+| cover    = {cover_file}
+}}}}"""
 
 # --- TAB: AUTHOR MANAGER ---
 
@@ -182,6 +188,43 @@ with tab_author:
                     prog.empty()
                 except Exception as e:
                     status.error(f"Error: {e}")
+
+# --- TAB: BOOK MANAGER ---
+with tab_book:
+    st.header("Book Utilities")
+    
+    st.subheader("Copyright AC-Message Creator")
+    st.info("Creates the /AC-Message subpage required for copyright-protected works.")
+    
+    col_b1, col_b2 = st.columns(2)
+    
+    with col_b1:
+        bk_title = st.text_input("Book Title (Page Name)", placeholder="e.g. My_Book_Title")
+        # Helper to suggest cover name if title is entered
+        suggested_cover = f"{bk_title}.png" if bk_title else ""
+        bk_cover = st.text_input("Cover Image Filename", value=suggested_cover, placeholder="e.g. My_Book_Title.png")
+    
+    with col_b2:
+        if bk_title and bk_cover:
+            target_page = f"{bk_title.strip()}/AC-Message"
+            ac_content = format_ac_message(bk_title.strip(), bk_cover.strip())
+            
+            st.markdown(f"**Target:** `{target_page}`")
+            st.code(ac_content, language="mediawiki")
+            
+            if st.button("🚀 Create AC-Message Page", type="primary"):
+                try:
+                    upload_to_bahaiworks(
+                        target_page, 
+                        ac_content, 
+                        "Created AC-Message (Misc Tool)", 
+                        check_exists=True
+                    )
+                    st.success(f"✅ Created {target_page}")
+                except FileExistsError:
+                    st.error(f"⚠️ Page '{target_page}' already exists.")
+                except Exception as e:
+                    st.error(f"Error: {e}")
 
 with tab_maintenance:
     st.write("Future database cleanup scripts or logs will go here.")
