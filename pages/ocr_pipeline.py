@@ -64,13 +64,10 @@ def render_merge_tab(docs):
 
             if partner_name in doc_map:
                 partner = doc_map[partner_name]
-                cover = d if "cover" in current_type else partner
-                content = partner if "cover" in current_type else d
-                
                 matches.append({
                     "base_name": base_name,
-                    "cover": cover,
-                    "content": content
+                    "cover": d if "cover" in current_type else partner,
+                    "content": partner if "cover" in current_type else d
                 })
                 processed_ids.add(d.id)
                 processed_ids.add(partner.id)
@@ -79,42 +76,31 @@ def render_merge_tab(docs):
         else:
             singles.append(d)
 
-    # 2. Review Table (Auto-Matches)
+    # 2. Review Table (Spreadsheet Style)
     st.subheader(f"🧩 Proposed Merges ({len(matches)})")
     
     if matches:
-        # Header
-        h1, h2, h3, h4 = st.columns([1, 2, 2, 1])
-        h1.caption("Target Name")
-        h2.caption("Cover File")
-        h3.caption("Content File")
-        h4.caption("Actions")
+        # Table Headers
+        h1, h2, h3, h4 = st.columns([2, 2, 2, 1])
+        h1.caption("**Target Filename**")
+        h2.caption("**Cover Source**")
+        h3.caption("**Content Source**")
+        h4.caption("**Action**")
         st.divider()
 
-        # Rows
+        # Table Rows
         for i, m in enumerate(matches):
-            c1, c2, c3, c4 = st.columns([1, 2, 2, 1])
+            c1, c2, c3, c4 = st.columns([2, 2, 2, 1])
+            c1.write(f"**{m['base_name']}**")
+            c2.write(m['cover'].filename)
+            c3.write(m['content'].filename)
             
-            c1.markdown(f"**{m['base_name']}**")
-            
-            # Cover Column
-            c2.write(f"📄 {m['cover'].filename}")
-            if c2.button("Open", key=f"open_cov_{i}"):
-                open_local_file(m['cover'].file_path)
-            
-            # Content Column
-            c3.write(f"📄 {m['content'].filename}")
-            if c3.button("Open", key=f"open_con_{i}"):
-                open_local_file(m['content'].file_path)
-                
-            # Quick folder access
-            if c4.button("📂 Folder", key=f"fold_{i}"):
+            if c4.button("📂 Folder", key=f"f_{i}"):
                 open_local_file(os.path.dirname(m['content'].file_path))
-            
-            st.divider()
+                
+        st.divider()
 
-        # 3. Bulk Action
-        st.success(f"System has identified {len(matches)} pairs ready for merging.")
+        # Bulk Action
         if st.button("🚀 Confirm & Merge All Pairs", type="primary"):
             progress = st.progress(0)
             merged_count = 0
@@ -125,53 +111,39 @@ def render_merge_tab(docs):
                 
                 if merge_pdf_pair(m['cover'].file_path, m['content'].file_path, new_path):
                     with Session(engine) as session:
-                        # Master = Content doc (inherits metadata)
                         master = session.get(Document, m['content'].id)
                         secondary = session.get(Document, m['cover'].id)
                         
                         master.file_path = new_path
                         master.filename = new_filename
-                        
                         secondary.status = "COMPLETED"
                         secondary.ai_justification = f"Merged into {master.id}"
                         session.commit()
                     merged_count += 1
-                
                 progress.progress((idx + 1) / len(matches))
             
-            st.success(f"Successfully merged {merged_count} documents!")
+            st.success(f"Merged {merged_count} documents!")
             st.rerun()
 
-    else:
-        st.info("No auto-merge pairs detected.")
-
-    # 4. Unmatched Files (Improved)
+    # 3. Unmatched Files (Searchable)
     st.subheader(f"📂 Unmatched Files ({len(singles)})")
     
     with st.expander("Manual Merge Tools", expanded=False):
-        # Filter mechanism to handle large lists
         filter_text = st.text_input("🔍 Search Unmatched Files", placeholder="Type year or title...").lower()
-        
-        filtered_singles = [d for d in singles if filter_text in d.filename.lower()] if filter_text else singles
-        
-        # Limit display to prevent UI lag if list is huge
-        if len(filtered_singles) > 100 and not filter_text:
-            st.warning(f"Showing first 100 of {len(filtered_singles)} files. Use search to refine.")
-            filtered_singles = filtered_singles[:100]
+        filtered = [d for d in singles if filter_text in d.filename.lower()] if filter_text else singles[:100]
 
         mc1, mc2 = st.columns(2)
         with mc1:
-            sel_cover = st.selectbox("Cover", filtered_singles, format_func=lambda x: x.filename, key="m_cov")
+            sel_cover = st.selectbox("Cover", filtered, format_func=lambda x: x.filename, key="m_cov")
         with mc2:
-            sel_content = st.selectbox("Content", filtered_singles, format_func=lambda x: x.filename, key="m_con")
+            sel_content = st.selectbox("Content", filtered, format_func=lambda x: x.filename, key="m_con")
             
         if st.button("Merge Selected Pair"):
             if sel_cover and sel_content and sel_cover.id != sel_content.id:
-                # Manual merge logic implementation would go here
+                # Manual merge implementation
                 pass
             else:
                 st.error("Invalid selection.")
-
 # --- TAB 2: PREP (Calibration & Splitting) ---
 def render_prep_tab(docs):
     st.header("Step 2: Calibration & Splitting")
