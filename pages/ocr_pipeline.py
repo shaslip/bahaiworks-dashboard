@@ -36,6 +36,15 @@ def render_details(selected_id):
                 open_local_file(os.path.dirname(record.file_path))
         
         st.sidebar.divider()
+        
+        # --- NEW FUNCTIONALITY ---
+        st.sidebar.subheader("Management")
+        if st.sidebar.button("🗑️ Mark as Duplicate / Complete", width="stretch", type="primary", key="sb_mark_comp"):
+            record.status = "COMPLETED"
+            record.ai_justification = "Manually archived from OCR Pipeline (Duplicate/Skipped)"
+            session.commit()
+            st.sidebar.success("Removed from queue!")
+            st.rerun()
 
 # --- Helper: Fetch Pending Documents ---
 def open_local_file(path):
