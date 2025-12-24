@@ -17,6 +17,27 @@ st.set_page_config(page_title="OCR Assembly Line", layout="wide")
 
 st.title("🏭 OCR Assembly Line")
 
+@st.fragment
+def render_details(selected_id):
+    with Session(engine) as session:
+        record = session.get(Document, selected_id)
+        if not record:
+            st.error("Document not found.")
+            return
+
+        st.sidebar.header("📄 Document Details")
+        st.sidebar.write(f"**Filename:** {record.filename}")
+        
+        b1, b2 = st.sidebar.columns(2)
+        with b1:
+            if st.button("📄 Open File", width="stretch", key="sb_open_file"):
+                open_local_file(record.file_path)
+        with b2:
+            if st.button("📂 Open Folder", width="stretch", key="sb_open_folder"):
+                open_local_file(os.path.dirname(record.file_path))
+        
+        st.sidebar.divider()
+
 # --- Helper: Fetch Pending Documents ---
 def open_local_file(path):
     if os.path.exists(path):
@@ -151,10 +172,12 @@ def render_prep_tab(docs):
     st.header("Step 2: Calibration & Splitting")
     st.info("Analyze page offsets and detect/split double-page spreads.")
 
-    # 1. Queue Review Table
+    # 1. Queue Review Table with Selection
     st.subheader(f"📋 Document Queue ({len(docs)} files)")
+    
+    selected_doc_id = None
+    
     if docs:
-        # Create lightweight list of dicts for display
         queue_data = [{
             "ID": d.id,
             "Filename": d.filename,
@@ -162,19 +185,34 @@ def render_prep_tab(docs):
             "Language": d.language
         } for d in docs]
         
-        st.dataframe(
+        # Enable selection
+        event = st.dataframe(
             queue_data,
             column_order=["ID", "Filename", "Priority", "Language"],
             use_container_width=True,
-            hide_index=True
+            hide_index=True,
+            selection_mode="single-row",
+            on_select="rerun",
+            key="prep_queue_table"
         )
+        
+        # Capture Selection
+        if len(event.selection['rows']) > 0:
+            idx = event.selection['rows'][0]
+            selected_doc_id = queue_data[idx]["ID"]
+            
     else:
         st.warning("No documents ready for processing. Check Step 1.")
         return
 
     st.divider()
 
-    # 2. Analysis Action
+    # 2. Render Sidebar if Selected
+    if selected_doc_id:
+        render_details(selected_doc_id)
+    else:
+        st.sidebar.info("Select a document in the table to view details.")
+
     if st.button("🕵️ Run Analysis on All Files", type="primary"):
         progress = st.progress(0)
         results = []
