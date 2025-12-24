@@ -181,7 +181,7 @@ def render_prep_tab(docs):
     
     selected_doc_id = None
     
-    if batch_docs:
+    if display_batch:
         queue_data = [{
             "ID": d.id,
             "Filename": d.filename,
