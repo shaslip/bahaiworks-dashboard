@@ -8,8 +8,14 @@ st.set_page_config(layout="wide", page_title="Chapter Manager")
 st.title("📑 Chapter Item Manager")
 st.caption("Review and create Wikibase items for book chapters/articles.")
 
-if st.button("⬅️ Back to Dashboard"):
-    st.switch_page("app.py")
+with st.expander("ℹ️ Help / Instructions"):
+    st.markdown("""
+    ** This tool allows you to define that a certain book chapter is authored by someone other than the author of the book. 
+    Typically this is used in the case of a book that is a collection of scholarly articles or papers. Defining the relationship
+    in this way allows us to:
+    * ** Automatically list the chapters an individual has authored in works compiled by others
+    * ** When users search the text of works by a certain author, they are also shown the chapters they have authored
+    """)
 
 st.divider()
 
