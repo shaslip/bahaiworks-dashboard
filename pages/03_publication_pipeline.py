@@ -346,8 +346,19 @@ elif st.session_state.pipeline_stage == "proof":
                     p_name = row["Page Name (URL)"]
                     d_title = row["Display Title"]
                     prefix = row["Prefix"]
-                    level = int(row["Level"])
                     
+                    # --- FIX: Safe Cast for Level ---
+                    # Handles empty rows, None, or NaN values without crashing
+                    raw_level = row["Level"]
+                    try:
+                        if pd.isna(raw_level) or raw_level == "":
+                            level = 1
+                        else:
+                            level = int(raw_level)
+                    except (ValueError, TypeError):
+                        level = 1
+                    # -------------------------------
+
                     if prefix is None: prefix = ""
                     
                     updated_toc_list.append({
@@ -365,7 +376,6 @@ elif st.session_state.pipeline_stage == "proof":
                     
                     if level == 1:
                         # Logic A: Level 1 (Chapters / Sections)
-                        # If Page Name is empty, treat as CONTAINER (Plain Text)
                         if not p_name or not p_name.strip():
                             current_section_is_container = True
                             computed_toc_wikitext += f"\n:{prefix}{d_title}" 
@@ -374,7 +384,6 @@ elif st.session_state.pipeline_stage == "proof":
                             computed_toc_wikitext += f"\n:{prefix}[[/{p_name}|{d_title}]]" 
                     else:
                         # Logic B: Sub-sections (Level 2+)
-                        # Link IF: (It has an explicit author) OR (We are inside a Container)
                         should_link = (len(auth_list) > 0) or current_section_is_container
                         
                         if should_link:
