@@ -507,7 +507,7 @@ def render_exec_tab():
                 output_path = engine_instance.run_ocr(config)
                 
                 # Cleanup
-                engine_instance.cleanup()
+                engine_instance.cleanup(config)
                 
                 # --- D. Update Database ---
                 with Session(engine) as session:
