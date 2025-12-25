@@ -17,17 +17,6 @@ st.set_page_config(layout="wide", page_title="Publication Pipeline")
 def generate_header(title, author, year, language, is_copyright, filename):
     """Generates the appropriate MediaWiki header based on Language/Copyright."""
     
-    # 1. Access Control (Copyright)
-    access_tag = ""
-    if is_copyright:
-        # English style: <accesscontrol>
-        # German style: == Zugang == (handled in body, but we'll flag it here if needed)
-        if language == "English":
-            group = title.replace(" ", "")
-            access_tag = f"<accesscontrol>Access:{group}</accesscontrol>"
-        # Note: German usually puts access info in the body, handled in the preview generation.
-
-    # 2. Base Header Template
     if language == "German":
         # German Template
         header = f"""{{{{header
@@ -42,15 +31,19 @@ def generate_header(title, author, year, language, is_copyright, filename):
 }}}}"""
     else:
         # English Template
-        header = f"""{access_tag}{{{{header
+        header = f"""{{{{header
  | title      = {title}
  | author     = {author}
  | translator = 
+ | compiler   = 
  | section    = 
  | previous   = 
  | next       = 
+ | publisher  = 
  | year       = {year}
  | notes      = 
+ | categories = All publications/Books
+ | portal     = 
 }}}}"""
 
     return header
@@ -182,7 +175,9 @@ elif st.session_state.pipeline_stage == "proof":
         
         # --- TAB 1: METADATA ---
         with t1:
-            c_talk, c_json = st.columns(2)
+            c_talk, c_item, c_toc = st.columns(3)
+            
+            # COLUMN 1: TALK PAGE
             with c_talk:
                 st.subheader(f"Talk:{st.session_state['target_page']}")
                 talk_text = st.text_area("Copyright / Talk Page Text", value=st.session_state.get("talk_text", ""), height=500, key="talk_edit")
@@ -198,9 +193,10 @@ elif st.session_state.pipeline_stage == "proof":
                         st.success("✅ Uploaded")
                     except Exception as e: st.error(str(e))
 
-            with c_json:
-                st.subheader("Wikibase Item (JSON)")
-                json_text = st.text_area("JSON", value=st.session_state.get("meta_json_str", "{}"), height=500, key="meta_edit")
+            # COLUMN 2: WIKIBASE ITEM
+            with c_item:
+                st.subheader("Wikibase Item")
+                json_text = st.text_area("Item JSON", value=st.session_state.get("meta_json_str", "{}"), height=500, key="meta_edit")
                 
                 c_btn1, c_btn2 = st.columns(2)
                 with c_btn1:
@@ -216,6 +212,24 @@ elif st.session_state.pipeline_stage == "proof":
                             ok, msg = set_sitelink(st.session_state["parent_qid"], st.session_state['target_page'])
                             if ok: st.success("Linked")
                             else: st.error(msg)
+
+            # COLUMN 3: TOC JSON (NEW)
+            with c_toc:
+                st.subheader("TOC JSON (Source)")
+                # Get current state of TOC list to display
+                current_toc = st.session_state.get("toc_json_list", [])
+                toc_str = json.dumps(current_toc, indent=2)
+                
+                # We use a key that updates if the list changes elsewhere to keep them in sync
+                # (e.g. if you edit in Tab 2, this box updates)
+                toc_edit_text = st.text_area("Structure Data", value=toc_str, height=500, key=f"toc_edit_{len(current_toc)}")
+                
+                if st.button("💾 Update Content Tab", type="secondary", width="stretch"):
+                    try:
+                        st.session_state["toc_json_list"] = json.loads(toc_edit_text)
+                        st.success("TOC List Updated! Check Tab 2.")
+                    except Exception as e:
+                        st.error(f"Invalid JSON: {e}")
 
         # --- TAB 2: CONTENT ---
         with t2:
@@ -323,7 +337,7 @@ elif st.session_state.pipeline_stage == "proof":
                 # 1. Get Base Header
                 header_text = generate_header(
                     title=st.session_state["target_page"],
-                    author="[Author]",
+                    author="[Author]", 
                     year="[Year]",
                     language=pub_language,
                     is_copyright=is_copyright,
@@ -331,11 +345,22 @@ elif st.session_state.pipeline_stage == "proof":
                 )
                 
                 # 2. Add {{restricted use}} PREPEND if Copyright
-                # (Only on the main book page)
                 if is_copyright:
                     header_text = "{{restricted use|where=|until=}}\n" + header_text
 
-                full_wikitext = header_text + "\n\n===Contents===\n" + computed_toc_wikitext
+                # 3. Add {{book}} template (ONLY FOR BOOKS)
+                book_template = """
+{{book
+ | color = 656258
+ | image = 
+ | downloads = 
+ | translations = 
+ | pages = 
+ | links = 
+}}"""
+                
+                # 4. Assemble
+                full_wikitext = header_text + book_template + "\n\n===Contents===\n" + computed_toc_wikitext
                 st.code(full_wikitext, language="mediawiki")
 
             # --- COLUMN 3: ACTIONS ---
