@@ -18,8 +18,8 @@ with st.expander("ℹ️ Help / Instructions"):
     **1. Author Manager**
     * **Batch Creation:** Paste a list of author names (comma-separated) to create their pages in bulk.
     * **Modes:**
-        * *Dynamic:* Uses a Lua module to automatically list all chapters/books by this author. (Recommended)
-        * *Static:* Hard-codes a link to a specific book. Use this only for authors with a single major work.
+        * *Dynamic:* Uses a Lua module to automatically list all chapters by this author in the works of others.
+        * *Static:* Hard-codes a link to a specific book. Use this for authors with a single major work.
     * **Bahaidata:** This tool automatically creates the Bahaidata item for the author (if missing) and links it to the new Bahai.works page.
 
     **2. Book Manager**
