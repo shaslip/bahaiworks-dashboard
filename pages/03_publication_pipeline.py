@@ -2,6 +2,7 @@ import streamlit as st
 import os
 import re
 import json
+import hashlib
 import pandas as pd
 from sqlalchemy.orm import Session
 from src.database import engine, Document
@@ -236,8 +237,8 @@ elif st.session_state.pipeline_stage == "proof":
                 
                 # CHANGED: ensure_ascii=False fixes the "Bah\u00e1\u2019\u00ed" issue
                 toc_str = json.dumps(current_toc, indent=2, ensure_ascii=False)
-                
-                toc_edit_text = st.text_area("Structure Data", value=toc_str, height=500, key=f"toc_edit_{len(current_toc)}")
+                content_hash = hashlib.md5(toc_str.encode('utf-8')).hexdigest()
+                toc_edit_text = st.text_area("Structure Data", value=toc_str, height=500, key=f"toc_edit_{content_hash}")
                 
                 if st.button("💾 Update Content Tab", type="secondary", width="stretch"):
                     try:
@@ -248,6 +249,7 @@ elif st.session_state.pipeline_stage == "proof":
                             del st.session_state["chapter_df"]
                             
                         st.success("TOC List Updated! Check Tab 2.")
+                        st.rerun() # Force immediate refresh
                     except Exception as e:
                         st.error(f"Invalid JSON: {e}")
 
