@@ -279,10 +279,10 @@ elif st.session_state.pipeline_stage == "proof":
             if st.button(f"1. Create {target_title}", type="primary", width='stretch'):
                 try:
                     upload_to_bahaiworks(
-                        target_title, 
-                        full_wikitext, 
-                        "Setup (Book Pipeline)", 
-                        check_exists=True 
+                        target_title,
+                        full_wikitext,
+                        "Setup (Book Pipeline)",
+                        check_exists=True
                     )
                     st.success(f"✅ Created {target_title}")
                 except FileExistsError:
@@ -302,46 +302,17 @@ elif st.session_state.pipeline_stage == "proof":
                         if success: st.success("✅ Linked")
                         else: st.error(msg)
                     except Exception as e: st.error(str(e))
-
-            # ACTION 3: Create & Connect Chapter Items
-            if st.button("Create and connect chapter items", type="primary", width='stretch'):
-                if not parent_qid: st.error("Need Parent QID")
-                else:
-                    try:
-                        with st.spinner("Processing..."):
-                            # FILTER: Only process Level 1 items for Wikibase
-                            items_to_import = [x for x in updated_toc_list if x.get('level', 1) == 1]
-                            
-                            # This uses 'title' (Display Title) for Wikibase Label
-                            logs, created_map = import_chapters_to_wikibase(parent_qid, items_to_import)
-                            
-                            # Lookup: Display Title -> Page Name
-                            title_to_url = {x['title']: x['page_name'] for x in items_to_import}
-                            
-                            link_logs = []
-                            for item in created_map:
-                                qid = item['qid']
-                                d_title = item['title'] 
-                                
-                                url_slug = title_to_url.get(d_title, d_title)
-                                full_page_url = f"{target_title}/{url_slug}"
-                                
-                                success, msg = set_sitelink(qid, full_page_url)
-                                if success: link_logs.append(f"🔗 {qid}->{url_slug}")
-                                else: link_logs.append(f"❌ Fail {qid}")
-                            
-                            st.success(f"✅ Processed {len(created_map)} Chapters (Ignored {len(updated_toc_list) - len(items_to_import)} subtopics)")
-                            with st.expander("Logs"):
-                                st.write(logs)
-                                st.write(link_logs)
-                    except Exception as e: st.error(str(e))
             
             st.markdown("---")
             if st.button("🏁 Proceed to Splitter", width='stretch'):
                 st.session_state["toc_map"] = updated_toc_list
+
                 if "splitter_indices" in st.session_state:
                     del st.session_state["splitter_indices"]
-                    
+
+                if "split_completed" in st.session_state:
+                    del st.session_state["split_completed"]
+
                 st.session_state.pipeline_stage = "split"
                 st.rerun()
 
