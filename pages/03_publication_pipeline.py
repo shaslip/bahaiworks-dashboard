@@ -415,6 +415,10 @@ elif st.session_state.pipeline_stage == "proof":
                 filename=filename
             )
             
+            # Prepend Restricted Use if needed
+            if is_copyright:
+                header_text = "{{restricted use|where=|until=}}\n" + header_text
+            
             wiki_body = ""
             if pub_type == "Periodical":
                 wiki_body = f"<pdf>File:{filename}</pdf>"
