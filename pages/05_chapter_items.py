@@ -18,25 +18,24 @@ if "chapter_data_df" not in st.session_state:
     if "chapter_review_data" in st.session_state:
         raw_list = st.session_state["chapter_review_data"]
         
-        # Flatten for the Editor (Authors list -> String)
+        # Flatten for the Editor
         flat_data = []
         for item in raw_list:
             auth_str = ", ".join(item.get("author", []))
             
-            # Default logic: The Item Label is the Title. The Link Target is the Page Name.
             flat_data.append({
-                "Title": item.get("title", ""),
-                "Authors": auth_str,
-                "Page Range": item.get("page_range", ""),
                 "Page Name (Slug)": item.get("page_name", ""),
-                "QID (Existing)": "" 
+                "Item Label": item.get("title", ""),
+                "Authors": auth_str,
+                "Pages": item.get("page_range", "")
             })
         st.session_state["chapter_data_df"] = pd.DataFrame(flat_data)
         st.success(f"Loaded {len(flat_data)} items from pipeline.")
     else:
         st.info("No pipeline data found. Starting with empty table.")
+        # Initialize with specific column order
         st.session_state["chapter_data_df"] = pd.DataFrame(
-            columns=["Title", "Authors", "Page Range", "Page Name (Slug)", "QID (Existing)"]
+            columns=["Page Name (Slug)", "Item Label", "Authors", "Pages"]
         )
 
 # --- 2. Context Inputs ---
@@ -50,7 +49,7 @@ st.markdown("---")
 
 # --- 3. The Data Editor ---
 st.subheader("Review Items")
-st.info("Rows with a 'QID' will be linked. Rows without a 'QID' will be CREATED as new items.")
+st.info("Edit the table below. If 'Item Label' is blank, we will use 'Page Name' as the label.")
 
 df = st.session_state["chapter_data_df"]
 
@@ -59,11 +58,25 @@ edited_df = st.data_editor(
     num_rows="dynamic",
     width='stretch',
     column_config={
-        "Title": st.column_config.TextColumn("Item Label (Wikibase)", width="large"),
-        "Authors": st.column_config.TextColumn("Authors (comma sep)", width="medium"),
-        "Page Range": st.column_config.TextColumn("Pages", width="small"),
-        "Page Name (Slug)": st.column_config.TextColumn("Page Name (URL Slug)", width="medium", help="The actual page name on Bahai.works."),
-        "QID (Existing)": st.column_config.TextColumn("QID (Optional)", width="small", help="If filled, we skip creation and just link."),
+        "Page Name (Slug)": st.column_config.TextColumn(
+            "Page Name (URL Slug)", 
+            width="medium", 
+            help="The part of the URL after the book title."
+        ),
+        "Item Label": st.column_config.TextColumn(
+            "Item Label (Wikibase)", 
+            width="medium",
+            help="The name of the item in the database. Leave blank to use Page Name."
+        ),
+        "Authors": st.column_config.TextColumn(
+            "Authors", 
+            width="medium"
+        ),
+        "Pages": st.column_config.TextColumn(
+            "Pages", 
+            width="small",
+            placeholder="e.g. 4-6"
+        )
     }
 )
 
@@ -82,24 +95,31 @@ if st.button("🚀 Process Items (Create & Link)", type="primary"):
     # Reconstruct standard list format for the importer
     process_list = []
     for idx, row in edited_df.iterrows():
-        if not row["Title"]: continue
+        p_name = row["Page Name (Slug)"]
+        
+        # Skip rows with no identifier
+        if not p_name and not row["Item Label"]: 
+            continue
+        
+        # Logic: If Item Label is blank, fallback to Page Name
+        final_label = row["Item Label"] if row["Item Label"].strip() else p_name
         
         # Parse Authors
         raw_auth = str(row["Authors"])
         auth_list = [a.strip() for a in raw_auth.split(",") if a.strip()]
         
         item_dict = {
-            "title": row["Title"],
-            "display_title": row["Title"], # Use Title as Display Title for fallback
+            "title": final_label,        # Used for Item Label
+            "display_title": final_label,
             "author": auth_list,
-            "page_range": row["Page Range"],
-            "page_name": row["Page Name (Slug)"],
-            "qid": row["QID (Existing)"] 
+            "page_range": row["Pages"],
+            "page_name": p_name,         # Used for URL
+            "qid": ""                    # Always empty -> Always create new
         }
         process_list.append(item_dict)
 
-    # 1. Run Import (Creates missing QIDs)
-    with st.spinner("Creating/Updating Wikibase Items..."):
+    # 1. Run Import (Creates QIDs)
+    with st.spinner("Creating Wikibase Items..."):
         try:
             logs, created_map = import_chapters_to_wikibase(parent_qid, process_list)
             st.write("### Import Logs")
@@ -116,12 +136,9 @@ if st.button("🚀 Process Items (Create & Link)", type="primary"):
         total = len(created_map)
         for i, item in enumerate(created_map):
             qid = item.get('qid')
-            
-            # CRITICAL: Use the Slug from the editor
             page_slug = item.get('page_name') 
             
             if qid and page_slug and base_title:
-                # Construct the actual URL
                 full_url = f"{base_title}/{page_slug}"
                 
                 success, msg = set_sitelink(qid, full_url)
