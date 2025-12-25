@@ -257,11 +257,12 @@ elif st.session_state.pipeline_stage == "proof":
             if "toc_json_list" not in st.session_state:
                 st.session_state["toc_json_list"] = []
 
-            # 2. Build the Working DataFrame (ONLY ONCE or if forced refresh)
-            # This prevents the "refresh loop" bug by keeping the DF stable in session state.
+            # 2. Build the Static Initial DataFrame (ONLY ONCE)
             if "chapter_df" not in st.session_state:
                 raw_data = []
-                for item in st.session_state.get("toc_json_list", []):
+                toc_source = st.session_state.get("toc_json_list", [])
+                
+                for i, item in enumerate(toc_source):
                     original_title = item.get("title", "")
                     level = item.get("level", 1) 
                     prefix = item.get("prefix", "")
@@ -276,6 +277,27 @@ elif st.session_state.pipeline_stage == "proof":
                     p_name = item.get("page_name", clean_title)
                     d_title = item.get("display_title", clean_title)
                     if p_name and p_name.isupper(): p_name = p_name.title()
+
+                    # --- RESTORED LOGIC: Smart Container Detection ---
+                    # If Level 1, look ahead for authored children.
+                    if level == 1:
+                        has_authored_children = False
+                        for j in range(i + 1, len(toc_source)):
+                            next_item = toc_source[j]
+                            next_level = next_item.get("level", 1)
+                            
+                            if next_level == 1: break # Hit next sibling
+                            
+                            # If child has authors, parent is a Container
+                            child_authors = next_item.get("author", [])
+                            if child_authors and len(child_authors) > 0:
+                                has_authored_children = True
+                                break
+                        
+                        # Clear Page Name -> defaults to Plain Text Header
+                        if has_authored_children:
+                            p_name = ""
+                    # ------------------------------------------------
 
                     authors_str = ", ".join(item.get("author", []))
                     
