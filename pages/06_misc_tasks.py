@@ -3,7 +3,7 @@ import re
 import requests
 from src.mediawiki_uploader import upload_to_bahaiworks
 from src.sitelink_manager import set_sitelink
-from src.chapter_importer import import_chapters_to_wikibase
+from src.wikibase_importer import get_or_create_author
 
 st.set_page_config(
     page_title="Bahai.works Utilities",
@@ -162,44 +162,22 @@ def format_ac_message(title, cover_file):
 
 def ensure_wikibase_author(author_name):
     """
-    Uses the existing importer to Find or Create the Author Item,
-    then links it to the Author page.
+    1. Gets/Creates Wikibase Item (using clean src logic).
+    2. Links it to 'Author:Name'.
     """
-    clean_name = author_name.replace("Author:", "").strip()
-    
-    # Construct a payload that matches what import_chapters_to_wikibase expects
-    # We treat the Author Name as the "title" of the item we want to create/find.
-    payload = [{
-        "title": clean_name,
-        "display_title": clean_name,
-        "author": [],
-        "page_range": "",
-        "page_name": "", 
-        "qid": ""
-    }]
-    
-    # We pass a dummy parent_qid because the function might require it, 
-    # but for Authors, we don't strictly need a parent book. 
-    # If your importer enforces a Parent QID, we might need a specific "No Parent" logic 
-    # or pass a generic QID. For now, we pass None assuming your importer handles it 
-    # or we accept that it won't link "contained in" (P1433), which is correct for a person.
-    
-    # Note: You might need to check src/chapter_importer.py to ensure it doesn't crash if parent_qid is None.
-    # If it does, we'll need a dedicated create_item function.
-    
-    logs, created_map = import_chapters_to_wikibase(None, payload)
-    
-    if not created_map:
-        return None, False, "Importer returned no result"
-        
-    item = created_map[0]
-    qid = item.get('qid')
+    # 1. Get QID (Creates if missing)
+    qid = get_or_create_author(author_name)
     
     if not qid:
-        return None, False, "No QID returned"
+        return None, False, "Failed to retrieve QID"
 
-    # Link to Bahai.works
-    target_page = f"Author:{clean_name}"
+    # 2. Link to Bahai.works
+    # Ensure target page format is "Author:Name"
+    if author_name.startswith("Author:"):
+        target_page = author_name
+    else:
+        target_page = f"Author:{author_name}"
+        
     success, msg = set_sitelink(qid, target_page)
     
     return qid, success, msg
