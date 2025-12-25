@@ -3,6 +3,7 @@ import json
 import re
 import google.generativeai as genai
 from pdf2image import convert_from_path
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 # Configure Gemini
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
@@ -48,9 +49,11 @@ def json_to_wikitext(toc_list):
     return wikitext
 
 def extract_metadata_from_pdf(pdf_path, page_range_str):
+    print(f"--- Debug: Extracting Metadata for {page_range_str} ---")
     pages_to_process = parse_range_string(page_range_str)
     images = []
     for p_num in pages_to_process:
+        print(f"Debug: Converting page {p_num}...")
         img_list = convert_from_path(pdf_path, first_page=p_num, last_page=p_num)
         if img_list: images.append(img_list[0])
 
@@ -70,26 +73,45 @@ def extract_metadata_from_pdf(pdf_path, page_range_str):
     Output strictly valid JSON.
     """
     
+    # Safety settings to prevent blocking
+    safety_settings = {
+        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+    }
+
     try:
-        response = model.generate_content([prompt, *images])
+        print("Debug: Sending Metadata request to Gemini...")
+        response = model.generate_content([prompt, *images], safety_settings=safety_settings)
+        print("Debug: Metadata response received.")
+        
         # Robust regex extraction to ignore markdown code blocks
         match = re.search(r'\{.*\}', response.text, re.DOTALL)
         if match:
             return json.loads(match.group(0))
         return {"error": "No JSON found in response", "raw": response.text}
     except Exception as e:
+        print(f"Debug: Metadata Error: {e}")
         return {"error": f"API Error: {e}"}
 
 def extract_toc_from_pdf(pdf_path, page_range_str):
     """
     Returns a dict with 'toc_json' (list) and 'toc_wikitext' (string).
     """
+    print(f"--- Debug: Extracting TOC for {page_range_str} ---")
     pages_to_process = parse_range_string(page_range_str)
     images = []
-    for p_num in pages_to_process:
-        img_list = convert_from_path(pdf_path, first_page=p_num, last_page=p_num)
-        if img_list: images.append(img_list[0])
-            
+    
+    try:
+        for p_num in pages_to_process:
+            print(f"Debug: Converting page {p_num}...")
+            img_list = convert_from_path(pdf_path, first_page=p_num, last_page=p_num)
+            if img_list: images.append(img_list[0])
+    except Exception as e:
+        print(f"Debug: PDF Conversion Error: {e}")
+        return {"toc_json": [], "toc_wikitext": "", "error": f"PDF Conversion Error: {e}"}
+
     model = genai.GenerativeModel('gemini-3-flash-preview')
     
     prompt = """
@@ -110,8 +132,22 @@ def extract_toc_from_pdf(pdf_path, page_range_str):
     Output strictly valid JSON.
     """
     
+    # Safety settings to prevent blocking
+    safety_settings = {
+        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+    }
+
     try:
-        response = model.generate_content([prompt, *images])
+        print("Debug: Sending TOC request to Gemini...")
+        response = model.generate_content([prompt, *images], safety_settings=safety_settings)
+        print("Debug: TOC response received.")
+        
+        # Check for safety blocks if response is empty
+        if response.prompt_feedback:
+             print(f"Debug: Prompt Feedback: {response.prompt_feedback}")
         
         # Regex to find the list [ ... ]
         match = re.search(r'\[.*\]', response.text, re.DOTALL)
@@ -126,7 +162,9 @@ def extract_toc_from_pdf(pdf_path, page_range_str):
                 "toc_wikitext": toc_wikitext
             }
         else:
+            print(f"Debug: No JSON found. Raw text: {response.text}")
             return {"toc_json": [], "toc_wikitext": "", "error": "No JSON List found", "raw": response.text}
             
     except Exception as e:
+        print(f"Debug: API Exception: {e}")
         return {"toc_json": [], "toc_wikitext": "", "error": str(e)}
