@@ -162,12 +162,26 @@ def format_ac_message(title, cover_file):
 
 with tab_author:
     st.header("Create Author Pages")
-    st.info("This tool creates the three required pages for a new author on Bahai.works.")
+    st.info("This tool creates the three required pages (Author, Category, Works Category) for each author.")
+
+    # 1. Determine Default Value (Check for data passed from previous page)
+    default_authors = ""
+    if "batch_author_list" in st.session_state:
+        # Convert list to comma-separated string
+        default_authors = ", ".join(st.session_state["batch_author_list"])
+        st.success(f"📥 Received {len(st.session_state['batch_author_list'])} missing authors from Chapter Manager.")
+        # Clear it so it doesn't persist forever
+        del st.session_state["batch_author_list"]
 
     c1, c2 = st.columns(2)
     
     with c1:
-        author_name = st.text_input("Author Name", placeholder="e.g. Aaron Emmel")
+        raw_authors = st.text_area(
+            "Author Names (comma separated)", 
+            value=default_authors, 
+            placeholder="e.g. Aaron Emmel, John Doe, Jane Smith",
+            height=150
+        )
         
         # Options for the Author Page content
         st.subheader("Configuration")
@@ -181,76 +195,72 @@ with tab_author:
             book_year = st.text_input("Year", placeholder="e.g. 1919")
 
     with c2:
-        st.subheader("Preview Actions")
+        st.subheader("Preview & Execute")
         
-        if author_name:
-            # Calculate Page Titles
-            p_author = f"Author:{author_name.strip()}"
-            p_cat_main = f"Category:{author_name.strip()}"
-            p_cat_works = f"Category:Text_of_works_by_{author_name.strip().replace(' ', '_')}"
+        # Parse Input
+        if raw_authors:
+            # Split by comma, strip whitespace, remove empty strings
+            author_list = [name.strip() for name in raw_authors.split(",") if name.strip()]
+            
+            if not author_list:
+                st.warning("Please enter valid author names.")
+            else:
+                st.write(f"**Found {len(author_list)} author(s):**")
+                
+                # Show a collapsed preview list
+                with st.expander("Show List"):
+                    for a in author_list:
+                        st.text(f"- {a}")
 
-            # 1. Author Page
-            st.markdown(f"**1. {p_author}**")
-            use_dyn = (content_mode == "Dynamic (Lua Module)")
-            txt_author = format_author_page(author_name, book_title, book_year, use_dyn)
-            st.code(txt_author, language="mediawiki")
+                # Preview the content for the FIRST author just as a sample
+                sample_author = author_list[0]
+                st.caption(f"Previewing generated code for: **{sample_author}**")
+                
+                use_dyn = (content_mode == "Dynamic (Lua Module)")
+                sample_txt = format_author_page(sample_author, book_title, book_year, use_dyn)
+                st.code(sample_txt, language="mediawiki")
 
-            # 2. Main Category
-            st.markdown(f"**2. {p_cat_main}**")
-            txt_cat_main = format_author_cat_page(author_name)
-            st.code(txt_cat_main, language="mediawiki")
+                st.divider()
 
-            # 3. Works Category
-            st.markdown(f"**3. {p_cat_works}**")
-            txt_cat_works = format_works_cat_page(author_name)
-            st.code(txt_cat_works, language="mediawiki")
+                if st.button(f"🚀 Create All {len(author_list)} Pages", type="primary"):
+                    progress_bar = st.progress(0)
+                    status_box = st.empty()
+                    
+                    total_ops = len(author_list)
+                    success_count = 0
+                    
+                    for i, author_name in enumerate(author_list):
+                        status_box.write(f"Processing **{author_name}** ({i+1}/{total_ops})...")
+                        
+                        # Prepare Content
+                        p_author = f"Author:{author_name}"
+                        p_cat_main = f"Category:{author_name}"
+                        p_cat_works = f"Category:Text_of_works_by_{author_name.replace(' ', '_')}"
+                        
+                        txt_author = format_author_page(author_name, book_title, book_year, use_dyn)
+                        txt_cat_main = format_author_cat_page(author_name)
+                        txt_cat_works = format_works_cat_page(author_name)
 
-            st.divider()
+                        try:
+                            # 1. Author Page
+                            upload_to_bahaiworks(p_author, txt_author, "Created Author page (Misc Tool)", check_exists=True)
+                            
+                            # 2. Main Category
+                            upload_to_bahaiworks(p_cat_main, txt_cat_main, "Created Author Category", check_exists=True)
+                            
+                            # 3. Works Category
+                            upload_to_bahaiworks(p_cat_works, txt_cat_works, "Created Works Category", check_exists=True)
+                            
+                            success_count += 1
+                        except FileExistsError:
+                            st.toast(f"⚠️ Skipped {author_name} (Already Exists)")
+                        except Exception as e:
+                            st.error(f"❌ Error on {author_name}: {e}")
+                        
+                        progress_bar.progress((i + 1) / total_ops)
 
-            if st.button(f"🚀 Create All Pages for '{author_name}'", type="primary"):
-                # We use a progress bar because we are making 3 network requests
-                prog = st.progress(0)
-                status = st.empty()
-
-                try:
-                    # Step 1: Author Page (Safe Mode: ON)
-                    status.write(f"Creating {p_author}...")
-                    upload_to_bahaiworks(
-                        p_author, 
-                        txt_author, 
-                        "Created Author page (Misc Tool)", 
-                        check_exists=True  # <--- PREVENTS OVERWRITE
-                    )
-                    prog.progress(33)
-
-                    # Step 2: Main Category (Safe Mode: ON)
-                    status.write(f"Creating {p_cat_main}...")
-                    upload_to_bahaiworks(
-                        p_cat_main, 
-                        txt_cat_main, 
-                        "Created Author Category (Misc Tool)", 
-                        check_exists=True  # <--- PREVENTS OVERWRITE
-                    )
-                    prog.progress(66)
-
-                    # Step 3: Works Category (Safe Mode: ON)
-                    status.write(f"Creating {p_cat_works}...")
-                    upload_to_bahaiworks(
-                        p_cat_works, 
-                        txt_cat_works, 
-                        "Created Text of Works Category (Misc Tool)", 
-                        check_exists=True  # <--- PREVENTS OVERWRITE
-                    )
-                    prog.progress(100)
-
-                    status.success(f"✅ Successfully created all pages for {author_name}!")
+                    status_box.success(f"✅ Process Complete! Created pages for {success_count} authors.")
                     st.balloons()
-
-                except FileExistsError as e:
-                    status.error(f"⚠️ Safety Stop: {e}")
-                    prog.empty()
-                except Exception as e:
-                    status.error(f"Error: {e}")
 
 # --- TAB: BOOK MANAGER ---
 with tab_book:
