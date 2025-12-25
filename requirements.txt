@@ -1,5 +1,6 @@
 # Web Framework 
 streamlit>=1.41.1
+streamlit-cropper>=0.2.1
 watchdog==5.0.3
 
 # Data Handling
