@@ -16,13 +16,17 @@ with st.expander("ℹ️ Help / Instructions"):
     * When users search the text of works by a certain author, they are also shown the chapters they have authored
 
     **Bahaidata Parent Book QID** Bahaidata item number corresponding to the book where the chapter can be found
-    **Bahai.works Page Title** The exact title of the page for the book on bahai.works
+    
+    **Bahai.works Page Title** The exact title of the page for the book separatedon bahai.works
 
     Under "Review Items"
 
     **Page Name** If the page where the content existed was "Light of the World/Chapter 1" enter "Chapter 1"
+    
     **Item Label** The label will match the Page Name by default. You can leave this blank.
+    
     **Authors** Enter the author name, or a comma separated list of authors
+    
     **Pages** Enter the page where the chapter begins and ends like this 4-10 or 34-100.
     """)
 
