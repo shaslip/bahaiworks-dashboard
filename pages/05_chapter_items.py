@@ -6,15 +6,24 @@ from src.sitelink_manager import set_sitelink
 st.set_page_config(layout="wide", page_title="Chapter Manager")
 
 st.title("📑 Chapter Item Manager")
-st.caption("Review and create Wikibase items for book chapters/articles.")
 
 with st.expander("ℹ️ Help / Instructions"):
     st.markdown("""
-    ** This tool allows you to define that a certain book chapter is authored by someone other than the author of the book. 
+    This tool allows you to define that a certain book chapter is authored by someone other than the author of the book. 
     Typically this is used in the case of a book that is a collection of scholarly articles or papers. Defining the relationship
     in this way allows us to:
-    * ** Automatically list the chapters an individual has authored in works compiled by others
-    * ** When users search the text of works by a certain author, they are also shown the chapters they have authored
+    * Automatically list the chapters an individual has authored in works compiled by others
+    * When users search the text of works by a certain author, they are also shown the chapters they have authored
+
+    **Bahaidata Parent Book QID** Bahaidata item number corresponding to the book where the chapter can be found
+    **Bahai.works Page Title** The exact title of the page for the book on bahai.works
+
+    Under "Review Items"
+
+    **Page Name** If the page where the content existed was "Light of the World/Chapter 1" enter "Chapter 1"
+    **Item Label** The label will match the Page Name by default. You can leave this blank.
+    **Authors** Enter the author name, or a comma separated list of authors
+    **Pages** Enter the page where the chapter begins and ends like this 4-10 or 34-100.
     """)
 
 st.divider()
