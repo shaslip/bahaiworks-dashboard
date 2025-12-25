@@ -17,10 +17,10 @@ with st.expander("ℹ️ Help / Instructions"):
     st.markdown("""
     **1. Author Manager**
     * **Batch Creation:** Paste a list of author names (comma-separated) to create their pages in bulk.
-    * **Sync:** This tool automatically creates the Wikibase item for the author (if missing) and links it to the new Bahai.works page.
     * **Modes:**
         * *Dynamic:* Uses a Lua module to automatically list all chapters/books by this author. (Recommended)
         * *Static:* Hard-codes a link to a specific book. Use this only for authors with a single major work.
+    * **Bahaidata:** This tool automatically creates the Bahaidata item for the author (if missing) and links it to the new Bahai.works page.
 
     **2. Book Manager**
     * **Copyright AC-Message:** Generates the special `/AC-Message` subpage required for copyright-protected books.
