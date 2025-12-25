@@ -41,7 +41,7 @@ with Session(engine) as session:
     has_txt = os.path.exists(txt_path)
 
 if "pipeline_stage" not in st.session_state:
-    st.session_state.pipeline_stage = "setup" 
+    st.session_state.pipeline_stage = "setup"
 
 # --- UI Header ---
 c1, c2 = st.columns([3, 1])
@@ -101,13 +101,11 @@ elif st.session_state.pipeline_stage == "proof":
     with t1:
         c_talk, c_json = st.columns(2)
         with c_talk:
-            # FIXED INDENTATION STARTING HERE
             st.subheader("Talk Page")
             talk_text = st.text_area("Clean OCR", value=st.session_state.get("talk_text", ""), height=500, key="talk_edit")
             
             if st.button(f"☁️ Import to Talk:{target_page}", type="primary", width='stretch'):
                 try:
-                    # UPDATED: Added check_exists=True
                     upload_to_bahaiworks(
                         f"Talk:{target_page}", 
                         talk_text, 
@@ -415,11 +413,11 @@ elif st.session_state.pipeline_stage == "split":
             st.rerun()
             
     with c_run:
+        # --- PART A: SPLIT & UPLOAD ---
         if st.button("✂️ Split & Upload to Bahai.works", type="primary"):
             target_base = st.session_state["target_page"]
             
             # 1. Reconstruct the Access Header
-            # We must prepend this to every page so we don't lose protection
             access_group = target_base.replace(" ", "")
             header_content = f"<accesscontrol>Access:{access_group}</accesscontrol>{{{{Publicationinfo}}}}\n"
             
@@ -431,8 +429,6 @@ elif st.session_state.pipeline_stage == "split":
                 final_split_data = []
                 for i, item in enumerate(toc_list):
                     # FILTER: Only split Level 1 items.
-                    # Subtopics (Level 2) are skipped here, meaning their pages 
-                    # will automatically be included in the duration of the previous Level 1 item.
                     if item.get('level', 1) == 1:
                         final_split_data.append({
                             "title": item['title'],
@@ -446,8 +442,8 @@ elif st.session_state.pipeline_stage == "split":
 
                 # 3. Process splits
                 for i, chapter in enumerate(final_split_data):
-                    ch_title = chapter['title']          # Display Title (for logs)
-                    ch_page_name = chapter['page_name']  # URL Slug (for upload)
+                    ch_title = chapter['title']
+                    ch_page_name = chapter['page_name']
                     start_idx = chapter['start_idx']
                     
                     # End index is the start of the next chapter
@@ -468,7 +464,6 @@ elif st.session_state.pipeline_stage == "split":
                     full_content = header_content + raw_text
                     
                     # 6. Upload
-                    # FIXED: Use ch_page_name instead of ch_title for the URL
                     full_title = f"{target_base}/{ch_page_name}"
                     upload_to_bahaiworks(full_title, full_content, "Splitter Upload")
                     
@@ -476,16 +471,15 @@ elif st.session_state.pipeline_stage == "split":
                     
                 status_box.success("✅ All chapters split and uploaded (headers preserved)!")
                 st.balloons()
+                st.session_state["split_completed"] = True
                 
             except Exception as e:
                 st.error(f"Failed: {e}")
 
         # --- PART B: BAHAIDATA CONNECTION (Conditional) ---
-        # Condition 1: Split must be finished
         if st.session_state.get("split_completed"):
             
-            # Condition 2: Authors must exist in at least one item
-            # We look at the full toc_list (which is already filtered for Lvl 1 in this stage)
+            # Check for authors in filtered list (Level 1 only)
             has_authors = any(len(item.get('author', [])) > 0 for item in toc_list)
             
             if has_authors:
