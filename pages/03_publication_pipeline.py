@@ -86,24 +86,19 @@ if "pipeline_stage" not in st.session_state:
     st.session_state.pipeline_stage = "setup"
 
 # --- UI Header ---
-c1, c2 = st.columns([3, 1])
-with c1:
-    st.title(f"📖 {filename}")
-    
-    # Global Config Row
-    g1, g2, g3, g4 = st.columns(4)
-    with g1:
-        st.session_state["target_page"] = st.text_input("🎯 Page Title", value=st.session_state["target_page"])
-    with g2:
-        pub_language = st.radio("Language", ["English", "German"], horizontal=True, key="cfg_lang")
-    with g3:
-        pub_type = st.radio("Type", ["Book", "Periodical", "Unstructured"], horizontal=True, key="cfg_type")
-    with g4:
-        st.write("Permissions")
-        is_copyright = st.checkbox("Copyright Protected?", value=False, key="cfg_copy")
+st.title(f"📖 {filename}")
 
-with c2:
-    if st.button("⬅️ Back to Dashboard"): go_back()
+# Global Config Row
+g1, g2, g3, g4 = st.columns(4)
+with g1:
+    st.session_state["target_page"] = st.text_input("🎯 Page Title", value=st.session_state["target_page"])
+with g2:
+    pub_language = st.radio("Language", ["English", "German"], horizontal=True, key="cfg_lang")
+with g3:
+    pub_type = st.radio("Type", ["Book", "Periodical", "Unstructured"], horizontal=True, key="cfg_type")
+with g4:
+    st.write("Permissions")
+    is_copyright = st.checkbox("Copyright Protected?", value=False, key="cfg_copy")
 
 if not has_txt:
     st.error(f"❌ Critical: No OCR text file found at {txt_path}.")
@@ -325,16 +320,21 @@ elif st.session_state.pipeline_stage == "proof":
             with c_preview:
                 st.subheader("2. Page Preview")
                 
-                # Use helper to generate header based on Language/Copyright
+                # 1. Get Base Header
                 header_text = generate_header(
                     title=st.session_state["target_page"],
-                    author="[Author]", # Placeholder as we haven't extracted book-level author yet
+                    author="[Author]",
                     year="[Year]",
                     language=pub_language,
                     is_copyright=is_copyright,
                     filename=filename
                 )
                 
+                # 2. Add {{restricted use}} PREPEND if Copyright
+                # (Only on the main book page)
+                if is_copyright:
+                    header_text = "{{restricted use|where=|until=}}\n" + header_text
+
                 full_wikitext = header_text + "\n\n===Contents===\n" + computed_toc_wikitext
                 st.code(full_wikitext, language="mediawiki")
 
@@ -522,12 +522,14 @@ elif st.session_state.pipeline_stage == "split":
         if st.button("✂️ Split & Upload", type="primary"):
             target_base = st.session_state["target_page"]
             
-            # Access Header for Chapters (Depends on Language/Copyright)
-            # Default to English structure for now unless customized
-            access_group = target_base.replace(" ", "")
+            # Access Header for Chapters (Content Pages)
+            # <accesscontrol> goes here ONLY if copyright is True
             if is_copyright:
+                 # Clean group name for access control
+                 access_group = target_base.replace(" ", "")
                  header_content = f"<accesscontrol>Access:{access_group}</accesscontrol>{{{{Publicationinfo}}}}\n"
             else:
+                 # No access control, just the nav template
                  header_content = f"{{{{Publicationinfo}}}}\n"
 
             progress_bar = st.progress(0)
