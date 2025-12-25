@@ -214,15 +214,33 @@ with tab_author:
 
                 # Preview the content for the FIRST author just as a sample
                 sample_author = author_list[0]
-                st.caption(f"Previewing generated code for: **{sample_author}**")
+                st.caption(f"Previewing generated code for sample: **{sample_author}**")
                 
                 use_dyn = (content_mode == "Dynamic (Lua Module)")
-                sample_txt = format_author_page(sample_author, book_title, book_year, use_dyn)
-                st.code(sample_txt, language="mediawiki")
+                
+                # 1. Author Page Preview
+                st.markdown(f"**1. Author:{sample_author}**")
+                txt_author = format_author_page(sample_author, book_title, book_year, use_dyn)
+                st.code(txt_author, language="mediawiki")
+
+                # 2. Main Category Preview
+                st.markdown(f"**2. Category:{sample_author}**")
+                txt_cat_main = format_author_cat_page(sample_author)
+                st.code(txt_cat_main, language="mediawiki")
+
+                # 3. Works Category Preview
+                cat_works_title = f"Category:Text_of_works_by_{sample_author.replace(' ', '_')}"
+                st.markdown(f"**3. {cat_works_title}**")
+                txt_cat_works = format_works_cat_page(sample_author)
+                st.code(txt_cat_works, language="mediawiki")
 
                 st.divider()
 
-                if st.button(f"🚀 Create All {len(author_list)} Pages", type="primary"):
+                # Calculate totals for clarity
+                num_authors = len(author_list)
+                total_wikipages = num_authors * 3
+                
+                if st.button(f"🚀 Process {num_authors} Author(s) (Creates {total_wikipages} Wiki Pages)", type="primary"):
                     progress_bar = st.progress(0)
                     status_box = st.empty()
                     
@@ -341,7 +359,7 @@ with tab_maintenance:
                 # Filter exclusions
                 valid_members = [m for m in members if m not in EXCLUSION_LIST]
                 
-                # Only write header if we have content (Fixes "Problem 3")
+                # Only write header if we have content
                 if valid_members:
                     full_wikitext += f"==== {letter} ====\n"
                     
@@ -349,7 +367,7 @@ with tab_maintenance:
                         # Strip "Author:" prefix for the display name logic
                         clean_name = page_title.replace("Author:", "")
                         
-                        # Use our robust parser (Fixes "Problem 2")
+                        # Use our robust parser
                         display_name = get_lastname_firstname(clean_name)
                         
                         full_wikitext += f"* [[{page_title}|{display_name}]]\n"
