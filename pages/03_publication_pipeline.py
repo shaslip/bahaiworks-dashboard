@@ -274,6 +274,31 @@ elif st.session_state.pipeline_stage == "proof":
                 if p_name and p_name.isupper():
                     p_name = p_name.title()
                 
+                # --- RESTORED LOGIC: Smart Container Detection ---
+                # If this is Level 1, look ahead to see if it acts as a "Section Header"
+                if level == 1:
+                    has_authored_children = False
+                    # Loop through subsequent items
+                    for j in range(i + 1, len(toc_source)):
+                        next_item = toc_source[j]
+                        next_level = next_item.get("level", 1)
+                        
+                        # Stop if we hit the next sibling (another Chapter or Section)
+                        if next_level == 1: 
+                            break
+                        
+                        # If we find a child (Level > 1) that has authors, this is a Scholarly Container
+                        if next_level > 1:
+                            child_authors = next_item.get("author", [])
+                            if child_authors and len(child_authors) > 0:
+                                has_authored_children = True
+                                break
+                    
+                    # If identified as a Container, clear the Page Name so it defaults to UNLINKED
+                    if has_authored_children:
+                        p_name = ""
+                # --------------------------------------------------
+
                 authors_str = ", ".join(item.get("author", []))
                 
                 raw_data.append({
@@ -287,6 +312,7 @@ elif st.session_state.pipeline_stage == "proof":
             
             df = pd.DataFrame(raw_data)
 
+            # Layout
             c_editor, c_preview, c_actions = st.columns([2, 2, 1])
             
             # --- COLUMN 1: MASTER DATA ---
@@ -311,6 +337,9 @@ elif st.session_state.pipeline_stage == "proof":
                 updated_toc_list = []
                 computed_toc_wikitext = ""
                 
+                # STATE VARIABLE: Track if the current Level 1 is a "Container" (Unlinked)
+                current_section_is_container = False 
+                
                 for index, row in edited_df.iterrows():
                     raw_authors = str(row["Authors"]) if row["Authors"] else ""
                     auth_list = [a.strip() for a in raw_authors.split(",") if a.strip()]
@@ -319,6 +348,7 @@ elif st.session_state.pipeline_stage == "proof":
                     d_title = row["Display Title"]
                     prefix = row["Prefix"]
                     level = int(row["Level"])
+                    
                     if prefix is None: prefix = ""
                     
                     updated_toc_list.append({
@@ -331,19 +361,32 @@ elif st.session_state.pipeline_stage == "proof":
                         "author": auth_list
                     })
                     
+                    # --- WIKITEXT GENERATION LOGIC ---
                     indent = ":" * level
+                    
                     if level == 1:
-                        # Logic for Chapters
-                        link_text = f"[[/{p_name}|{d_title}]]" if p_name else d_title
-                        computed_toc_wikitext += f"\n:{prefix}{link_text}"
+                        # Logic A: Level 1 (Chapters / Sections)
+                        # If Page Name is empty, treat as CONTAINER (Plain Text)
+                        if not p_name or not p_name.strip():
+                            current_section_is_container = True
+                            computed_toc_wikitext += f"\n:{prefix}{d_title}" 
+                        else:
+                            current_section_is_container = False
+                            computed_toc_wikitext += f"\n:{prefix}[[/{p_name}|{d_title}]]" 
                     else:
-                        # Logic for Sub-sections
-                        should_link = len(auth_list) > 0
-                        link_text = f"[[/{p_name}|{d_title}]]" if should_link else d_title
-                        computed_toc_wikitext += f"\n{indent}{prefix}{link_text}"
-                        if auth_list:
-                            computed_toc_wikitext += f"\n{indent}: ''{', '.join(auth_list)}''"
+                        # Logic B: Sub-sections (Level 2+)
+                        # Link IF: (It has an explicit author) OR (We are inside a Container)
+                        should_link = (len(auth_list) > 0) or current_section_is_container
+                        
+                        if should_link:
+                            computed_toc_wikitext += f"\n{indent}{prefix}[[/{p_name}|{d_title}]]"
+                            if auth_list:
+                                authors_str = ", ".join(auth_list)
+                                computed_toc_wikitext += f"\n{indent}: ''{authors_str}''"
+                        else:
+                            computed_toc_wikitext += f"\n{indent}{prefix}{d_title}"
                 
+                # Sync back to state
                 st.session_state["toc_json_list"] = updated_toc_list
 
             # --- COLUMN 2: PREVIEW ---
