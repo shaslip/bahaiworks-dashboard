@@ -15,7 +15,6 @@ st.divider()
 
 # --- 1. Load / Initialize Data ---
 if "chapter_data_df" not in st.session_state:
-    # Check if we have data passed from the pipeline
     if "chapter_review_data" in st.session_state:
         raw_list = st.session_state["chapter_review_data"]
         
@@ -23,21 +22,21 @@ if "chapter_data_df" not in st.session_state:
         flat_data = []
         for item in raw_list:
             auth_str = ", ".join(item.get("author", []))
+            
+            # Default logic: The Item Label is the Title. The Link Target is the Page Name.
             flat_data.append({
                 "Title": item.get("title", ""),
-                "Display Title": item.get("display_title", item.get("title", "")),
                 "Authors": auth_str,
                 "Page Range": item.get("page_range", ""),
                 "Page Name (Slug)": item.get("page_name", ""),
-                "QID (Existing)": "" # Leave empty to create new
+                "QID (Existing)": "" 
             })
         st.session_state["chapter_data_df"] = pd.DataFrame(flat_data)
         st.success(f"Loaded {len(flat_data)} items from pipeline.")
     else:
-        # Initialize Empty Frame for Manual Entry
         st.info("No pipeline data found. Starting with empty table.")
         st.session_state["chapter_data_df"] = pd.DataFrame(
-            columns=["Title", "Display Title", "Authors", "Page Range", "Page Name (Slug)", "QID (Existing)"]
+            columns=["Title", "Authors", "Page Range", "Page Name (Slug)", "QID (Existing)"]
         )
 
 # --- 2. Context Inputs ---
@@ -58,13 +57,12 @@ df = st.session_state["chapter_data_df"]
 edited_df = st.data_editor(
     df,
     num_rows="dynamic",
-    use_container_width=True,
+    width='stretch',
     column_config={
-        "Title": st.column_config.TextColumn("Item Label (Wikibase)", width="medium"),
-        "Display Title": st.column_config.TextColumn("Display Title (Visual)", width="medium"),
+        "Title": st.column_config.TextColumn("Item Label (Wikibase)", width="large"),
         "Authors": st.column_config.TextColumn("Authors (comma sep)", width="medium"),
         "Page Range": st.column_config.TextColumn("Pages", width="small"),
-        "Page Name (Slug)": st.column_config.TextColumn("URL Slug", width="medium"),
+        "Page Name (Slug)": st.column_config.TextColumn("Page Name (URL Slug)", width="medium", help="The actual page name on Bahai.works."),
         "QID (Existing)": st.column_config.TextColumn("QID (Optional)", width="small", help="If filled, we skip creation and just link."),
     }
 )
@@ -84,7 +82,6 @@ if st.button("🚀 Process Items (Create & Link)", type="primary"):
     # Reconstruct standard list format for the importer
     process_list = []
     for idx, row in edited_df.iterrows():
-        # Skip empty rows
         if not row["Title"]: continue
         
         # Parse Authors
@@ -93,7 +90,7 @@ if st.button("🚀 Process Items (Create & Link)", type="primary"):
         
         item_dict = {
             "title": row["Title"],
-            "display_title": row["Display Title"],
+            "display_title": row["Title"], # Use Title as Display Title for fallback
             "author": auth_list,
             "page_range": row["Page Range"],
             "page_name": row["Page Name (Slug)"],
@@ -104,9 +101,6 @@ if st.button("🚀 Process Items (Create & Link)", type="primary"):
     # 1. Run Import (Creates missing QIDs)
     with st.spinner("Creating/Updating Wikibase Items..."):
         try:
-            # We use your existing importer. 
-            # NOTE: Your importer might need a small update to handle pre-existing QIDs if it doesn't already.
-            # Assuming import_chapters_to_wikibase returns (logs, created_map)
             logs, created_map = import_chapters_to_wikibase(parent_qid, process_list)
             st.write("### Import Logs")
             st.text(logs)
@@ -122,15 +116,14 @@ if st.button("🚀 Process Items (Create & Link)", type="primary"):
         total = len(created_map)
         for i, item in enumerate(created_map):
             qid = item.get('qid')
-            page_slug = item.get('page_name') # Ensure the importer passes this back
             
-            # Fallback if importer didn't return page_name, try to match by title from input
-            if not page_slug:
-                found = next((x for x in process_list if x['title'] == item['title']), None)
-                if found: page_slug = found['page_name']
+            # CRITICAL: Use the Slug from the editor
+            page_slug = item.get('page_name') 
             
             if qid and page_slug and base_title:
+                # Construct the actual URL
                 full_url = f"{base_title}/{page_slug}"
+                
                 success, msg = set_sitelink(qid, full_url)
                 if success:
                     link_logs.append(f"✅ Linked {qid} -> {full_url}")
