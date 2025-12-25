@@ -162,10 +162,15 @@ elif st.session_state.pipeline_stage == "proof":
             p_name = item.get("page_name", clean_title)
             d_title = item.get("display_title", clean_title)
             
+            # --- AUTO-FIX: ALL CAPS to Title Case ---
+            # Only apply this to the Page Name (URL slug) to make it cleaner
+            if p_name and p_name.isupper():
+                p_name = p_name.title()
+            
             authors_str = ", ".join(item.get("author", []))
             
             raw_data.append({
-                "Level": level,    # NEW: 1=Chapter, 2=Subtopic
+                "Level": level,
                 "Prefix": prefix,
                 "Page Name (URL)": p_name,
                 "Display Title": d_title,
@@ -207,7 +212,7 @@ elif st.session_state.pipeline_stage == "proof":
                 p_name = row["Page Name (URL)"]
                 d_title = row["Display Title"]
                 prefix = row["Prefix"]
-                level = int(row["Level"]) # Ensure int
+                level = int(row["Level"])
                 
                 if prefix is None: prefix = ""
                 
@@ -216,7 +221,7 @@ elif st.session_state.pipeline_stage == "proof":
                     "page_name": p_name,          
                     "display_title": d_title,     
                     "prefix": prefix,
-                    "level": level,              # Store Level
+                    "level": level,
                     "page_range": row["Page Range"],
                     "author": auth_list
                 })
