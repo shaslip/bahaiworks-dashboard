@@ -243,9 +243,9 @@ elif st.session_state.pipeline_stage == "proof":
                     try:
                         st.session_state["toc_json_list"] = json.loads(toc_edit_text)
                         
-                        # FORCE REFRESH of the Editor DataFrame next time it loads
-                        if "editor_df" in st.session_state:
-                            del st.session_state["editor_df"]
+                        # FORCE REFRESH: Delete cached DF so it rebuilds from new JSON
+                        if "chapter_df" in st.session_state:
+                            del st.session_state["chapter_df"]
                             
                         st.success("TOC List Updated! Check Tab 2.")
                     except Exception as e:
