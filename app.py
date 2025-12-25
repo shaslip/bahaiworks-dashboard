@@ -386,4 +386,4 @@ with st.sidebar:
     st.subheader("🛠️ Utilities")
     
     if st.button("⚡ Open Misc Tasks", width="stretch"):
-        st.switch_page("pages/05_misc_tasks.py")
+        st.switch_page("pages/06_misc_tasks.py")
