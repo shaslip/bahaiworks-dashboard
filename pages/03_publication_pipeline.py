@@ -178,6 +178,11 @@ if st.session_state.pipeline_stage == "setup":
 # ==============================================================================
 elif st.session_state.pipeline_stage == "proof":
     
+    # NEW: Navigation to return to Setup
+    if st.button("⬅️ Back to Setup", key="back_to_setup"):
+        st.session_state.pipeline_stage = "setup"
+        st.rerun()
+
     # --------------------------
     # BRANCH: BOOK WORKFLOW
     # --------------------------
