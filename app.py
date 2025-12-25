@@ -6,7 +6,6 @@ import os
 import re
 from sqlalchemy.orm import Session
 from sqlalchemy import select, desc
-from src.evaluator import evaluate_document, translate_summary
 from src.database import engine, Document
 from src.processor import extract_preview_images
 from src.evaluator import evaluate_document
@@ -62,33 +61,6 @@ def parse_ranges(text):
         pass # Fail silently on bad input
     return ranges
 
-def parse_filename_metadata(filename):
-    """
-    Attempts to extract Year, Author, and Title from:
-    'G 020 Schw D 1919 - Schwarz-Alice - Die Universale Weltreligion.pdf'
-    """
-    meta = {"year": "", "author": "", "title": ""}
-    
-    # Remove extension
-    clean_name = os.path.splitext(filename)[0]
-    
-    # Regex for standard pattern: Code - Author - Title
-    # Looks for '1919 - ' separator
-    match = re.search(r"(\d{4})\s*-\s*(.*?)\s*-\s*(.*)", clean_name)
-    if match:
-        meta["year"] = match.group(1)
-        # Flip 'Schwarz-Alice' to 'Alice Schwarz' if hyphenated
-        author_part = match.group(2).replace("-", " ").strip()
-        # Optional: heuristic to flip Last First -> First Last? 
-        # For now, just keeping it clean.
-        meta["author"] = author_part 
-        meta["title"] = match.group(3)
-    else:
-        # Fallback: Use whole name as title
-        meta["title"] = clean_name
-        
-    return meta
-
 # --- Sidebar Fragment ---
 @st.fragment
 def render_details(selected_id):
@@ -135,123 +107,12 @@ def render_details(selected_id):
                     st.error("Folder not found!")
 
         st.divider()
-
-        # === TABS ===
-        tab_pub, = st.tabs(["📝 Publisher"])
-
-        # -------------------------
-        # TAB 2: PUBLISHER (NEW)
-        # -------------------------
-        with tab_pub:
-            st.subheader("🌐 Wikitext Generator")
-            
-            # 1. Parse Metadata Defaults
-            defaults = parse_filename_metadata(record.filename)
-            
-            # 2. Controls
-            pub_type = st.radio("Publication Type", 
-                                ["Periodical (PDF Only)", "Unstructured (Summary + Links)", "Book (Full TOC)"],
-                                index=1)
-            
-            # === NEW BOOK PIPELINE REDIRECT ===
-            if "Book" in pub_type:
-                st.info("📚 **Advanced Workflow Required**")
-                st.write("Books require the dedicated pipeline for copyright verification, TOC extraction, and chapter splitting.")
-                
-                if st.button("🚀 Launch Book Pipeline", type="primary"):
-                    st.switch_page("pages/03_book_pipeline.py")
-                
-                # Stop rendering the rest of this simple tab
-                return
-            # ==================================
-            
-            c_meta1, c_meta2 = st.columns(2)
-            with c_meta1:
-                pub_title = st.text_input("Title", value=defaults['title'])
-                pub_author = st.text_input("Author", value=defaults['author'])
-            with c_meta2:
-                pub_year = st.text_input("Year", value=defaults['year'])
-
-            suggested_name = f"{pub_title.strip()}.pdf"
-            pub_filename = st.text_input("Target Filename (MediaWiki)", value=suggested_name)
-
-            # --- START OF FIXED BLOCK ---
-            
-            # Summary Editor
-            summary_key = f"summary_{record.id}"
-            
-            # Initialize session state if not set
-            if summary_key not in st.session_state:
-                st.session_state[summary_key] = record.summary or ""
-
-            st.write("**Summary (German)**")
-            
-            # 1. Create a placeholder for the text area
-            summary_placeholder = st.empty()
-            
-            # 2. Render the button and handle logic BEFORE the text area is instantiated
-            if st.button("🤖 Translate to German"):
-                with st.spinner("Translating..."):
-                    current_text = st.session_state.get(summary_key, "")
-                    german_text = translate_summary(current_text)
-                    if german_text:
-                        st.session_state[summary_key] = german_text
-            
-            # 3. Render the text area into the placeholder
-            pub_summary = summary_placeholder.text_area("Summary", height=150, key=summary_key)
-            
-            # --- END OF FIXED BLOCK ---
-
-            st.divider()
-            
-            # 3. Generate Logic
-            st.subheader("Preview")
-            
-            wiki_text = ""
-            clean_title_url = pub_title.replace(" ", "_") # Rough URL encoding
-            
-            # Wrap summary in {{ai}} template
-            summary_block = f"{{{{ai|{pub_summary}}}}}" if pub_summary else ""
-
-            # HEADER Template (Common)
-            header = f"""{{{{header
- | title      = {pub_title}
- | author     = {pub_author}
- | translator = 
- | section    = 
- | previous   = 
- | next       = 
- | year       = {pub_year}
- | notes      = {{{{home |link= | pdf=[{{{{filepath:{pub_filename}}}}} PDF] }}}}
-}}}}"""
-
-            if "Periodical" in pub_type:
-                wiki_text = f"""{header}
-
-<pdf>File:{pub_filename}</pdf>"""
-
-            elif "Unstructured" in pub_type:
-                wiki_text = f"""{header}
-
-{summary_block}
-
-== Zugang ==
-* [{{{{filepath:{pub_filename}}}}} PDF]
-* Für den Volltext siehe [[/Text]]."""
-
-            st.code(wiki_text, language="mediawiki")
-            
-            # Link to text page
-            st.info(f"**Target URL:** de.bahai.works/{clean_title_url}")
-            st.info(f"**Text URL:** de.bahai.works/{clean_title_url}/Text")
-
-            st.markdown("---")
-
-            if st.button("✅ Mark as Completed (Remove from Queue)", type="primary"):
-                record.status = "COMPLETED"
-                session.commit()
-                st.success("Document marked as COMPLETED!")
-                st.rerun()
+        
+        if st.button("✅ Mark as Completed (Remove from Queue)", type="primary"):
+            record.status = "COMPLETED"
+            session.commit()
+            st.success("Document marked as COMPLETED!")
+            st.rerun()
 
 # --- Main App Execution ---
 
