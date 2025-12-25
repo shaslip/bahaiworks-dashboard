@@ -172,3 +172,65 @@ if st.button("🚀 Process Items (Create & Link)", type="primary"):
             st.write(log)
             
         st.success("Done!")
+
+    # --- 3. Check for Missing Author Pages ---
+    st.divider()
+    st.subheader("3. Author Page Verification")
+    
+    with st.spinner("Checking which authors need pages on Bahai.works..."):
+        # 1. Gather Unique Authors
+        unique_authors = set()
+        for idx, row in edited_df.iterrows():
+            if row["Authors"]:
+                # Split comma-separated names
+                names = [n.strip() for n in str(row["Authors"]).split(",") if n.strip()]
+                unique_authors.update(names)
+        
+        if not unique_authors:
+            st.info("No authors found in this batch.")
+        else:
+            # 2. Check Existence via API
+            # We check "Author:Name" for each
+            import requests
+            
+            missing_authors = []
+            author_list = list(unique_authors)
+            
+            # Batch request (max 50 titles per MediaWiki API call)
+            # For simplicity in this dashboard, we'll do chunks of 50
+            chunk_size = 50
+            for i in range(0, len(author_list), chunk_size):
+                chunk = author_list[i:i + chunk_size]
+                titles_to_check = [f"Author:{name}" for name in chunk]
+                
+                try:
+                    api_url = "https://bahai.works/api.php"
+                    params = {
+                        "action": "query",
+                        "titles": "|".join(titles_to_check),
+                        "format": "json"
+                    }
+                    resp = requests.get(api_url, params=params).json()
+                    pages = resp.get("query", {}).get("pages", {})
+                    
+                    # If page has key "-1", it is missing
+                    for pid, pdata in pages.items():
+                        if int(pid) < 0:
+                            # Extract name from title "Author:Name"
+                            missing_name = pdata['title'].replace("Author:", "")
+                            missing_authors.append(missing_name)
+                            
+                except Exception as e:
+                    st.error(f"API Check Failed: {e}")
+
+            # 3. Display Results & Action
+            if not missing_authors:
+                st.success("✅ All authors already have pages on Bahai.works!")
+            else:
+                st.warning(f"⚠️ {len(missing_authors)} Authors are missing pages on Bahai.works.")
+                st.write(f"**Missing:** {', '.join(missing_authors)}")
+                
+                if st.button("👤 Proceed to create author pages", type="primary"):
+                    # Pass the list to the next page
+                    st.session_state["batch_author_list"] = missing_authors
+                    st.switch_page("pages/06_misc_tasks.py")
