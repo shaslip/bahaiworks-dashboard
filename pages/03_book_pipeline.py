@@ -367,7 +367,10 @@ elif st.session_state.pipeline_stage == "split":
     # 2. Initialize Indices (Once)
     # FIX: Filter here! Only keep Level 1 items for the entire Splitter stage.
     full_toc = st.session_state.get("toc_map", [])
-    toc_list = [item for item in full_toc if item.get('level', 1) == 1]
+    toc_list = [
+        item for item in full_toc 
+        if item.get('level', 1) == 1 or (item.get('author') and len(item['author']) > 0)
+    ]
     
     if "splitter_indices" not in st.session_state:
         indices = {}
