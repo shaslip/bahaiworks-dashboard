@@ -63,9 +63,9 @@ def evaluate_document(images):
         print(f"AI Evaluation Error: {e}")
         return None
 
-def translate_summary(text: str) -> str:
+def translate_summary(text: str, target_language: str = "German") -> str:
     """
-    Translates the provided text into German suitable for an academic/archival context.
+    Translates the provided text into the target language suitable for an academic/archival context.
     """
     if not text:
         return ""
@@ -73,14 +73,14 @@ def translate_summary(text: str) -> str:
     model = genai.GenerativeModel('gemini-3-flash-preview')
 
     prompt = f"""
-    You are an expert translator for a German academic archive (Bahai.works).
-    Translate the following English summary into formal, encyclopedic German.
+    You are an expert translator for an academic archive (Bahai.works).
+    Translate the following English summary into formal, encyclopedic {target_language}.
     Maintain the factual tone. Do not add conversational fillers.
 
     Input Text:
     "{text}"
 
-    German Translation:
+    {target_language} Translation:
     """
 
     try:
