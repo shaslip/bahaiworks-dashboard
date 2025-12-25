@@ -479,3 +479,49 @@ elif st.session_state.pipeline_stage == "split":
                 
             except Exception as e:
                 st.error(f"Failed: {e}")
+
+        # --- PART B: BAHAIDATA CONNECTION (Conditional) ---
+        # Condition 1: Split must be finished
+        if st.session_state.get("split_completed"):
+            
+            # Condition 2: Authors must exist in at least one item
+            # We look at the full toc_list (which is already filtered for Lvl 1 in this stage)
+            has_authors = any(len(item.get('author', [])) > 0 for item in toc_list)
+            
+            if has_authors:
+                st.divider()
+                st.subheader("Bahaidata Automation")
+                st.info("Since authors were detected, you can now create and link chapter items.")
+                
+                parent_qid = st.session_state.get("parent_qid", "")
+                
+                if st.button("Create and connect chapter items", type="primary"):
+                    if not parent_qid: 
+                        st.error("Missing Parent QID. Go back to Stage 2 to set it.")
+                    else:
+                        try:
+                            with st.spinner("Processing Bahaidata items..."):
+                                target_title = st.session_state['target_page']
+                                
+                                # Use toc_list which is already filtered for Level 1
+                                logs, created_map = import_chapters_to_wikibase(parent_qid, toc_list)
+                                
+                                title_to_url = {x['title']: x['page_name'] for x in toc_list}
+                                link_logs = []
+                                
+                                for item in created_map:
+                                    qid = item['qid']
+                                    d_title = item['title'] 
+                                    
+                                    url_slug = title_to_url.get(d_title, d_title)
+                                    full_page_url = f"{target_title}/{url_slug}"
+                                    
+                                    success, msg = set_sitelink(qid, full_page_url)
+                                    if success: link_logs.append(f"🔗 {qid}->{url_slug}")
+                                    else: link_logs.append(f"❌ Fail {qid}")
+                                
+                                st.success(f"✅ Processed {len(created_map)} Chapters")
+                                with st.expander("Logs"):
+                                    st.write(logs)
+                                    st.write(link_logs)
+                        except Exception as e: st.error(str(e))
