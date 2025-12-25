@@ -549,49 +549,29 @@ elif st.session_state.pipeline_stage == "split":
             except Exception as e:
                 st.error(f"Failed: {e}")
 
-        # --- PART B: BAHAIDATA CONNECTION (Conditional) ---
+        # --- PART B: HANDOFF TO CHAPTER MANAGER ---
         if st.session_state.get("split_completed"):
+            st.divider()
+            st.subheader("4. Chapter Metadata")
             
-            # Check for authors in filtered list (Level 1 only)
-            has_authors = any(len(item.get('author', [])) > 0 for item in toc_list)
+            # Filter for items that probably need metadata (Authors exists OR it's a sub-section)
+            # We use the same list we used for splitting, or the full TOC if you prefer flexibility.
+            # Here we pass the full TOC so you can decide in the next screen what to link.
             
-            if has_authors:
-                st.divider()
-                st.subheader("Bahaidata Automation")
-                st.info("Since authors were detected, you can now create and link chapter items.")
+            if st.button("📝 Review & Create Chapter Items", type="primary", width='stretch'):
+                # 1. Pack the data
+                chapter_payload = []
+                full_toc = st.session_state.get("toc_map", [])
                 
-                parent_qid = st.session_state.get("parent_qid", "")
+                for item in full_toc:
+                    # Logic: Pre-fill only relevant items (e.g. those with authors or valid page names)
+                    # You can adjust this filter, but sending everything allows you to delete rows in the next step.
+                    if item.get("page_name") and str(item.get("page_name")).strip() != "":
+                        chapter_payload.append(item)
                 
-                if st.button("Create and connect chapter items", type="primary"):
-                    if not parent_qid: 
-                        st.error("Missing Parent QID. Go back to Stage 2 to set it.")
-                    else:
-                        try:
-                            with st.spinner("Processing Bahaidata items..."):
-                                target_title = st.session_state['target_page']
-                                
-                                # FILTER: Only include items that actually have an author listed
-                                authored_items = [x for x in toc_list if x.get('author') and len(x['author']) > 0]
-                                
-                                # Pass the filtered list instead of the full toc_list
-                                logs, created_map = import_chapters_to_wikibase(parent_qid, authored_items)
-                                
-                                title_to_url = {x['title']: x['page_name'] for x in toc_list}
-                                link_logs = []
-                                
-                                for item in created_map:
-                                    qid = item['qid']
-                                    d_title = item['title'] 
-                                    
-                                    url_slug = title_to_url.get(d_title, d_title)
-                                    full_page_url = f"{target_title}/{url_slug}"
-                                    
-                                    success, msg = set_sitelink(qid, full_page_url)
-                                    if success: link_logs.append(f"🔗 {qid}->{url_slug}")
-                                    else: link_logs.append(f"❌ Fail {qid}")
-                                
-                                st.success(f"✅ Processed {len(created_map)} Chapters")
-                                with st.expander("Logs"):
-                                    st.write(logs)
-                                    st.write(link_logs)
-                        except Exception as e: st.error(str(e))
+                st.session_state["chapter_review_data"] = chapter_payload
+                st.session_state["chapter_parent_qid"] = st.session_state.get("parent_qid", "")
+                st.session_state["chapter_target_base"] = st.session_state.get("target_page", "")
+                
+                # 2. Switch Page
+                st.switch_page("pages/05_chapter_items.py")
