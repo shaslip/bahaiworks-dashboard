@@ -41,9 +41,9 @@ if "chapter_data_df" not in st.session_state:
 # --- 2. Context Inputs ---
 c1, c2 = st.columns(2)
 with c1:
-    parent_qid = st.text_input("Parent Book QID", value=st.session_state.get("chapter_parent_qid", ""))
+    parent_qid = st.text_input("Bahaidata Parent Book QID", value=st.session_state.get("chapter_parent_qid", ""))
 with c2:
-    base_title = st.text_input("Base Page Title (e.g. 'Light of the World')", value=st.session_state.get("chapter_target_base", ""))
+    base_title = st.text_input("Bahai.works Page Title (e.g. 'Light of the World')", value=st.session_state.get("chapter_target_base", ""))
 
 st.markdown("---")
 
@@ -59,7 +59,7 @@ edited_df = st.data_editor(
     width='stretch',
     column_config={
         "Page Name (Slug)": st.column_config.TextColumn(
-            "Page Name (URL Slug)", 
+            "Page Name (URL after Base Page)", 
             width="medium", 
             help="The part of the URL after the book title."
         ),
@@ -69,13 +69,12 @@ edited_df = st.data_editor(
             help="The name of the item in the database. Leave blank to use Page Name."
         ),
         "Authors": st.column_config.TextColumn(
-            "Authors", 
+            "Authors (comma separated)", 
             width="medium"
         ),
         "Pages": st.column_config.TextColumn(
-            "Pages", 
+            "Pages (eg 4-6)", 
             width="small",
-            placeholder="e.g. 4-6"
         )
     }
 )
