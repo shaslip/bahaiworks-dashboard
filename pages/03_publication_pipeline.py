@@ -10,6 +10,7 @@ from src.wikibase_importer import import_book_to_wikibase
 from src.mediawiki_uploader import upload_to_bahaiworks
 from src.sitelink_manager import set_sitelink
 from src.text_processing import parse_text_file, find_best_match_for_title
+from src.evaluator import translate_summary
 
 st.set_page_config(layout="wide", page_title="Publication Pipeline")
 
@@ -81,14 +82,24 @@ if "pipeline_stage" not in st.session_state:
 # --- UI Header ---
 st.title(f"📖 {filename}")
 
+# Determine Default Language Index
+lang_options = ["English", "German"]
+default_lang_index = 0
+if record.language and record.language.lower() in ["german", "de", "deutsch"]:
+    default_lang_index = 1
+
 # Global Config Row
 g1, g2, g3, g4 = st.columns(4)
 with g1:
     st.session_state["target_page"] = st.text_input("🎯 Page Title", value=st.session_state["target_page"])
 with g2:
-    pub_language = st.radio("Language", ["English", "German"], horizontal=True, key="cfg_lang")
+    # CHANGED: Radio -> Selectbox with Smart Default
+    pub_language = st.selectbox("Language", lang_options, index=default_lang_index, key="cfg_lang")
 with g3:
-    pub_type = st.radio("Type", ["Book", "Periodical", "Unstructured"], horizontal=True, key="cfg_type")
+    # CHANGED: Radio -> Selectbox, Default to Unstructured
+    # Note: If you want Unstructured as default, it must be 0th index
+    type_options = ["Unstructured", "Book", "Periodical"]
+    pub_type = st.selectbox("Type", type_options, index=0, key="cfg_type")
 with g4:
     st.write("Permissions")
     is_copyright = st.checkbox("Copyright Protected?", value=False, key="cfg_copy")
@@ -400,7 +411,26 @@ elif st.session_state.pipeline_stage == "proof":
             sim_title = st.text_input("Title", value=st.session_state["target_page"])
             sim_author = st.text_input("Author")
             sim_year = st.text_input("Year")
-            sim_summary = st.text_area("Summary", height=150)
+            
+            # --- RESTORED TRANSLATION LOGIC ---
+            st.write("**Summary / Abstract**")
+            summary_key = f"summary_{doc_id}"
+            
+            # Load initial summary from DB if not in state
+            if summary_key not in st.session_state:
+                st.session_state[summary_key] = record.summary or ""
+
+            # Translation Button
+            if st.button("🤖 Translate to German"):
+                with st.spinner("Translating..."):
+                    current_text = st.session_state.get(summary_key, "")
+                    german_text = translate_summary(current_text)
+                    if german_text:
+                        st.session_state[summary_key] = german_text
+                        st.rerun()
+
+            # The Text Area
+            sim_summary = st.text_area("Content", key=summary_key, height=150)
             
         with c_sim2:
             st.info("Preview")
