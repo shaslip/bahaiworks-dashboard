@@ -242,6 +242,11 @@ elif st.session_state.pipeline_stage == "proof":
                 if st.button("💾 Update Content Tab", type="secondary", width="stretch"):
                     try:
                         st.session_state["toc_json_list"] = json.loads(toc_edit_text)
+                        
+                        # FORCE REFRESH of the Editor DataFrame next time it loads
+                        if "editor_df" in st.session_state:
+                            del st.session_state["editor_df"]
+                            
                         st.success("TOC List Updated! Check Tab 2.")
                     except Exception as e:
                         st.error(f"Invalid JSON: {e}")
@@ -317,6 +322,45 @@ elif st.session_state.pipeline_stage == "proof":
             # --- COLUMN 1: MASTER DATA ---
             with c_editor:
                 st.subheader("1. Edit Chapter Data")
+                
+                # --- STABILITY FIX: Initialize DataFrame in Session State ---
+                # We only build the DataFrame from JSON once (or if explicitly refreshed), 
+                # effectively caching it so the editor doesn't reset/glitch between fast edits.
+                if "editor_df" not in st.session_state:
+                    # Build initial DF from JSON source
+                    raw_data = []
+                    for item in st.session_state.get("toc_json_list", []):
+                        original_title = item.get("title", "")
+                        level = item.get("level", 1) 
+                        prefix = item.get("prefix", "")
+                        clean_title = original_title
+                        
+                        # Extract prefix if missing
+                        if not prefix:
+                            match = re.match(r"^(\d+(?:[./]\s*|\s+))", original_title)
+                            if match:
+                                prefix = match.group(1) 
+                                clean_title = original_title[len(prefix):].strip()
+                        
+                        p_name = item.get("page_name", clean_title)
+                        d_title = item.get("display_title", clean_title)
+                        
+                        if p_name and p_name.isupper():
+                            p_name = p_name.title()
+
+                        authors_str = ", ".join(item.get("author", []))
+                        
+                        raw_data.append({
+                            "Level": level,
+                            "Prefix": prefix,
+                            "Page Name (URL)": p_name,
+                            "Display Title": d_title,
+                            "Page Range": item.get("page_range", ""),
+                            "Authors": authors_str
+                        })
+                    st.session_state["editor_df"] = pd.DataFrame(raw_data)
+
+                # Configure Columns
                 column_config = {
                     "Level": st.column_config.NumberColumn("Lvl", min_value=1, max_value=3, width="small"),
                     "Prefix": st.column_config.TextColumn("Prefix", width="small"),
@@ -324,22 +368,26 @@ elif st.session_state.pipeline_stage == "proof":
                     "Display Title": st.column_config.TextColumn("Display Title", width="medium"),
                 }
                 
+                # Render Editor using the STABLE session_state dataframe
                 edited_df = st.data_editor(
-                    df, 
+                    st.session_state["editor_df"], 
                     num_rows="dynamic", 
                     width='stretch',
                     height=600,
-                    column_config=column_config
+                    column_config=column_config,
+                    key="chapter_data_editor" 
                 )
                 
-                # Reconstruct JSON & Wikitext
+                # Update the stable DF immediately
+                st.session_state["editor_df"] = edited_df
+
+                # --- PROCESSING LOOP ---
                 updated_toc_list = []
                 computed_toc_wikitext = ""
-                
-                # STATE VARIABLE: Track if the current Level 1 is a "Container" (Unlinked)
                 current_section_is_container = False 
                 
                 for index, row in edited_df.iterrows():
+                    # Extract values
                     raw_authors = str(row["Authors"]) if row["Authors"] else ""
                     auth_list = [a.strip() for a in raw_authors.split(",") if a.strip()]
                     
@@ -347,8 +395,7 @@ elif st.session_state.pipeline_stage == "proof":
                     d_title = row["Display Title"]
                     prefix = row["Prefix"]
                     
-                    # --- FIX: Safe Cast for Level ---
-                    # Handles empty rows, None, or NaN values without crashing
+                    # --- CRASH FIX: Safe Cast for Level ---
                     raw_level = row["Level"]
                     try:
                         if pd.isna(raw_level) or raw_level == "":
@@ -357,7 +404,7 @@ elif st.session_state.pipeline_stage == "proof":
                             level = int(raw_level)
                     except (ValueError, TypeError):
                         level = 1
-                    # -------------------------------
+                    # -------------------------------------
 
                     if prefix is None: prefix = ""
                     
@@ -383,7 +430,7 @@ elif st.session_state.pipeline_stage == "proof":
                             current_section_is_container = False
                             computed_toc_wikitext += f"\n:{prefix}[[/{p_name}|{d_title}]]" 
                     else:
-                        # Logic B: Sub-sections (Level 2+)
+                        # Logic B: Sub-sections
                         should_link = (len(auth_list) > 0) or current_section_is_container
                         
                         if should_link:
@@ -394,7 +441,7 @@ elif st.session_state.pipeline_stage == "proof":
                         else:
                             computed_toc_wikitext += f"\n{indent}{prefix}{d_title}"
                 
-                # Sync back to state
+                # Sync back to JSON state (for other tabs/saving)
                 st.session_state["toc_json_list"] = updated_toc_list
 
             # --- COLUMN 2: PREVIEW ---
