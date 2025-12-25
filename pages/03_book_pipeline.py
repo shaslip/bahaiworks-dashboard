@@ -77,20 +77,30 @@ if st.session_state.pipeline_stage == "setup":
 
     if st.button("🚀 Send to Gemini", type="primary"):
         with st.spinner("🤖 Gemini is extracting..."):
+            
+            # 1. Extract Metadata (Copyright)
             if cr_pages:
                 res = extract_metadata_from_pdf(file_path, cr_pages)
                 if "error" not in res:
                     st.session_state["meta_result"] = res
                     st.session_state["talk_text"] = res.get("copyright_text", "")
                     st.session_state["meta_json_str"] = json.dumps(res.get("data", {}), indent=4)
+                else:
+                    st.error(f"Metadata Extraction Failed: {res['error']}")
 
+            # 2. Extract TOC
             if toc_pages:
                 res = extract_toc_from_pdf(file_path, toc_pages)
                 if "error" not in res:
                     st.session_state["toc_json_list"] = res.get("toc_json", [])
-            
-            st.session_state.pipeline_stage = "proof"
-            st.rerun()
+                    st.session_state.pipeline_stage = "proof"
+                    st.rerun()
+                else:
+                    st.error(f"TOC Extraction Failed: {res['error']}")
+                    # If we have raw text, show it for debugging
+                    if "raw" in res:
+                        with st.expander("See Raw Gemini Response (Debug)"):
+                            st.text(res["raw"])
 
 # --- STAGE 2: PROOFREAD & IMPORT ---
 elif st.session_state.pipeline_stage == "proof":
