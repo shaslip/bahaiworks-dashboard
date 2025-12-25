@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from src.wikibase_importer import import_chapters_to_wikibase
+from src.chapter_importer import import_chapters_to_wikibase
 from src.sitelink_manager import set_sitelink
 
 st.set_page_config(layout="wide", page_title="Chapter Manager")
