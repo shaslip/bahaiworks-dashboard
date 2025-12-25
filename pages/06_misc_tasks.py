@@ -12,8 +12,23 @@ st.set_page_config(
 
 st.title("🛠️ Miscellaneous Utilities")
 
-if st.button("← Back to Dashboard"):
-    st.switch_page("app.py")
+# --- HELP SECTION ---
+with st.expander("ℹ️ Help / Instructions"):
+    st.markdown("""
+    **1. Author Manager**
+    * **Batch Creation:** Paste a list of author names (comma-separated) to create their pages in bulk.
+    * **Sync:** This tool automatically creates the Wikibase item for the author (if missing) and links it to the new Bahai.works page.
+    * **Modes:**
+        * *Dynamic:* Uses a Lua module to automatically list all chapters/books by this author. (Recommended)
+        * *Static:* Hard-codes a link to a specific book. Use this only for authors with a single major work.
+
+    **2. Book Manager**
+    * **Copyright AC-Message:** Generates the special `/AC-Message` subpage required for copyright-protected books.
+    * **Usage:** Enter the exact Book Title (Page Name) and the cover image filename.
+
+    **3. System Maintenance**
+    * **Update Authors Index:** Scans all `Category:Authors-A` through `Z` and rebuilds the main [[Authors]] index page. Run this periodically if the main index feels out of date.
+    """)
 
 st.markdown("---")
 
