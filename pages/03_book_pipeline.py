@@ -512,8 +512,11 @@ elif st.session_state.pipeline_stage == "split":
                             with st.spinner("Processing Bahaidata items..."):
                                 target_title = st.session_state['target_page']
                                 
-                                # Use toc_list which is already filtered for Level 1
-                                logs, created_map = import_chapters_to_wikibase(parent_qid, toc_list)
+                                # FILTER: Only include items that actually have an author listed
+                                authored_items = [x for x in toc_list if x.get('author') and len(x['author']) > 0]
+                                
+                                # Pass the filtered list instead of the full toc_list
+                                logs, created_map = import_chapters_to_wikibase(parent_qid, authored_items)
                                 
                                 title_to_url = {x['title']: x['page_name'] for x in toc_list}
                                 link_logs = []
