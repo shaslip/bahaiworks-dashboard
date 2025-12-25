@@ -134,3 +134,17 @@ def import_book_to_wikibase(data):
     for cid in compiler_ids: link_book_to_person(wbi, book.id, cid, 'P44')
 
     return book.id
+
+def get_or_create_author(author_name):
+    """
+    Standalone function to get or create an author item.
+    Handles authentication internally.
+    Useful for utility scripts (e.g. 06_misc_tasks.py).
+    """
+    wbi = get_wbi_instance()
+    
+    # Clean the input just in case "Author:Name" is passed
+    clean_name = author_name.replace("Author:", "").strip()
+    
+    # Reuse existing logic (searches label, creates Human Q100 if missing)
+    return check_or_create_person(wbi, clean_name, "author")
