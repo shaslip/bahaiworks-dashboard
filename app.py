@@ -137,7 +137,7 @@ def render_details(selected_id):
         st.divider()
 
         # === TABS ===
-        tab_pub = st.tabs(["📝 Publisher"])
+        tab_pub, = st.tabs(["📝 Publisher"])
 
         # -------------------------
         # TAB 2: PUBLISHER (NEW)
