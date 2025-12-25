@@ -229,15 +229,14 @@ elif st.session_state.pipeline_stage == "proof":
                             if ok: st.success("Linked")
                             else: st.error(msg)
 
-            # COLUMN 3: TOC JSON (NEW)
+            # COLUMN 3: TOC JSON (Source)
             with c_toc:
                 st.subheader("TOC JSON (Source)")
-                # Get current state of TOC list to display
                 current_toc = st.session_state.get("toc_json_list", [])
-                toc_str = json.dumps(current_toc, indent=2)
                 
-                # We use a key that updates if the list changes elsewhere to keep them in sync
-                # (e.g. if you edit in Tab 2, this box updates)
+                # CHANGED: ensure_ascii=False fixes the "Bah\u00e1\u2019\u00ed" issue
+                toc_str = json.dumps(current_toc, indent=2, ensure_ascii=False)
+                
                 toc_edit_text = st.text_area("Structure Data", value=toc_str, height=500, key=f"toc_edit_{len(current_toc)}")
                 
                 if st.button("💾 Update Content Tab", type="secondary", width="stretch"):
