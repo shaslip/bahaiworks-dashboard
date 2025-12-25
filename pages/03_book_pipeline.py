@@ -155,9 +155,11 @@ elif st.session_state.pipeline_stage == "proof":
         
         # Prepare Data for Editor
         raw_data = []
-        for item in st.session_state["toc_json_list"]:
+        toc_source = st.session_state["toc_json_list"]
+        
+        for i, item in enumerate(toc_source):
             original_title = item.get("title", "")
-            level = item.get("level", 1) # Default to Level 1 (Chapter)
+            level = item.get("level", 1) 
             
             # --- Prefix Extraction ---
             prefix = item.get("prefix", "")
@@ -173,10 +175,34 @@ elif st.session_state.pipeline_stage == "proof":
             d_title = item.get("display_title", clean_title)
             
             # --- AUTO-FIX: ALL CAPS to Title Case ---
-            # Only apply this to the Page Name (URL slug) to make it cleaner
             if p_name and p_name.isupper():
                 p_name = p_name.title()
             
+            # --- NEW LOGIC: Smart Container Detection ---
+            # If this is Level 1, look ahead to see if it acts as a "Section Header" for authored papers.
+            if level == 1:
+                has_authored_children = False
+                # Loop through subsequent items
+                for j in range(i + 1, len(toc_source)):
+                    next_item = toc_source[j]
+                    next_level = next_item.get("level", 1)
+                    
+                    # Stop if we hit the next sibling (another Chapter or Section)
+                    if next_level == 1: 
+                        break
+                    
+                    # If we find a child (Level > 1) that has authors, this is a Scholarly Container
+                    if next_level > 1:
+                        child_authors = next_item.get("author", [])
+                        if child_authors and len(child_authors) > 0:
+                            has_authored_children = True
+                            break
+                
+                # If identified as a Container, clear the Page Name so it defaults to UNLINKED
+                if has_authored_children:
+                    p_name = ""
+            # --------------------------------------------
+
             authors_str = ", ".join(item.get("author", []))
             
             raw_data.append({
