@@ -158,6 +158,41 @@ def format_ac_message(title, cover_file):
 | cover    = {cover_file}
 }}}}"""
 
+def ensure_wikibase_author(author_name):
+    """
+    1. Checks if a Wikibase item exists for the author.
+    2. Creates it if missing.
+    3. Links it to 'Author:{author_name}'.
+    """
+    wbi = WikibaseIntegrator(login=None) # Assumes env vars or prior login. 
+    # If explicit login is needed: wbi.login.client_login(WIKIBASE_USER, WIKIBASE_PASS)
+
+    # 1. Search for existing item by Label
+    # We strip "Author:" just in case, though your input usually doesn't have it.
+    clean_name = author_name.replace("Author:", "").strip()
+    
+    # Simple search
+    search_results = wbi.item.get_by_label(clean_name, language="en")
+    
+    qid = None
+    if search_results:
+        # Take the first match
+        qid = search_results[0]
+    else:
+        # 2. Create new item
+        item = wbi.item.new()
+        item.labels.set(language="en", value=clean_name)
+        item.descriptions.set(language="en", value="Author")
+        # You can add 'instance of' (P31) -> 'human' (Q5) if you know the IDs, but keeping it simple:
+        new_item = item.write()
+        qid = new_item.id
+
+    # 3. Link to Bahai.works
+    target_page = f"Author:{clean_name}"
+    success, msg = set_sitelink(qid, target_page)
+    
+    return qid, success, msg
+
 # --- TAB: AUTHOR MANAGER ---
 
 with tab_author:
@@ -260,6 +295,7 @@ with tab_author:
                         txt_cat_works = format_works_cat_page(author_name)
 
                         try:
+                            # --- A. Bahai.works Uploads ---
                             # 1. Author Page
                             upload_to_bahaiworks(p_author, txt_author, "Created Author page (Misc Tool)", check_exists=True)
                             
@@ -269,15 +305,32 @@ with tab_author:
                             # 3. Works Category
                             upload_to_bahaiworks(p_cat_works, txt_cat_works, "Created Works Category", check_exists=True)
                             
+                            # --- B. Bahaidata Sync (NEW) ---
+                            status_box.write(f"Syncing Bahaidata for **{author_name}**...")
+                            qid, linked, link_msg = ensure_wikibase_author(author_name)
+                            
+                            if linked:
+                                st.toast(f"✅ {author_name}: Pages created & Linked to {qid}")
+                            else:
+                                st.warning(f"Pages created, but Link failed for {qid}: {link_msg}")
+                            
                             success_count += 1
+
                         except FileExistsError:
-                            st.toast(f"⚠️ Skipped {author_name} (Already Exists)")
+                            # Even if pages exist, we should still try to ensure the Link exists!
+                            try:
+                                qid, linked, link_msg = ensure_wikibase_author(author_name)
+                                if linked:
+                                    st.toast(f"Updated Link for existing author: {qid}")
+                            except Exception as e_link:
+                                st.error(f"Link Error on {author_name}: {e_link}")
+                                
                         except Exception as e:
                             st.error(f"❌ Error on {author_name}: {e}")
                         
                         progress_bar.progress((i + 1) / total_ops)
 
-                    status_box.success(f"✅ Process Complete! Created pages for {success_count} authors.")
+                    status_box.success(f"✅ Process Complete! Processed {success_count} authors.")
                     st.balloons()
 
 # --- TAB: BOOK MANAGER ---
