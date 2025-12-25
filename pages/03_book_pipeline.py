@@ -218,7 +218,10 @@ elif st.session_state.pipeline_stage == "proof":
             computed_toc_wikitext = ""
             
             for index, row in edited_df.iterrows():
-                auth_list = [a.strip() for a in row["Authors"].split(",") if a.strip()]
+                # Data cleanup
+                raw_authors = str(row["Authors"]) if row["Authors"] else ""
+                auth_list = [a.strip() for a in raw_authors.split(",") if a.strip()]
+                
                 p_name = row["Page Name (URL)"]
                 d_title = row["Display Title"]
                 prefix = row["Prefix"]
@@ -227,22 +230,39 @@ elif st.session_state.pipeline_stage == "proof":
                 if prefix is None: prefix = ""
                 
                 updated_toc_list.append({
-                    "title": d_title,            
-                    "page_name": p_name,          
-                    "display_title": d_title,     
+                    "title": d_title, 
+                    "page_name": p_name,
+                    "display_title": d_title,
                     "prefix": prefix,
                     "level": level,
                     "page_range": row["Page Range"],
                     "author": auth_list
                 })
                 
-                # Build Wikitext Preview based on Level
+                # --- WIKITEXT GENERATION LOGIC ---
+                # Calculate MediaWiki indentation (Level 1 = :, Level 2 = ::, etc.)
+                indent = ":" * level
+                
+                # Logic A: Level 1 (Chapters / Sections)
                 if level == 1:
-                    # Chapter: :1. [[/PageName|DisplayTitle]]
-                    computed_toc_wikitext += f"\n:{prefix}[[/{p_name}|{d_title}]]"
+                    # If Page Name is empty, treat as plain text (Useful for "Section Headers")
+                    if p_name and p_name.strip():
+                        computed_toc_wikitext += f"\n:{prefix}[[/{p_name}|{d_title}]]"
+                    else:
+                        computed_toc_wikitext += f"\n:{prefix}{d_title}"
+
+                # Logic B: Sub-sections (Level 2+)
                 else:
-                    # Subtopic: :: 1. DisplayTitle (No Link)
-                    computed_toc_wikitext += f"\n::{prefix}{d_title}"
+                    if auth_list:
+                        # SCHOLARLY MODE: Item has author -> Link it + Add Author Line
+                        computed_toc_wikitext += f"\n{indent}{prefix}[[/{p_name}|{d_title}]]"
+                        
+                        # Author Line: Indented one level deeper, italicized
+                        authors_str = ", ".join(auth_list)
+                        computed_toc_wikitext += f"\n{indent}: ''{authors_str}''"
+                    else:
+                        # STANDARD MODE: No author -> Plain Text Subtopic
+                        computed_toc_wikitext += f"\n{indent}{prefix}{d_title}"
             
             st.session_state["toc_json_list"] = updated_toc_list
 
