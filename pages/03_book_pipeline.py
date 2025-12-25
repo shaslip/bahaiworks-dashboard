@@ -243,6 +243,10 @@ elif st.session_state.pipeline_stage == "proof":
             updated_toc_list = []
             computed_toc_wikitext = ""
             
+            # STATE VARIABLE: Track if the current Level 1 is a "Container" (Unlinked)
+            # If True, all subsequent Level 2 items will be forced to Link.
+            current_section_is_container = False 
+            
             for index, row in edited_df.iterrows():
                 # Data cleanup
                 raw_authors = str(row["Authors"]) if row["Authors"] else ""
@@ -256,7 +260,7 @@ elif st.session_state.pipeline_stage == "proof":
                 if prefix is None: prefix = ""
                 
                 updated_toc_list.append({
-                    "title": d_title, 
+                    "title": d_title,
                     "page_name": p_name,
                     "display_title": d_title,
                     "prefix": prefix,
@@ -266,28 +270,34 @@ elif st.session_state.pipeline_stage == "proof":
                 })
                 
                 # --- WIKITEXT GENERATION LOGIC ---
-                # Calculate MediaWiki indentation (Level 1 = :, Level 2 = ::, etc.)
                 indent = ":" * level
                 
                 # Logic A: Level 1 (Chapters / Sections)
                 if level == 1:
-                    # If Page Name is empty, treat as plain text (Useful for "Section Headers")
-                    if p_name and p_name.strip():
-                        computed_toc_wikitext += f"\n:{prefix}[[/{p_name}|{d_title}]]"
+                    # If Page Name is empty (either manually or via auto-detect), 
+                    # we treat this as a CONTAINER.
+                    if not p_name or not p_name.strip():
+                        current_section_is_container = True
+                        computed_toc_wikitext += f"\n:{prefix}{d_title}" # Plain Text Header
                     else:
-                        computed_toc_wikitext += f"\n:{prefix}{d_title}"
+                        current_section_is_container = False
+                        computed_toc_wikitext += f"\n:{prefix}[[/{p_name}|{d_title}]]" # Linked Header
 
                 # Logic B: Sub-sections (Level 2+)
                 else:
-                    if auth_list:
-                        # SCHOLARLY MODE: Item has author -> Link it + Add Author Line
+                    # Link IF: (It has an explicit author) OR (We are inside a Container)
+                    should_link = (len(auth_list) > 0) or current_section_is_container
+                    
+                    if should_link:
+                        # Render as Link
                         computed_toc_wikitext += f"\n{indent}{prefix}[[/{p_name}|{d_title}]]"
                         
-                        # Author Line: Indented one level deeper, italicized
-                        authors_str = ", ".join(auth_list)
-                        computed_toc_wikitext += f"\n{indent}: ''{authors_str}''"
+                        # Only add the author line if an author actually exists
+                        if auth_list:
+                            authors_str = ", ".join(auth_list)
+                            computed_toc_wikitext += f"\n{indent}: ''{authors_str}''"
                     else:
-                        # STANDARD MODE: No author -> Plain Text Subtopic
+                        # Render as Plain Text (Standard Book behavior)
                         computed_toc_wikitext += f"\n{indent}{prefix}{d_title}"
             
             st.session_state["toc_json_list"] = updated_toc_list
