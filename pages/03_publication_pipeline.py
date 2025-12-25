@@ -264,9 +264,17 @@ elif st.session_state.pipeline_stage == "proof":
                 
                 for i, item in enumerate(toc_source):
                     original_title = item.get("title", "")
-                    level = item.get("level", 1) 
-                    prefix = item.get("prefix", "")
+                    
+                    # --- SAFETY FIX: Handle None/Null Levels ---
+                    raw_level = item.get("level", 1)
+                    try:
+                        level = 1 if (raw_level is None or raw_level == "") else int(raw_level)
+                    except (ValueError, TypeError):
+                        level = 1
+                    # -------------------------------------------
+                    
                     clean_title = original_title
+                    prefix = item.get("prefix", "")
                     
                     if not prefix:
                         match = re.match(r"^(\d+(?:[./]\s*|\s+))", original_title)
@@ -284,7 +292,11 @@ elif st.session_state.pipeline_stage == "proof":
                         has_authored_children = False
                         for j in range(i + 1, len(toc_source)):
                             next_item = toc_source[j]
-                            next_level = next_item.get("level", 1)
+                            
+                            # Safety check for next item level too
+                            nl_raw = next_item.get("level", 1)
+                            try: next_level = int(nl_raw) if nl_raw else 1
+                            except: next_level = 1
                             
                             if next_level == 1: break # Hit next sibling
                             
