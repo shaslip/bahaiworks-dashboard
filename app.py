@@ -241,10 +241,3 @@ with st.sidebar:
         render_details(st.session_state.selected_doc_id)
     else:
         st.info("Select a document from the table to view details.")
-
-    # --- ADD THIS SECTION BELOW ---
-    st.markdown("---")
-    st.subheader("🛠️ Utilities")
-    
-    if st.button("⚡ Open Misc Tasks", width="stretch"):
-        st.switch_page("pages/06_misc_tasks.py")
