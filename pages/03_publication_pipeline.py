@@ -428,10 +428,11 @@ elif st.session_state.pipeline_stage == "proof":
             with c_preview:
                 st.subheader("2. Page Preview")
                 
+                # Book Workflow
                 header_text = generate_header(
                     title=st.session_state["target_page"],
-                    author="[Author]", 
-                    year="[Year]",
+                    author="", 
+                    year="",
                     language=pub_language,
                     is_copyright=is_copyright,
                     filename=filename
