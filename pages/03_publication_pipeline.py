@@ -412,7 +412,7 @@ elif st.session_state.pipeline_stage == "proof":
             sim_author = st.text_input("Author")
             sim_year = st.text_input("Year")
             
-            # --- RESTORED TRANSLATION LOGIC ---
+            # --- RESTORED & DYNAMIC TRANSLATION LOGIC ---
             st.write("**Summary / Abstract**")
             summary_key = f"summary_{doc_id}"
             
@@ -420,14 +420,19 @@ elif st.session_state.pipeline_stage == "proof":
             if summary_key not in st.session_state:
                 st.session_state[summary_key] = record.summary or ""
 
-            # Translation Button
-            if st.button("🤖 Translate to German"):
-                with st.spinner("Translating..."):
-                    current_text = st.session_state.get(summary_key, "")
-                    german_text = translate_summary(current_text)
-                    if german_text:
-                        st.session_state[summary_key] = german_text
-                        st.rerun()
+            # Dynamic Translation Button
+            # Only show if target is NOT English
+            if pub_language != "English":
+                if st.button(f"🤖 Translate to {pub_language}"):
+                    with st.spinner(f"Translating to {pub_language}..."):
+                        current_text = st.session_state.get(summary_key, "")
+                        
+                        # Note: Ensure src/evaluator.py accepts target_language
+                        translated_text = translate_summary(current_text, target_language=pub_language)
+                        
+                        if translated_text:
+                            st.session_state[summary_key] = translated_text
+                            st.rerun()
 
             # The Text Area
             sim_summary = st.text_area("Content", key=summary_key, height=150)
