@@ -59,12 +59,12 @@ edited_df = st.data_editor(
     width='stretch',
     column_config={
         "Page Name (Slug)": st.column_config.TextColumn(
-            "Page Name (URL after Base Page)", 
-            width="medium", 
+            "Page Name (URL after Base Page)",
+            width="medium",
             help="The part of the URL after the book title."
         ),
         "Item Label": st.column_config.TextColumn(
-            "Item Label (Wikibase)", 
+            "Item Label (If different than Page Name)",
             width="medium",
             help="The name of the item in the database. Leave blank to use Page Name."
         ),
