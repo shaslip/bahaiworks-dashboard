@@ -132,12 +132,29 @@ if st.button("🚀 Process Items (Create & Link)", type="primary"):
         link_logs = []
         progress_bar = st.progress(0)
         
+        # Helper: Map Titles to Page Slugs from our original input list
+        # This ensures we have the slug even if the importer doesn't return it.
+        slug_lookup = {x['title']: x['page_name'] for x in process_list}
+        
         total = len(created_map)
         for i, item in enumerate(created_map):
             qid = item.get('qid')
-            page_slug = item.get('page_name') 
+            title = item.get('title')
             
-            if qid and page_slug and base_title:
+            # 1. Try getting slug from importer return
+            page_slug = item.get('page_name')
+            
+            # 2. If missing, look it up from our input data using the Title
+            if not page_slug and title:
+                page_slug = slug_lookup.get(title)
+            
+            # 3. Check Base Title
+            if not base_title:
+                link_logs.append(f"⚠️ Skipping Link for {qid} (Missing Base Page Title)")
+                continue
+
+            # 4. Execute Link
+            if qid and page_slug:
                 full_url = f"{base_title}/{page_slug}"
                 
                 success, msg = set_sitelink(qid, full_url)
@@ -146,7 +163,7 @@ if st.button("🚀 Process Items (Create & Link)", type="primary"):
                 else:
                     link_logs.append(f"❌ Link Fail {qid}: {msg}")
             else:
-                link_logs.append(f"⚠️ Skipping Link for {qid} (Missing info)")
+                link_logs.append(f"⚠️ Skipping Link for {qid} (Missing info: Slug='{page_slug}')")
             
             progress_bar.progress((i + 1) / total)
 
