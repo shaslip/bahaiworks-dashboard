@@ -190,7 +190,55 @@ class OcrEngine:
         print(f"Success! Saved to {self.output_txt_path}")
         return self.output_txt_path
 
-    def cleanup(self):
-        """Removes the temporary PNG folder."""
-        if os.path.exists(self.cache_dir):
-            shutil.rmtree(self.cache_dir)
+    def cleanup(self, config: OcrConfig):
+        """
+        Moves illustration images to permanent storage, then nukes the temp folder.
+        """
+        if not os.path.exists(self.cache_dir):
+            return
+
+        # 1. Setup Destination
+        # Structure: data/images/{book_name}/raw/
+        # We move up from work_dir to find root, or just create a 'data' folder next to the pdf folder
+        # For simplicity, let's create a "images" folder in the same directory as the PDF
+        dest_root = os.path.join(self.work_dir, "images", self.book_name, "raw")
+        
+        # 2. Identify Images to Save
+        images_to_save = []
+        if config.illustration_ranges:
+            os.makedirs(dest_root, exist_ok=True)
+            
+            # config.illustration_ranges is [(10, 15), (20, 22)] (0-based indices)
+            # Files are named "page-1.png" (1-based index) or similar.
+            # We need to map carefully.
+            
+            # Let's look at the files in cache
+            for filename in os.listdir(self.cache_dir):
+                if not filename.endswith(".png"): continue
+                
+                # Extract page number from "page-15.png"
+                # Assuming standard pdftoppm output format "page-15.png" or "page-015.png"
+                try:
+                    # Split by last - or just extract numbers
+                    num_part = re.findall(r'\d+', filename)[-1]
+                    page_num_1_based = int(num_part)
+                    page_index_0_based = page_num_1_based - 1
+                    
+                    # Check if this index is in any range
+                    is_illus = False
+                    for start, end in config.illustration_ranges:
+                        if start <= page_index_0_based <= end:
+                            is_illus = True
+                            break
+                    
+                    if is_illus:
+                        src = os.path.join(self.cache_dir, filename)
+                        dst = os.path.join(dest_root, f"illus_p{page_num_1_based}.png")
+                        shutil.move(src, dst)
+                        print(f"Saved illustration: {dst}")
+                        
+                except Exception as e:
+                    print(f"Warning: Could not process {filename} during cleanup: {e}")
+
+        # 3. Nuke the rest
+        shutil.rmtree(self.cache_dir)
