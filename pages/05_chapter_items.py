@@ -21,7 +21,7 @@ with st.expander("ℹ️ Help / Instructions"):
 
     Under "Review Items"
 
-    **Page Name** If the page where the content existed was "Light of the World/Chapter 1" enter "Chapter 1"
+    **Page Name** If the bahai.works page where the content existed was "Light of the World/Chapter 1" enter "Chapter 1"
     
     **Item Label** The label will match the Page Name by default. You can leave this blank.
     
