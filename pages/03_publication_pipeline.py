@@ -313,9 +313,6 @@ elif st.session_state.pipeline_stage == "proof":
                     key="chapter_editor"
                 )
                 
-                # CRITICAL: Update the persistent DF immediately so changes stick
-                st.session_state["chapter_df"] = edited_df
-
                 # 4. Process Updates (DataFrame -> JSON/Wikitext)
                 updated_toc_list = []
                 computed_toc_wikitext = ""
