@@ -253,114 +253,49 @@ elif st.session_state.pipeline_stage == "proof":
 
         # --- TAB 2: CONTENT ---
         with t2:
+            # 1. Initialize State Variables
             if "toc_json_list" not in st.session_state:
                 st.session_state["toc_json_list"] = []
-            
-            # Prepare Data for Editor
-            raw_data = []
-            toc_source = st.session_state["toc_json_list"]
-            
-            for i, item in enumerate(toc_source):
-                original_title = item.get("title", "")
-                level = item.get("level", 1) 
-                prefix = item.get("prefix", "")
-                clean_title = original_title
 
-                if not prefix:
-                    match = re.match(r"^(\d+(?:[./]\s*|\s+))", original_title)
-                    if match:
-                        prefix = match.group(1) 
-                        clean_title = original_title[len(prefix):].strip()
-                
-                p_name = item.get("page_name", clean_title)
-                d_title = item.get("display_title", clean_title)
-                
-                if p_name and p_name.isupper():
-                    p_name = p_name.title()
-                
-                # --- RESTORED LOGIC: Smart Container Detection ---
-                # If this is Level 1, look ahead to see if it acts as a "Section Header"
-                if level == 1:
-                    has_authored_children = False
-                    # Loop through subsequent items
-                    for j in range(i + 1, len(toc_source)):
-                        next_item = toc_source[j]
-                        next_level = next_item.get("level", 1)
-                        
-                        # Stop if we hit the next sibling (another Chapter or Section)
-                        if next_level == 1: 
-                            break
-                        
-                        # If we find a child (Level > 1) that has authors, this is a Scholarly Container
-                        if next_level > 1:
-                            child_authors = next_item.get("author", [])
-                            if child_authors and len(child_authors) > 0:
-                                has_authored_children = True
-                                break
+            # 2. Build the Working DataFrame (ONLY ONCE or if forced refresh)
+            # This prevents the "refresh loop" bug by keeping the DF stable in session state.
+            if "chapter_df" not in st.session_state:
+                raw_data = []
+                for item in st.session_state.get("toc_json_list", []):
+                    original_title = item.get("title", "")
+                    level = item.get("level", 1) 
+                    prefix = item.get("prefix", "")
+                    clean_title = original_title
                     
-                    # If identified as a Container, clear the Page Name so it defaults to UNLINKED
-                    if has_authored_children:
-                        p_name = ""
-                # --------------------------------------------------
+                    if not prefix:
+                        match = re.match(r"^(\d+(?:[./]\s*|\s+))", original_title)
+                        if match:
+                            prefix = match.group(1) 
+                            clean_title = original_title[len(prefix):].strip()
+                    
+                    p_name = item.get("page_name", clean_title)
+                    d_title = item.get("display_title", clean_title)
+                    if p_name and p_name.isupper(): p_name = p_name.title()
 
-                authors_str = ", ".join(item.get("author", []))
-                
-                raw_data.append({
-                    "Level": level,
-                    "Prefix": prefix,
-                    "Page Name (URL)": p_name,
-                    "Display Title": d_title,
-                    "Page Range": item.get("page_range", ""),
-                    "Authors": authors_str
-                })
-            
-            df = pd.DataFrame(raw_data)
+                    authors_str = ", ".join(item.get("author", []))
+                    
+                    raw_data.append({
+                        "Level": level,
+                        "Prefix": prefix,
+                        "Page Name (URL)": p_name,
+                        "Display Title": d_title,
+                        "Page Range": item.get("page_range", ""),
+                        "Authors": authors_str
+                    })
+                st.session_state["chapter_df"] = pd.DataFrame(raw_data)
 
-            # Layout
+            # 3. Layout
             c_editor, c_preview, c_actions = st.columns([2, 2, 1])
             
-            # --- COLUMN 1: MASTER DATA ---
+            # --- COLUMN 1: DATA EDITOR ---
             with c_editor:
                 st.subheader("1. Edit Chapter Data")
                 
-                # --- STABILITY FIX: Initialize DataFrame in Session State ---
-                # We only build the DataFrame from JSON once (or if explicitly refreshed), 
-                # effectively caching it so the editor doesn't reset/glitch between fast edits.
-                if "editor_df" not in st.session_state:
-                    # Build initial DF from JSON source
-                    raw_data = []
-                    for item in st.session_state.get("toc_json_list", []):
-                        original_title = item.get("title", "")
-                        level = item.get("level", 1) 
-                        prefix = item.get("prefix", "")
-                        clean_title = original_title
-                        
-                        # Extract prefix if missing
-                        if not prefix:
-                            match = re.match(r"^(\d+(?:[./]\s*|\s+))", original_title)
-                            if match:
-                                prefix = match.group(1) 
-                                clean_title = original_title[len(prefix):].strip()
-                        
-                        p_name = item.get("page_name", clean_title)
-                        d_title = item.get("display_title", clean_title)
-                        
-                        if p_name and p_name.isupper():
-                            p_name = p_name.title()
-
-                        authors_str = ", ".join(item.get("author", []))
-                        
-                        raw_data.append({
-                            "Level": level,
-                            "Prefix": prefix,
-                            "Page Name (URL)": p_name,
-                            "Display Title": d_title,
-                            "Page Range": item.get("page_range", ""),
-                            "Authors": authors_str
-                        })
-                    st.session_state["editor_df"] = pd.DataFrame(raw_data)
-
-                # Configure Columns
                 column_config = {
                     "Level": st.column_config.NumberColumn("Lvl", min_value=1, max_value=3, width="small"),
                     "Prefix": st.column_config.TextColumn("Prefix", width="small"),
@@ -368,26 +303,26 @@ elif st.session_state.pipeline_stage == "proof":
                     "Display Title": st.column_config.TextColumn("Display Title", width="medium"),
                 }
                 
-                # Render Editor using the STABLE session_state dataframe
+                # We edit the SESSION STATE dataframe directly.
                 edited_df = st.data_editor(
-                    st.session_state["editor_df"], 
+                    st.session_state["chapter_df"], 
                     num_rows="dynamic", 
                     width='stretch',
                     height=600,
                     column_config=column_config,
-                    key="chapter_data_editor" 
+                    key="chapter_editor"
                 )
                 
-                # Update the stable DF immediately
-                st.session_state["editor_df"] = edited_df
+                # CRITICAL: Update the persistent DF immediately so changes stick
+                st.session_state["chapter_df"] = edited_df
 
-                # --- PROCESSING LOOP ---
+                # 4. Process Updates (DataFrame -> JSON/Wikitext)
                 updated_toc_list = []
                 computed_toc_wikitext = ""
                 current_section_is_container = False 
                 
                 for index, row in edited_df.iterrows():
-                    # Extract values
+                    # Extract & Clean
                     raw_authors = str(row["Authors"]) if row["Authors"] else ""
                     auth_list = [a.strip() for a in raw_authors.split(",") if a.strip()]
                     
@@ -395,19 +330,15 @@ elif st.session_state.pipeline_stage == "proof":
                     d_title = row["Display Title"]
                     prefix = row["Prefix"]
                     
-                    # --- CRASH FIX: Safe Cast for Level ---
-                    raw_level = row["Level"]
+                    # Safe Cast for Level (Crash Fix)
                     try:
-                        if pd.isna(raw_level) or raw_level == "":
-                            level = 1
-                        else:
-                            level = int(raw_level)
-                    except (ValueError, TypeError):
-                        level = 1
-                    # -------------------------------------
+                        val = row["Level"]
+                        level = 1 if (pd.isna(val) or val == "") else int(val)
+                    except: level = 1
 
                     if prefix is None: prefix = ""
                     
+                    # Reconstruct JSON Object
                     updated_toc_list.append({
                         "title": d_title,
                         "page_name": p_name,
@@ -418,7 +349,7 @@ elif st.session_state.pipeline_stage == "proof":
                         "author": auth_list
                     })
                     
-                    # --- WIKITEXT GENERATION LOGIC ---
+                    # Generate Wikitext
                     indent = ":" * level
                     
                     if level == 1:
@@ -441,14 +372,13 @@ elif st.session_state.pipeline_stage == "proof":
                         else:
                             computed_toc_wikitext += f"\n{indent}{prefix}{d_title}"
                 
-                # Sync back to JSON state (for other tabs/saving)
+                # Sync back to JSON (Source of Truth)
                 st.session_state["toc_json_list"] = updated_toc_list
 
             # --- COLUMN 2: PREVIEW ---
             with c_preview:
                 st.subheader("2. Page Preview")
                 
-                # 1. Get Base Header
                 header_text = generate_header(
                     title=st.session_state["target_page"],
                     author="[Author]", 
@@ -458,11 +388,9 @@ elif st.session_state.pipeline_stage == "proof":
                     filename=filename
                 )
                 
-                # 2. Add {{restricted use}} PREPEND if Copyright
                 if is_copyright:
                     header_text = "{{restricted use|where=|until=}}\n" + header_text
 
-                # 3. Add {{book}} template (ONLY FOR BOOKS)
                 book_template = """
 {{book
  | color = 656258
@@ -472,8 +400,6 @@ elif st.session_state.pipeline_stage == "proof":
  | pages = 
  | links = 
 }}"""
-                
-                # 4. Assemble
                 full_wikitext = header_text + book_template + "\n\n===Contents===\n" + computed_toc_wikitext
                 st.code(full_wikitext, language="mediawiki")
 
@@ -485,20 +411,25 @@ elif st.session_state.pipeline_stage == "proof":
                 
                 st.markdown("---")
                 
-                if st.button(f"Create {target_title}", type="primary", width='stretch'):
+                if st.button(f"1. Create {target_title}", type="primary", width='stretch'):
                     try:
-                        upload_to_bahaiworks(
-                            target_title,
-                            full_wikitext,
-                            "Setup (Book Pipeline)",
-                            check_exists=True
-                        )
-                        st.success(f"✅ Created")
+                        upload_to_bahaiworks(target_title, full_wikitext, "Setup (Book Pipeline)", check_exists=True)
+                        st.success(f"✅ Created {target_title}")
                     except Exception as e: st.error(str(e))
                 
                 st.markdown("---")
                 
-                if st.button("Proceed to Splitter", width='stretch'):
+                if st.button("Connect Book item", width='stretch'):
+                    if not parent_qid: st.error("Need Parent QID")
+                    else:
+                        try:
+                            success, msg = set_sitelink(parent_qid, target_title)
+                            if success: st.success("✅ Linked")
+                            else: st.error(msg)
+                        except Exception as e: st.error(str(e))
+                
+                st.markdown("---")
+                if st.button("🏁 Proceed to Splitter", width='stretch'):
                     st.session_state["toc_map"] = updated_toc_list
                     st.session_state.pipeline_stage = "split"
                     st.rerun()
