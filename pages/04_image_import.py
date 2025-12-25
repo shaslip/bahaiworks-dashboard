@@ -46,7 +46,7 @@ def get_ocr_snippet(doc, page_num):
         
         # Look for the tag: page=55
         # Regex: {{page|([^|]+)|.*?page=55}}
-        pattern = f"{{{{page\|([^|]+)\|.*?page={page_num}}}}}(.*?)(?={{{{page\||$)"
+        pattern = rf"{{{{page\|([^|]+)\|.*?page={page_num}}}}}(.*?)(?={{{{page\||$)"
         match = re.search(pattern, content, re.DOTALL)
         
         if match:
