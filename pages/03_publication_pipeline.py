@@ -179,6 +179,10 @@ if st.session_state.pipeline_stage == "setup":
 # ==============================================================================
 elif st.session_state.pipeline_stage == "proof":
     
+    # Initialize JSON Version Counter for Syncing
+    if "toc_version" not in st.session_state:
+        st.session_state["toc_version"] = 0
+
     # NEW: Navigation to return to Setup
     if st.button("⬅️ Back to Setup", key="back_to_setup"):
         st.session_state.pipeline_stage = "setup"
@@ -235,21 +239,30 @@ elif st.session_state.pipeline_stage == "proof":
                 st.subheader("TOC JSON (Source)")
                 current_toc = st.session_state.get("toc_json_list", [])
                 
-                # CHANGED: ensure_ascii=False fixes the "Bah\u00e1\u2019\u00ed" issue
+                # Format JSON with safe characters
                 toc_str = json.dumps(current_toc, indent=2, ensure_ascii=False)
-                content_hash = hashlib.md5(toc_str.encode('utf-8')).hexdigest()
-                toc_edit_text = st.text_area("Structure Data", value=toc_str, height=500, key=f"toc_edit_{content_hash}")
+                
+                # Key changes whenever 'toc_version' increments (from Tab 2 edits)
+                toc_edit_text = st.text_area(
+                    "Structure Data", 
+                    value=toc_str, 
+                    height=500, 
+                    key=f"toc_edit_{st.session_state.toc_version}"
+                )
                 
                 if st.button("💾 Update Content Tab", type="secondary", width="stretch"):
                     try:
                         st.session_state["toc_json_list"] = json.loads(toc_edit_text)
                         
-                        # FORCE REFRESH: Delete cached DF so it rebuilds from new JSON
+                        # Increment version so this tab stays in sync with itself
+                        st.session_state["toc_version"] += 1
+                        
+                        # FORCE REFRESH: Delete cached DF so Tab 2 rebuilds
                         if "chapter_df" in st.session_state:
                             del st.session_state["chapter_df"]
                             
-                        st.success("TOC List Updated! Check Tab 2.")
-                        st.rerun() # Force immediate refresh
+                        st.success("Updated! Check Tab 2.")
+                        st.rerun() 
                     except Exception as e:
                         st.error(f"Invalid JSON: {e}")
 
@@ -406,7 +419,10 @@ elif st.session_state.pipeline_stage == "proof":
                             computed_toc_wikitext += f"\n{indent}{prefix}{d_title}"
                 
                 # Sync back to JSON (Source of Truth)
-                st.session_state["toc_json_list"] = updated_toc_list
+                # We check if data actually changed to avoid unnecessary re-renders
+                if st.session_state["toc_json_list"] != updated_toc_list:
+                    st.session_state["toc_json_list"] = updated_toc_list
+                    st.session_state["toc_version"] += 1
 
             # --- COLUMN 2: PREVIEW ---
             with c_preview:
