@@ -748,13 +748,16 @@ with tab_maintenance:
                                 log.write(f"🔨 Creating Page: **{author}**...")
                                 
                                 # --- CREATION LOGIC ---
-                                content_parts = []
                                 
-                                # 1. Chapters Section
+                                # 1. Define Main Page Content
+                                # Always start with the standard Author template
+                                content_parts = [f"{{{{Author|author={author}}}}}"]
+                                
+                                # Case: Has Chapters
                                 if row["Has Chapters"]:
                                     content_parts.append("==== Contributing author====\n{{#invoke:Chapters|getChaptersByAuthor}}")
                                 
-                                # 2. Articles Section (Add both, allow user to delete later)
+                                # Case: Has Articles (Add both, user can delete later)
                                 if row["Has Articles"]:
                                     content_parts.append("===Articles===")
                                     content_parts.append("====World Order (1935-1949)====\n{{#invoke:WorldOrder|getArticlesByAuthor}}")
@@ -762,7 +765,15 @@ with tab_maintenance:
                                 
                                 full_content = "\n\n".join(content_parts)
                                 
-                                upload_to_bahaiworks(author, full_content, "Auto-creating Author Page with dynamic sections")
+                                # 2. Upload Main Author Page
+                                upload_to_bahaiworks(author, full_content, "Auto-creating Author Page")
+                                
+                                # 3. Create Category Page (Standard workflow)
+                                # This ensures the author appears in browse lists
+                                cat_title = f"Category:{author}"
+                                cat_content = f"{{{{AuthorCategory|author={author}}}}}"
+                                upload_to_bahaiworks(cat_title, cat_content, "Auto-creating Author Category")
+                                
                                 # ----------------------
                             
                             log.success(f"✅ Created {len(to_create)} pages!")
