@@ -733,64 +733,79 @@ with tab_maintenance:
                     # --- STAGE 1: PREVIEW ---
                     if st.button("Preview Pages to Create"):
                         
-                        # 1. Handle Blacklist
+                        # Handle Blacklist
                         to_blacklist = edited_missing[edited_missing["Blacklist?"] == True]["Author"].tolist()
                         if to_blacklist:
                             blacklist.update(to_blacklist)
                             save_blacklist(blacklist)
                             st.toast(f"🚫 Blacklisted {len(to_blacklist)} authors.")
 
-                        # 2. Prepare Creation List
+                        # Prepare Creation List
                         to_create = edited_missing[
                             (edited_missing["Create?"] == True) & 
                             (edited_missing["Blacklist?"] == False)
                         ]
                         
                         if to_create.empty:
-                            st.warning("No pages selected for creation.")
-                            if "pending_creations" in st.session_state:
-                                del st.session_state["pending_creations"]
+                            if "pending_creations" in st.session_state: del st.session_state["pending_creations"]
+                            if not to_blacklist:
+                                st.warning("No pages selected for creation.")
                         else:
                             pending_list = []
                             for idx, row in to_create.iterrows():
                                 author = row["Author"]
                                 qid = row.get("QID")
                                 
-                                # Content Logic
-                                content_parts = [f"{{{{author2}}}}\n"]
+                                # USE YOUR HELPER FUNCTION HERE
+                                sort_name = get_lastname_firstname(author)
                                 
+                                # 1. MAIN AUTHOR PAGE CONTENT
+                                content_parts = [f"{{{{author2}}}}\n"]
                                 if row["Has Chapters"]:
                                     content_parts.append("==== Contributing author====\n{{#invoke:Chapters|getChaptersByAuthor}}")
-                                
                                 if row["Has Articles"]:
                                     content_parts.append("===Articles===")
                                     content_parts.append("====World Order (1935-1949)====\n{{#invoke:WorldOrder|getArticlesByAuthor}}")
                                     content_parts.append("====World Order (1966-2007)====\n{{#invoke:WorldOrder2|getArticlesByAuthor}}")
                                 
-                                full_content = "\n\n".join(content_parts)
+                                main_content = "\n\n".join(content_parts)
                                 
-                                # Definitions
-                                cat_title = f"Category:{author}"
-                                cat_content = f"{{{{AuthorCategory|author={author}}}}}"
+                                # 2. AUTHOR CATEGORY CONTENT
+                                # Template: {{authorcat_desc}} + [[Category:Authors|Last, First]]
+                                cat_auth_title = f"Category:{author}"
+                                cat_auth_content = f"{{{{authorcat_desc}}}}\n[[Category:Authors|{sort_name}]]"
+
+                                # 3. TEXT OF WORKS CATEGORY CONTENT
+                                # Template: {{Textof_desc}} + [[Category:Author Name]]
+                                cat_text_title = f"Category:Text of works by {author}"
+                                cat_text_content = f"{{{{Textof_desc}}}}\n[[Category:{author}]]"
                                 
                                 pending_list.append({
                                     "Author": author,
                                     "QID": qid,
-                                    "Page Title": author,
-                                    "Page Content": full_content,
-                                    "Category Title": cat_title,
-                                    "Category Content": cat_content
+                                    
+                                    # Page 1
+                                    "Main_Title": author,
+                                    "Main_Content": main_content,
+                                    
+                                    # Page 2
+                                    "Cat_Auth_Title": cat_auth_title,
+                                    "Cat_Auth_Content": cat_auth_content,
+                                    
+                                    # Page 3
+                                    "Cat_Text_Title": cat_text_title,
+                                    "Cat_Text_Content": cat_text_content
                                 })
                             
                             st.session_state["pending_creations"] = pending_list
                             st.rerun()
 
-                    # --- STAGE 2: CONFIRMATION ---
+                    # --- STAGE 2: CONFIRMATION UI ---
                     if "pending_creations" in st.session_state and st.session_state["pending_creations"]:
                         pending = st.session_state["pending_creations"]
                         
                         st.divider()
-                        st.info(f"📝 Review: Ready to create **{len(pending)}** author pages + **{len(pending)}** category pages.")
+                        st.info(f"📝 Review: Ready to create **{len(pending) * 3}** total pages (3 per author).")
                         
                         with st.expander("🔍 Click to see payload details (Dry Run)"):
                             st.json(pending)
@@ -805,14 +820,19 @@ with tab_maintenance:
                                 for i, item in enumerate(pending):
                                     log.write(f"🚀 Processing: **{item['Author']}**...")
                                     
-                                    # Uploads
-                                    upload_to_bahaiworks(item["Page Title"], item["Page Content"], "Auto-creating Author Page")
-                                    upload_to_bahaiworks(item["Category Title"], item["Category Content"], "Auto-creating Author Category")
+                                    # 1. Upload Main Page
+                                    upload_to_bahaiworks(item["Main_Title"], item["Main_Content"], "Auto-creating Author Page")
                                     
-                                    # Sitelink
+                                    # 2. Upload Author Category
+                                    upload_to_bahaiworks(item["Cat_Auth_Title"], item["Cat_Auth_Content"], "Auto-creating Author Category")
+                                    
+                                    # 3. Upload Text Category
+                                    upload_to_bahaiworks(item["Cat_Text_Title"], item["Cat_Text_Content"], "Auto-creating Text Category")
+                                    
+                                    # 4. Sitelink (Main Page Only)
                                     if item.get("QID"):
                                         try:
-                                            set_sitelink(item["QID"], "bahai", item["Page Title"])
+                                            set_sitelink(item["QID"], "bahai", item["Main_Title"])
                                             log.write(f"🔗 Linked **{item['QID']}**")
                                         except Exception as e:
                                             log.error(f"Sitelink failed: {e}")
