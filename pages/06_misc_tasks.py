@@ -601,26 +601,28 @@ with tab_maintenance:
     # ==========================================
     # 3. INTERFACE & EXECUTION
     # ==========================================
+    
+    # --- A. Run Audit Button (Updates Session State) ---
     if st.button("🔎 Run Audit (SPARQL + Content Check)", type="primary"):
-        
-        # --- A. Fetch Candidates ---
         with st.spinner("1/2 Querying Bahaidata..."):
             df_audit = query_bahaidata_authors()
             
-            # Filter Blacklist immediately
+            # Filter Blacklist
             if not df_audit.empty:
                 df_audit = df_audit[~df_audit["Author"].isin(blacklist)]
 
         if df_audit.empty:
             st.success("No active authors found matching criteria (or all are blacklisted).")
+            # Clear previous results if any
+            if "audit_missing" in st.session_state:
+                del st.session_state["audit_missing"]
+            if "audit_update" in st.session_state:
+                del st.session_state["audit_update"]
         else:
-            # --- B. Check Content on Bahai.works ---
-            report_data = []
-            
+            # --- B. Check Content ---
             with st.spinner("2/2 Verifying Page Content on Bahai.works..."):
                 pages_to_check = df_audit[df_audit["Page Title"].notna()]["Page Title"].unique().tolist()
                 
-                # Fetch content in chunks
                 content_map = {}
                 chunk_size = 50
                 api_url = "https://bahai.works/api.php"
@@ -646,14 +648,13 @@ with tab_maintenance:
                     except:
                         pass
             
-            # --- C. Categorize & Display ---
+            # --- C. Categorize ---
             missing_pages = []
             needs_update = []
 
             for idx, row in df_audit.iterrows():
                 p_title = row["Page Title"]
                 
-                # List 1: Missing Pages
                 if not p_title:
                     missing_pages.append({
                         "Author": row["Author"],
@@ -661,10 +662,8 @@ with tab_maintenance:
                         "Has Articles": row["Has Articles"]
                     })
                 else:
-                    # List 2: Existing Pages needing updates
                     txt = content_map.get(p_title, "")
                     issue_details = []
-                    
                     if row["Has Chapters"] and "getChaptersByAuthor" not in txt:
                         issue_details.append("Missing 'getChaptersByAuthor'")
                     if row["Has Articles"] and "getArticlesByAuthor" not in txt:
@@ -677,7 +676,20 @@ with tab_maintenance:
                             "Issues": ", ".join(issue_details)
                         })
 
-            # Create Tabs
+            # Save to Session State (Persist across reruns)
+            st.session_state["audit_missing"] = missing_pages
+            st.session_state["audit_update"] = needs_update
+
+    # --- D. Persistent Display Logic ---
+    # This runs regardless of whether the "Run Audit" button was just clicked
+    if "audit_missing" in st.session_state and "audit_update" in st.session_state:
+        
+        missing_pages = st.session_state["audit_missing"]
+        needs_update = st.session_state["audit_update"]
+
+        if not missing_pages and not needs_update:
+            st.success("✅ Amazing! All authors are perfectly synced.")
+        else:
             tab_missing, tab_fix = st.tabs([
                 f"🚨 Missing Pages ({len(missing_pages)})", 
                 f"🛠️ Needs Code Update ({len(needs_update)})"
@@ -700,7 +712,8 @@ with tab_maintenance:
                         },
                         disabled=["Author", "Has Chapters", "Has Articles"],
                         hide_index=True,
-                        width='stretch'
+                        width='stretch',
+                        key="editor_missing" # Unique key is good practice
                     )
                     
                     if st.button("Add Bahai.works author pages"):
@@ -733,9 +746,12 @@ with tab_maintenance:
                             
                             log.success(f"✅ Created {len(to_create)} pages!")
                         
-                        if to_blacklist or not to_create.empty:
-                            time.sleep(1)
-                            st.rerun()
+                        # Rerun to refresh list (audit must be re-run manually or we clear state)
+                        # Option: Clear state to force re-audit
+                        del st.session_state["audit_missing"]
+                        del st.session_state["audit_update"]
+                        time.sleep(1)
+                        st.rerun()
 
             # TAB 2: NEEDS UPDATE
             with tab_fix:
@@ -753,7 +769,8 @@ with tab_maintenance:
                         },
                         disabled=["Author", "Issues", "Page Title"],
                         hide_index=True,
-                        width='stretch'
+                        width='stretch',
+                        key="editor_update"
                     )
                     
                     if st.button("Fix Bahai.works author pages"):
