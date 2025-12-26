@@ -6,12 +6,12 @@ load_dotenv()
 
 API_URL = 'https://bahaidata.org/api.php'
 # Using Wikibase credentials
-WB_USER = os.getenv("WIKIBASE_USER")
-WB_PASS = os.getenv("WIKIBASE_PASSWORD")
+WB_USER = os.getenv("WIKI_USERNAME")
+WB_PASS = os.getenv("WIKI_PASSWORD")
 
 def get_csrf_token(session):
     if not WB_USER or not WB_PASS:
-        raise ValueError("Missing WIKIBASE_USER or WIKIBASE_PASSWORD")
+        raise ValueError("Missing WIKI_USERNAME or WIKI_PASSWORD")
 
     # 1. Login Token
     login_token_resp = session.get(API_URL, params={
