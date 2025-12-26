@@ -591,6 +591,8 @@ elif st.session_state.pipeline_stage == "split":
     
     # 2. Initialize Indices (Once)
     full_toc = st.session_state.get("toc_map", [])
+    
+    # We only care about items that have a Page Name (are destination pages)
     toc_list = [
         item for item in full_toc 
         if item.get('page_name') and str(item.get('page_name')).strip() != ""
@@ -602,32 +604,31 @@ elif st.session_state.pipeline_stage == "split":
             title = item['title']
             raw_range = item.get('page_range', "")
             
-            # Try to guess label from TOC
+            # Default Guess
             guess = "1"
             if "-" in str(raw_range): 
                 guess = str(raw_range).split("-")[0].strip()
             elif raw_range: 
                 guess = str(raw_range).strip()
             
-            # Heuristic: Check Front Matter titles if guess isn't a digit
+            # Heuristic: Check Front Matter if guess isn't a digit
             if not guess.isdigit() or title.lower() in ["preface", "contents", "introduction", "foreword"]:
                 found = find_best_match_for_title(title, page_map, page_order)
                 if found: guess = found
             
-            # Convert that Label -> Physical Index in the file
+            # Convert Label -> Index
             try:
                 idx = page_order.index(guess)
             except ValueError:
                 idx = 0
-                
+            
             indices[i] = idx
         st.session_state["splitter_indices"] = indices
 
-    # 3. Helper to adjust index (Previous/Next)
+    # 3. Helper to adjust index
     def adjust_index(i, direction):
         curr = st.session_state["splitter_indices"][i]
         new = curr + direction
-        # Ensure we don't go out of bounds
         if 0 <= new < len(page_order):
             st.session_state["splitter_indices"][i] = new
 
@@ -656,10 +657,8 @@ elif st.session_state.pipeline_stage == "split":
                     st.rerun()
 
         with c_preview:
-            # Grab content for preview
+            # Preview
             preview_text = page_map.get(current_label, "Error: Content missing")
-            
-            # Added current_idx to key to force refresh
             st.text_area("Preview", value=preview_text[:400]+"...", height=120, key=f"pview_{i}_{current_idx}", disabled=True)
             
         st.divider()
@@ -676,7 +675,7 @@ elif st.session_state.pipeline_stage == "split":
         if st.button("✂️ Split & Upload to Bahai.works", type="primary"):
             target_base = st.session_state["target_page"]
             
-            # 1. Reconstruct the Access Header
+            # Access Header
             if is_copyright:
                  access_group = target_base.replace(" ", "")
                  header_content = f"<accesscontrol>Access:{access_group}</accesscontrol>{{{{Publicationinfo}}}}\n"
@@ -687,23 +686,21 @@ elif st.session_state.pipeline_stage == "split":
             status_box = st.empty()
             
             try:
-                # 2. Build the cut-list based on the verified INDICES
+                # 2. Build the cut-list
                 final_split_data = []
                 for i, item in enumerate(toc_list):
-                    # FILTER: Only split Level 1 items.
-                    if item.get('level', 1) == 1:
-                        final_split_data.append({
-                            "title": item['title'],
-                            "page_name": item.get('page_name', item['title']), 
-                            "start_idx": st.session_state["splitter_indices"][i],
-                            "original_item": item # Keep ref to update JSON later
-                        })
+                    final_split_data.append({
+                        "title": item['title'],
+                        "page_name": item.get('page_name', item['title']), 
+                        "start_idx": st.session_state["splitter_indices"][i],
+                        "original_item": item 
+                    })
 
                 if not final_split_data:
-                    st.error("No Level 1 chapters found to split!")
+                    st.error("No pages found to split!")
                     st.stop()
 
-                # 3. UPDATE JSON RANGES & UPLOAD
+                # 3. Process Splits
                 for i, chapter in enumerate(final_split_data):
                     ch_title = chapter['title']
                     ch_page_name = chapter['page_name']
@@ -711,42 +708,41 @@ elif st.session_state.pipeline_stage == "split":
                     
                     # End index is the start of the next chapter
                     if i + 1 < len(final_split_data):
-                        end_idx = final_split_data[i+1]['start_idx']
+                        # Ensure next chapter doesn't start BEFORE this one
+                        next_start = final_split_data[i+1]['start_idx']
+                        end_idx = max(start_idx, next_start)
                     else:
                         end_idx = len(page_order)
                     
-                    # --- JSON SYNC FIX ---
-                    # Calculate real labels (Start Page -> End Page)
-                    # Note: end_idx is exclusive for slicing, so the last page is end_idx - 1
+                    # Sync JSON
                     safe_end_idx = max(start_idx, end_idx - 1)
-                    
                     real_start_lbl = page_order[start_idx]
                     real_end_lbl = page_order[safe_end_idx]
-                    
-                    # Update the original item reference in the TOC list
                     chapter["original_item"]["page_range"] = f"{real_start_lbl}-{real_end_lbl}"
-                    # ---------------------
 
                     status_box.write(f"Processing {ch_title}...")
                     
-                    # 4. Concatenate text
+                    # Concatenate
                     raw_text = ""
                     for p_idx in range(start_idx, end_idx):
                         if 0 <= p_idx < len(page_order):
                             p_label = page_order[p_idx]
                             raw_text += page_map.get(p_label, "") + "\n\n"
                     
-                    # 5. Combine Header + Text + PDF Tag
-                    # We add the <pdf> tag so users can verify the range against the file
+                    # Build Content
                     pdf_tag = f"<pdf>File:{filename}|page={real_start_lbl}-{real_end_lbl}</pdf>"
+                    # Note: We prepend the target_base to sub-pages
                     full_content = f"{header_content}\n{raw_text}\n{pdf_tag}"
                     
-                    # 6. Upload
-                    upload_to_bahaiworks(ch_page_name, full_content, "Splitter Upload")
+                    # Upload (Handle naming: if it's not the main page, prepend base)
+                    # The logic usually is target_base/Page_Name
+                    full_upload_title = f"{target_base}/{ch_page_name}"
+                    
+                    upload_to_bahaiworks(full_upload_title, full_content, "Splitter Upload")
                     
                     progress_bar.progress((i + 1) / len(final_split_data))
                 
-                # 7. SAVE UPDATED JSON
+                # Save JSON
                 toc_path = os.path.join(folder_path, "toc.json")
                 with open(toc_path, "w", encoding="utf-8") as f:
                     json.dump(st.session_state["toc_map"], f, indent=2, ensure_ascii=False)
@@ -759,13 +755,12 @@ elif st.session_state.pipeline_stage == "split":
             except Exception as e:
                 st.error(f"Failed: {e}")
 
-    # --- PART B: HANDOFF TO CHAPTER MANAGER ---
+    # --- PART B: HANDOFF ---
     if st.session_state.get("split_completed"):
         st.divider()
         st.subheader("4. Chapter Metadata")
         
         if st.button("📝 Review & Create Chapter Items", type="primary", width='stretch'):
-            # 1. Pack the data
             chapter_payload = []
             full_toc = st.session_state.get("toc_map", [])
             
@@ -777,5 +772,4 @@ elif st.session_state.pipeline_stage == "split":
             st.session_state["chapter_parent_qid"] = st.session_state.get("parent_qid", "")
             st.session_state["chapter_target_base"] = st.session_state.get("target_page", "")
             
-            # 2. Switch Page
             st.switch_page("pages/05_chapter_items.py")
