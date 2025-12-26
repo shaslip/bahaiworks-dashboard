@@ -723,41 +723,42 @@ with tab_maintenance:
                         disabled=["Author", "Has Chapters", "Has Articles"],
                         hide_index=True,
                         width='stretch',
-                        key="editor_missing" # Unique key is good practice
+                        key="editor_missing"
                     )
                     
-                    if st.button("Add Bahai.works author pages"):
-                        # 1. Handle Blacklist
+                    # --- STAGE 1: PREVIEW ---
+                    if st.button("Preview Pages to Create"):
+                        
+                        # A. Handle Blacklist First (Immediate Action)
                         to_blacklist = edited_missing[edited_missing["Blacklist?"] == True]["Author"].tolist()
                         if to_blacklist:
                             blacklist.update(to_blacklist)
                             save_blacklist(blacklist)
                             st.toast(f"🚫 Blacklisted {len(to_blacklist)} authors.")
-                        
-                        # 2. Handle Creation
+                            # We don't rerun immediately so we can still show the preview for the rest
+
+                        # B. Prepare Creation List
                         to_create = edited_missing[
                             (edited_missing["Create?"] == True) & 
                             (edited_missing["Blacklist?"] == False)
                         ]
                         
-                        if not to_create.empty:
-                            pb = st.progress(0)
-                            log = st.empty()
-                            for i, (idx, row) in enumerate(to_create.iterrows()):
+                        if to_create.empty:
+                            st.warning("No pages selected for creation.")
+                            if "pending_creations" in st.session_state:
+                                del st.session_state["pending_creations"]
+                        else:
+                            # Generate Content for all candidates
+                            pending_list = []
+                            for idx, row in to_create.iterrows():
                                 author = row["Author"]
-                                log.write(f"🔨 Creating Page: **{author}**...")
                                 
-                                # --- CREATION LOGIC ---
-                                
-                                # 1. Define Main Page Content
-                                # Always start with the standard Author template
+                                # 1. Main Page Content
                                 content_parts = [f"{{{{Author|author={author}}}}}"]
                                 
-                                # Case: Has Chapters
                                 if row["Has Chapters"]:
                                     content_parts.append("==== Contributing author====\n{{#invoke:Chapters|getChaptersByAuthor}}")
                                 
-                                # Case: Has Articles (Add both, user can delete later)
                                 if row["Has Articles"]:
                                     content_parts.append("===Articles===")
                                     content_parts.append("====World Order (1935-1949)====\n{{#invoke:WorldOrder|getArticlesByAuthor}}")
@@ -765,25 +766,65 @@ with tab_maintenance:
                                 
                                 full_content = "\n\n".join(content_parts)
                                 
-                                # 2. Upload Main Author Page
-                                upload_to_bahaiworks(author, full_content, "Auto-creating Author Page")
-                                
-                                # 3. Create Category Page (Standard workflow)
-                                # This ensures the author appears in browse lists
+                                # 2. Category Page Content
                                 cat_title = f"Category:{author}"
                                 cat_content = f"{{{{AuthorCategory|author={author}}}}}"
-                                upload_to_bahaiworks(cat_title, cat_content, "Auto-creating Author Category")
                                 
-                                # ----------------------
+                                pending_list.append({
+                                    "Author": author,
+                                    "Page Title": author,
+                                    "Page Content": full_content,
+                                    "Category Title": cat_title,
+                                    "Category Content": cat_content
+                                })
                             
-                            log.success(f"✅ Created {len(to_create)} pages!")
+                            # Save to Session State
+                            st.session_state["pending_creations"] = pending_list
+                            st.rerun() # Rerun to show the confirmation UI below
+
+                    # --- STAGE 2: CONFIRMATION UI ---
+                    if "pending_creations" in st.session_state and st.session_state["pending_creations"]:
+                        pending = st.session_state["pending_creations"]
                         
-                        # Rerun to refresh list (audit must be re-run manually or we clear state)
-                        # Option: Clear state to force re-audit
-                        del st.session_state["audit_missing"]
-                        del st.session_state["audit_update"]
-                        time.sleep(1)
-                        st.rerun()
+                        st.divider()
+                        st.info(f"📝 Review: Ready to create **{len(pending)}** author pages + **{len(pending)}** category pages.")
+                        
+                        # Show a little preview of the first item so user sees the format
+                        with st.expander("🔍 Click to see payload details (Dry Run)"):
+                            st.json(pending)
+
+                        col1, col2 = st.columns([1, 4])
+                        
+                        with col1:
+                            if st.button("✅ Confirm & Upload", type="primary"):
+                                pb = st.progress(0)
+                                log = st.empty()
+                                
+                                for i, item in enumerate(pending):
+                                    author = item["Author"]
+                                    log.write(f"🚀 Uploading: **{author}**...")
+                                    
+                                    # 1. Upload Main Page
+                                    upload_to_bahaiworks(item["Page Title"], item["Page Content"], "Auto-creating Author Page")
+                                    
+                                    # 2. Upload Category
+                                    upload_to_bahaiworks(item["Category Title"], item["Category Content"], "Auto-creating Author Category")
+                                    
+                                    time.sleep(0.1)
+                                    pb.progress((i + 1) / len(pending))
+                                
+                                log.success("Done!")
+                                time.sleep(1)
+                                
+                                # Cleanup
+                                del st.session_state["pending_creations"]
+                                del st.session_state["audit_missing"] # Force re-audit
+                                st.rerun()
+
+                        with col2:
+                            if st.button("❌ Cancel"):
+                                del st.session_state["pending_creations"]
+                                st.rerun()
 
             # TAB 2: NEEDS UPDATE
             with tab_fix:
