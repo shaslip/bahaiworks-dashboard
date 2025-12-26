@@ -9,7 +9,7 @@ from src.database import engine, Document
 from src.gemini_processor import extract_metadata_from_pdf, extract_toc_from_pdf
 from src.wikibase_importer import import_book_to_wikibase
 # Add upload_file here
-from src.mediawiki_uploader import upload_to_bahaiworks, upload_file 
+from src.mediawiki_uploader import upload_to_bahaiworks
 from src.sitelink_manager import set_sitelink
 from src.text_processing import parse_text_file, find_best_match_for_title
 from src.evaluator import translate_summary
