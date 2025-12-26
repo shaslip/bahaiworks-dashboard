@@ -546,6 +546,8 @@ with tab_maintenance:
                 
                 for row in data['results']['bindings']:
                     label = row['itemLabel']['value']
+                    item_url = row['item']['value']
+                    qid = item_url.split("/")[-1] 
                     
                     if label not in author_map:
                         page_title = None
@@ -555,6 +557,7 @@ with tab_maintenance:
 
                         author_map[label] = {
                             "Author": label,
+                            "QID": qid,  # Store it here
                             "Page Title": page_title,
                             "Has Chapters": False,
                             "Has Articles": False
@@ -729,15 +732,14 @@ with tab_maintenance:
                     # --- STAGE 1: PREVIEW ---
                     if st.button("Preview Pages to Create"):
                         
-                        # A. Handle Blacklist First (Immediate Action)
+                        # 1. Handle Blacklist
                         to_blacklist = edited_missing[edited_missing["Blacklist?"] == True]["Author"].tolist()
                         if to_blacklist:
                             blacklist.update(to_blacklist)
                             save_blacklist(blacklist)
                             st.toast(f"🚫 Blacklisted {len(to_blacklist)} authors.")
-                            # We don't rerun immediately so we can still show the preview for the rest
 
-                        # B. Prepare Creation List
+                        # 2. Prepare Creation List
                         to_create = edited_missing[
                             (edited_missing["Create?"] == True) & 
                             (edited_missing["Blacklist?"] == False)
@@ -748,13 +750,13 @@ with tab_maintenance:
                             if "pending_creations" in st.session_state:
                                 del st.session_state["pending_creations"]
                         else:
-                            # Generate Content for all candidates
                             pending_list = []
                             for idx, row in to_create.iterrows():
                                 author = row["Author"]
+                                qid = row.get("QID")
                                 
-                                # 1. Main Page Content
-                                content_parts = [f"{{{{Author|author={author}}}}}"]
+                                # Content Logic
+                                content_parts = [f"{{{{author2}}}}\n"]
                                 
                                 if row["Has Chapters"]:
                                     content_parts.append("==== Contributing author====\n{{#invoke:Chapters|getChaptersByAuthor}}")
@@ -766,30 +768,29 @@ with tab_maintenance:
                                 
                                 full_content = "\n\n".join(content_parts)
                                 
-                                # 2. Category Page Content
+                                # Definitions
                                 cat_title = f"Category:{author}"
                                 cat_content = f"{{{{AuthorCategory|author={author}}}}}"
                                 
                                 pending_list.append({
                                     "Author": author,
+                                    "QID": qid,
                                     "Page Title": author,
                                     "Page Content": full_content,
                                     "Category Title": cat_title,
                                     "Category Content": cat_content
                                 })
                             
-                            # Save to Session State
                             st.session_state["pending_creations"] = pending_list
-                            st.rerun() # Rerun to show the confirmation UI below
+                            st.rerun()
 
-                    # --- STAGE 2: CONFIRMATION UI ---
+                    # --- STAGE 2: CONFIRMATION ---
                     if "pending_creations" in st.session_state and st.session_state["pending_creations"]:
                         pending = st.session_state["pending_creations"]
                         
                         st.divider()
                         st.info(f"📝 Review: Ready to create **{len(pending)}** author pages + **{len(pending)}** category pages.")
                         
-                        # Show a little preview of the first item so user sees the format
                         with st.expander("🔍 Click to see payload details (Dry Run)"):
                             st.json(pending)
 
@@ -801,24 +802,27 @@ with tab_maintenance:
                                 log = st.empty()
                                 
                                 for i, item in enumerate(pending):
-                                    author = item["Author"]
-                                    log.write(f"🚀 Uploading: **{author}**...")
+                                    log.write(f"🚀 Processing: **{item['Author']}**...")
                                     
-                                    # 1. Upload Main Page
+                                    # Uploads
                                     upload_to_bahaiworks(item["Page Title"], item["Page Content"], "Auto-creating Author Page")
-                                    
-                                    # 2. Upload Category
                                     upload_to_bahaiworks(item["Category Title"], item["Category Content"], "Auto-creating Author Category")
+                                    
+                                    # Sitelink
+                                    if item.get("QID"):
+                                        try:
+                                            set_sitelink(item["QID"], "bahai", item["Page Title"])
+                                            log.write(f"🔗 Linked **{item['QID']}**")
+                                        except Exception as e:
+                                            log.error(f"Sitelink failed: {e}")
                                     
                                     time.sleep(0.1)
                                     pb.progress((i + 1) / len(pending))
                                 
                                 log.success("Done!")
                                 time.sleep(1)
-                                
-                                # Cleanup
                                 del st.session_state["pending_creations"]
-                                del st.session_state["audit_missing"] # Force re-audit
+                                del st.session_state["audit_missing"]
                                 st.rerun()
 
                         with col2:
