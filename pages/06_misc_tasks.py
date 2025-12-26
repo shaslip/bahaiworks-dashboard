@@ -203,21 +203,31 @@ with tab_author:
     st.header("Create Author Pages")
     st.info("This tool creates the three required pages (Author, Category, Works Category) for each author.")
 
-    # 1. Determine Default Value (Check for data passed from previous page)
-    default_authors = ""
+    # Define a specific key for the text area so we can manipulate it
+    text_area_key = "author_input_area"
+
+    # 1. Handle Incoming Data from Chapter Items
     if "batch_author_list" in st.session_state:
         # Convert list to comma-separated string
-        default_authors = ", ".join(st.session_state["batch_author_list"])
+        imported_authors = ", ".join(st.session_state["batch_author_list"])
+        
+        # FORCE update the widget's state directly
+        st.session_state[text_area_key] = imported_authors
+        
         st.success(f"📥 Received {len(st.session_state['batch_author_list'])} missing authors from Chapter Manager.")
-        # Clear it so it doesn't persist forever
+        
+        # Cleanup the transfer variable
         del st.session_state["batch_author_list"]
 
     c1, c2 = st.columns(2)
     
     with c1:
+        # We bind this widget to 'text_area_key'. 
+        # If the key was updated in the block above, the widget will show that text.
         raw_authors = st.text_area(
             "Author Names (comma separated)", 
-            value=default_authors, 
+            value=st.session_state.get(text_area_key, ""), 
+            key=text_area_key,
             placeholder="e.g. Aaron Emmel, John Doe, Jane Smith",
             height=150
         )
