@@ -10,7 +10,7 @@ from sqlalchemy import select, or_
 # Local Imports
 from src.database import engine, Document
 from src.processor import merge_pdf_pair, analyze_split_boundaries, split_pdf_doubles
-from src.auto_config import calculate_start_offset
+from src.calibration import calculate_start_offset
 from src.ocr_engine import OcrEngine, OcrConfig
 
 st.set_page_config(page_title="OCR Assembly Line", layout="wide")
