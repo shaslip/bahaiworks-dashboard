@@ -104,8 +104,7 @@ dashboard/
 │   ├── wikibase_importer.py     # Bahaidata API hooks
 │   ├── mediawiki_uploader.py    # Bahai.works API hooks
 │   └── ...
-├── data/
-│   └── files.db                 # SQLite database
+├── bahai_works.db               # SQLite database
 └── requirements.txt
 
 ```
