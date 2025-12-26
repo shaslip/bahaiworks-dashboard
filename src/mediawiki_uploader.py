@@ -6,15 +6,15 @@ from dotenv import load_dotenv
 load_dotenv()
 
 API_URL = 'https://bahai.works/api.php'
-BW_USER = os.getenv("BAHAIWORKS_USER")
-BW_PASS = os.getenv("BAHAIWORKS_PASSWORD")
+BW_USER = os.getenv("WIKI_USERNAME")
+BW_PASS = os.getenv("WIKI_PASSWORD")
 
 def get_csrf_token(session):
     """
     Authenticates with MediaWiki and retrieves a CSRF token.
     """
     if not BW_USER or not BW_PASS:
-        raise ValueError("Missing BAHAIWORKS_USER or BAHAIWORKS_PASSWORD in .env")
+        raise ValueError("Missing WIKI_USERNAME or WIKI_PASSWORD in .env")
 
     # 1. Get Login Token
     login_token_response = session.get(API_URL, params={
