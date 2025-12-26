@@ -1,6 +1,7 @@
 import streamlit as st
 import re
 import requests
+import pandas as pd
 from src.mediawiki_uploader import upload_to_bahaiworks
 from src.sitelink_manager import set_sitelink
 from src.wikibase_importer import get_or_create_author
@@ -32,7 +33,13 @@ with st.expander("ℹ️ Help / Instructions"):
 
 st.markdown("---")
 
-tab_create_author, tab_ac, tab_create_author_page = st.tabs(["👤 Create Author Pages", "📖 AC Messages", "🔧 Update Author list"])
+# --- TABS ---
+tab_create_author, tab_ac, tab_update_list, tab_maintenance = st.tabs([
+    "👤 Create Author Pages", 
+    "📖 AC Messages", 
+    "📝 Update Author list",
+    "🔧 Maintenance"
+])
 
 # --- Author page maintenance and exclusions ---
 AUTHORS_PAGE_HEADER = """{{header
@@ -465,3 +472,164 @@ with tab_create_author_page:
 
         except Exception as e:
             status_box.error(f"Error: {e}")
+
+# ==============================================================================
+# TAB 4: MAINTENANCE (AUDIT)
+# ==============================================================================
+with tab_maintenance:
+    st.header("🔧 Maintenance Audit")
+    st.markdown("""
+    **Goal:** Identify authors who have Chapters (P9) or Articles (P7) assigned in Bahaidata 
+    but are missing the corresponding dynamic code on their Bahai.works author page.
+    """)
+
+    # Helper: SPARQL Query
+    def query_bahaidata_authors():
+        endpoint = "https://query.bahaidata.org/sparql"
+        query = """
+        PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+        PREFIX schema: <http://schema.org/>
+
+        SELECT ?author ?authorLabel ?sitelink (MAX(?isChapter) as ?hasChapter) (MAX(?isArticle) as ?hasArticle) WHERE {
+          {
+            SELECT ?author (true as ?isChapter) (false as ?isArticle) WHERE {
+              ?work wdt:P11 ?author ; wdt:P9 ?book .
+            }
+          } UNION {
+            SELECT ?author (false as ?isChapter) (true as ?isArticle) WHERE {
+              ?work wdt:P11 ?author ; wdt:P7 ?issue .
+            }
+          }
+          
+          OPTIONAL {
+            ?sitelink schema:about ?author ;
+                      schema:isPartOf <https://bahai.works/> .
+          }
+          
+          SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+        }
+        GROUP BY ?author ?authorLabel ?sitelink
+        """
+        try:
+            r = requests.get(endpoint, params={'format': 'json', 'query': query})
+            data = r.json()
+            results = []
+            for item in data['results']['bindings']:
+                label = item['authorLabel']['value']
+                url = item.get('sitelink', {}).get('value', None)
+                has_chap = item.get('hasChapter', {}).get('value') == 'true'
+                has_art = item.get('hasArticle', {}).get('value') == 'true'
+                
+                # Clean URL to get Title
+                page_title = None
+                if url:
+                    page_title = url.replace("https://bahai.works/", "").replace("_", " ")
+                    import urllib.parse
+                    page_title = urllib.parse.unquote(page_title)
+
+                results.append({
+                    "Author": label,
+                    "Page Title": page_title,
+                    "Has Chapters": has_chap,
+                    "Has Articles": has_art
+                })
+            return pd.DataFrame(results)
+        except Exception as e:
+            st.error(f"SPARQL Error: {e}")
+            return pd.DataFrame()
+
+    if st.button("🔎 Run Audit (SPARQL + Content Check)", type="primary"):
+        with st.spinner("1/2 Querying Bahaidata..."):
+            df_audit = query_bahaidata_authors()
+        
+        if df_audit.empty:
+            st.warning("No data returned or error occurred.")
+        else:
+            st.write(f"Found {len(df_audit)} candidates with publications.")
+            
+            report_data = []
+            
+            with st.spinner("2/2 Verifying Page Content on Bahai.works..."):
+                # Prepare batch check
+                pages_to_check = df_audit[df_audit["Page Title"].notna()]["Page Title"].unique().tolist()
+                
+                # Fetch content in chunks
+                content_map = {}
+                chunk_size = 50
+                api_url = "https://bahai.works/api.php"
+                
+                for i in range(0, len(pages_to_check), chunk_size):
+                    chunk = pages_to_check[i:i+chunk_size]
+                    params = {
+                        "action": "query",
+                        "titles": "|".join(chunk),
+                        "prop": "revisions",
+                        "rvprop": "content",
+                        "format": "json"
+                    }
+                    try:
+                        r = requests.get(api_url, params=params).json()
+                        pages = r.get("query", {}).get("pages", {})
+                        for pid, pdata in pages.items():
+                            title = pdata['title']
+                            if "revisions" in pdata:
+                                content_map[title] = pdata["revisions"][0]["*"]
+                            else:
+                                content_map[title] = "" 
+                    except:
+                        pass
+            
+            # Build Final Report
+            for idx, row in df_audit.iterrows():
+                p_title = row["Page Title"]
+                status = "OK"
+                issue_details = []
+                
+                # Check 1: Missing Page
+                if not p_title:
+                    status = "MISSING PAGE"
+                    issue_details.append("No Bahai.works page linked")
+                else:
+                    # Check 2: Content
+                    txt = content_map.get(p_title, "")
+                    
+                    if row["Has Chapters"] and "getChaptersByAuthor" not in txt:
+                        status = "NEEDS UPDATE"
+                        issue_details.append("Missing 'getChaptersByAuthor'")
+                        
+                    if row["Has Articles"] and "getArticlesByAuthor" not in txt:
+                        status = "NEEDS UPDATE"
+                        issue_details.append("Missing 'getArticlesByAuthor'")
+                
+                if status != "OK":
+                    report_data.append({
+                        "Author": row["Author"],
+                        "Status": status,
+                        "Issues": ", ".join(issue_details),
+                        "Page": p_title if p_title else "N/A"
+                    })
+            
+            # Display
+            if not report_data:
+                st.success("✅ Amazing! All authors are perfectly synced.")
+            else:
+                final_df = pd.DataFrame(report_data)
+                
+                # Split display
+                missing_pages = final_df[final_df["Status"] == "MISSING PAGE"]
+                needs_update = final_df[final_df["Status"] == "NEEDS UPDATE"]
+                
+                st.subheader(f"⚠️ Issues Found: {len(final_df)}")
+                
+                tab_miss, tab_upd = st.tabs([f"Missing Pages ({len(missing_pages)})", f"Needs Code Update ({len(needs_update)})"])
+                
+                with tab_miss:
+                    st.dataframe(missing_pages, use_container_width=True)
+                    if not missing_pages.empty:
+                        if st.button("Send to 'Create Author Pages'"):
+                            st.session_state["batch_author_list"] = missing_pages["Author"].tolist()
+                            st.switch_page("pages/06_misc_tasks.py") 
+                
+                with tab_upd:
+                    st.dataframe(needs_update, use_container_width=True)
+                    st.caption("These pages exist but need the Lua invoke code added.")
