@@ -576,8 +576,8 @@ elif st.session_state.pipeline_stage == "proof":
 # STAGE 3: SPLITTER (BOOKS ONLY)
 # ==============================================================================
 elif st.session_state.pipeline_stage == "split":
-    st.header("Step 3: Verify & Split Text")
-    st.info("Review the page ranges. These control which text segments are uploaded to each page.")
+    st.header("Step 3: Verify & Split")
+    st.info("Review the start of each chapter. Use + / - to find the correct start page.")
 
     # 1. Load & Parse Text (Once)
     if "page_map" not in st.session_state:
@@ -589,85 +589,82 @@ elif st.session_state.pipeline_stage == "split":
     page_map = st.session_state["page_map"]
     page_order = st.session_state["page_order"]
     
-    # 2. Initialize (Once)
+    # 2. Initialize Indices (Once)
     full_toc = st.session_state.get("toc_map", [])
     toc_list = [
         item for item in full_toc 
         if item.get('page_name') and str(item.get('page_name')).strip() != ""
     ]
     
-    # Initialize session state for start/end indices if not present
-    if "split_ranges" not in st.session_state:
-        ranges = {}
+    if "splitter_indices" not in st.session_state:
+        indices = {}
         for i, item in enumerate(toc_list):
             title = item['title']
             raw_range = item.get('page_range', "")
             
-            # Default indices
-            start_idx = 0
-            end_idx = 0
+            # Try to guess label from TOC
+            guess = "1"
+            if "-" in str(raw_range): 
+                guess = str(raw_range).split("-")[0].strip()
+            elif raw_range: 
+                guess = str(raw_range).strip()
             
-            # A. Try to parse "5-10" from JSON
-            if "-" in str(raw_range):
-                try:
-                    parts = str(raw_range).split("-")
-                    # Find index of these labels in page_order
-                    s_lbl = parts[0].strip()
-                    e_lbl = parts[1].strip()
-                    if s_lbl in page_order: start_idx = page_order.index(s_lbl)
-                    if e_lbl in page_order: end_idx = page_order.index(e_lbl)
-                except: pass
-            
-            # B. Fallback: Fuzzy match title to find Start
-            if start_idx == 0:
+            # Heuristic: Check Front Matter titles if guess isn't a digit
+            if not guess.isdigit() or title.lower() in ["preface", "contents", "introduction", "foreword"]:
                 found = find_best_match_for_title(title, page_map, page_order)
-                if found in page_order:
-                    start_idx = page_order.index(found)
-                    # Default end to same page if unknown
-                    if end_idx == 0: end_idx = start_idx
+                if found: guess = found
+            
+            # Convert that Label -> Physical Index in the file
+            try:
+                idx = page_order.index(guess)
+            except ValueError:
+                idx = 0
+                
+            indices[i] = idx
+        st.session_state["splitter_indices"] = indices
 
-            ranges[i] = {"start": start_idx, "end": end_idx}
-        st.session_state["split_ranges"] = ranges
+    # 3. Helper to adjust index (Previous/Next)
+    def adjust_index(i, direction):
+        curr = st.session_state["splitter_indices"][i]
+        new = curr + direction
+        # Ensure we don't go out of bounds
+        if 0 <= new < len(page_order):
+            st.session_state["splitter_indices"][i] = new
 
-    # 3. Render Grid
+    # 4. Render Grid
     for i, item in enumerate(toc_list):
-        c_title, c_nav, c_preview = st.columns([2, 1, 4])
+        current_idx = st.session_state["splitter_indices"][i]
+        current_label = page_order[current_idx]
         
-        # Current indices from state
-        s_idx = st.session_state["split_ranges"][i]["start"]
-        e_idx = st.session_state["split_ranges"][i]["end"]
+        c_title, c_nav, c_preview = st.columns([2, 1, 4])
         
         with c_title:
             st.subheader(item['title'])
-            st.caption(f"Original JSON Range: {item.get('page_range', 'N/A')}")
+            st.caption(f"TOC Range: {item.get('page_range', 'N/A')}")
         
         with c_nav:
-            # Inputs for Start/End (1-based for UI, converted to 0-based for logic)
-            # We use len(page_order) as the max value
-            total_pages = len(page_order)
+            st.write(f"**Tag: `{{{{page|{current_label}}}}}`**")
             
-            new_s = st.number_input("Start Index", min_value=1, max_value=total_pages, value=s_idx + 1, key=f"s_{i}")
-            new_e = st.number_input("End Index", min_value=1, max_value=total_pages, value=e_idx + 1, key=f"e_{i}")
-            
-            # Update State immediately
-            st.session_state["split_ranges"][i]["start"] = new_s - 1
-            st.session_state["split_ranges"][i]["end"] = new_e - 1
-            
-            # Display the Page Label (e.g., "Page 5" or "Page IV")
-            s_lbl = page_order[new_s - 1] if 0 <= new_s - 1 < total_pages else "N/A"
-            e_lbl = page_order[new_e - 1] if 0 <= new_e - 1 < total_pages else "N/A"
-            st.write(f"**Range:** `{s_lbl}` to `{e_lbl}`")
+            c_minus, c_plus = st.columns(2)
+            with c_minus:
+                if st.button("◀", key=f"prev_{i}", width='stretch'): 
+                    adjust_index(i, -1)
+                    st.rerun()
+            with c_plus:
+                if st.button("▶", key=f"next_{i}", width='stretch'):
+                    adjust_index(i, 1)
+                    st.rerun()
 
         with c_preview:
-            # Preview text from the START page
-            if 0 <= s_idx < len(page_order):
-                lbl = page_order[s_idx]
-                txt = page_map.get(lbl, "")
-                st.text_area("Preview (Start Page)", value=txt[:300]+"...", height=100, key=f"pv_{i}", disabled=True)
+            # Grab content for preview
+            preview_text = page_map.get(current_label, "Error: Content missing")
+            
+            # Added current_idx to key to force refresh
+            st.text_area("Preview", value=preview_text[:400]+"...", height=120, key=f"pview_{i}_{current_idx}", disabled=True)
             
         st.divider()
 
-    # 4. Actions
+    # 5. Actions
     c_back, c_run = st.columns([1, 4])
     with c_back:
         if st.button("⬅️ Back"):
@@ -675,83 +672,103 @@ elif st.session_state.pipeline_stage == "split":
             st.rerun()
             
     with c_run:
+        # --- PART A: SPLIT & UPLOAD ---
         if st.button("✂️ Split & Upload to Bahai.works", type="primary"):
             target_base = st.session_state["target_page"]
             
-            # Access Header
+            # 1. Reconstruct the Access Header
             if is_copyright:
                  access_group = target_base.replace(" ", "")
                  header_content = f"<accesscontrol>Access:{access_group}</accesscontrol>{{{{Publicationinfo}}}}\n"
             else:
                  header_content = f"{{{{Publicationinfo}}}}\n"
-
+            
             progress_bar = st.progress(0)
             status_box = st.empty()
             
             try:
-                # A. Update JSON with Real Ranges (The Fix You Requested)
+                # 2. Build the cut-list based on the verified INDICES
+                final_split_data = []
                 for i, item in enumerate(toc_list):
-                    s_i = st.session_state["split_ranges"][i]["start"]
-                    e_i = st.session_state["split_ranges"][i]["end"]
-                    
-                    if 0 <= s_i < len(page_order) and 0 <= e_i < len(page_order):
-                        s_lbl = page_order[s_i]
-                        e_lbl = page_order[e_i]
-                        # Update the Main JSON list
-                        item["page_range"] = f"{s_lbl}-{e_lbl}"
+                    # FILTER: Only split Level 1 items.
+                    if item.get('level', 1) == 1:
+                        final_split_data.append({
+                            "title": item['title'],
+                            "page_name": item.get('page_name', item['title']), 
+                            "start_idx": st.session_state["splitter_indices"][i],
+                            "original_item": item # Keep ref to update JSON later
+                        })
 
-                # B. Save Corrected JSON to Disk
-                toc_path = os.path.join(os.path.dirname(file_path), "toc.json")
+                if not final_split_data:
+                    st.error("No Level 1 chapters found to split!")
+                    st.stop()
+
+                # 3. UPDATE JSON RANGES & UPLOAD
+                for i, chapter in enumerate(final_split_data):
+                    ch_title = chapter['title']
+                    ch_page_name = chapter['page_name']
+                    start_idx = chapter['start_idx']
+                    
+                    # End index is the start of the next chapter
+                    if i + 1 < len(final_split_data):
+                        end_idx = final_split_data[i+1]['start_idx']
+                    else:
+                        end_idx = len(page_order)
+                    
+                    # --- JSON SYNC FIX ---
+                    # Calculate real labels (Start Page -> End Page)
+                    # Note: end_idx is exclusive for slicing, so the last page is end_idx - 1
+                    safe_end_idx = max(start_idx, end_idx - 1)
+                    
+                    real_start_lbl = page_order[start_idx]
+                    real_end_lbl = page_order[safe_end_idx]
+                    
+                    # Update the original item reference in the TOC list
+                    chapter["original_item"]["page_range"] = f"{real_start_lbl}-{real_end_lbl}"
+                    # ---------------------
+
+                    status_box.write(f"Processing {ch_title}...")
+                    
+                    # 4. Concatenate text
+                    raw_text = ""
+                    for p_idx in range(start_idx, end_idx):
+                        if 0 <= p_idx < len(page_order):
+                            p_label = page_order[p_idx]
+                            raw_text += page_map.get(p_label, "") + "\n\n"
+                    
+                    # 5. Combine Header + Text + PDF Tag
+                    # We add the <pdf> tag so users can verify the range against the file
+                    pdf_tag = f"<pdf>File:{filename}|page={real_start_lbl}-{real_end_lbl}</pdf>"
+                    full_content = f"{header_content}\n{raw_text}\n{pdf_tag}"
+                    
+                    # 6. Upload
+                    upload_to_bahaiworks(ch_page_name, full_content, "Splitter Upload")
+                    
+                    progress_bar.progress((i + 1) / len(final_split_data))
+                
+                # 7. SAVE UPDATED JSON
+                toc_path = os.path.join(folder_path, "toc.json")
                 with open(toc_path, "w", encoding="utf-8") as f:
                     json.dump(st.session_state["toc_map"], f, indent=2, ensure_ascii=False)
-
-                # C. Processing Loop (Text Slicing)
-                for i, item in enumerate(toc_list):
-                    s_i = st.session_state["split_ranges"][i]["start"]
-                    e_i = st.session_state["split_ranges"][i]["end"]
-                    
-                    # Validate
-                    if s_i > e_i: continue
-                    
-                    # 1. Concatenate Text
-                    chapter_text = ""
-                    # Range is inclusive of end index
-                    for p_idx in range(s_i, e_i + 1):
-                        if 0 <= p_idx < len(page_order):
-                            lbl = page_order[p_idx]
-                            chapter_text += page_map.get(lbl, "") + "\n\n"
-                    
-                    # 2. Build Wiki Content
-                    # Reference the Master PDF
-                    # Note: We use the labels (e.g. "5"-"10") for the pdf tag
-                    s_lbl = page_order[s_i]
-                    e_lbl = page_order[e_i]
-                    pdf_tag = f"<pdf>File:{filename}|page={s_lbl}-{e_lbl}</pdf>"
-                    
-                    full_content = f"{header_content}\n{chapter_text}\n{pdf_tag}"
-                    
-                    # 3. Upload
-                    full_title = item['page_name'] 
-                    # Use upload_to_bahaiworks from your existing import
-                    upload_to_bahaiworks(full_title, full_content, "Splitter Text Upload")
-                    
-                    progress_bar.progress((i + 1) / len(toc_list))
                 
-                status_box.success("✅ Text Split & Upload Complete! JSON Updated.")
+                status_box.success("✅ All chapters split, uploaded, and JSON updated!")
                 st.balloons()
                 st.session_state["split_completed"] = True
                 st.rerun()
-
+                
             except Exception as e:
                 st.error(f"Failed: {e}")
 
-    # 5. Handoff
+    # --- PART B: HANDOFF TO CHAPTER MANAGER ---
     if st.session_state.get("split_completed"):
         st.divider()
+        st.subheader("4. Chapter Metadata")
+        
         if st.button("📝 Review & Create Chapter Items", type="primary", width='stretch'):
-            # Pass Data to Chapter Manager
+            # 1. Pack the data
             chapter_payload = []
             full_toc = st.session_state.get("toc_map", [])
+            
             for item in full_toc:
                 if item.get("page_name") and str(item.get("page_name")).strip() != "":
                     chapter_payload.append(item)
@@ -760,4 +777,5 @@ elif st.session_state.pipeline_stage == "split":
             st.session_state["chapter_parent_qid"] = st.session_state.get("parent_qid", "")
             st.session_state["chapter_target_base"] = st.session_state.get("target_page", "")
             
+            # 2. Switch Page
             st.switch_page("pages/05_chapter_items.py")
