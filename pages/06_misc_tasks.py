@@ -664,16 +664,26 @@ with tab_maintenance:
                 else:
                     txt = content_map.get(p_title, "")
                     issue_details = []
+                    
+                    # 1. Check Chapters
                     if row["Has Chapters"] and "getChaptersByAuthor" not in txt:
                         issue_details.append("Missing 'getChaptersByAuthor'")
-                    if row["Has Articles"] and "getArticlesByAuthor" not in txt:
-                        issue_details.append("Missing 'getArticlesByAuthor'")
                     
+                    # 2. Check Articles (Lenient)
+                    # Pass if AT LEAST ONE of the article modules exists
+                    if row["Has Articles"]:
+                        has_wo1 = "invoke:WorldOrder|" in txt
+                        has_wo2 = "invoke:WorldOrder2|" in txt
+                        if not (has_wo1 or has_wo2):
+                             issue_details.append("Missing Article Templates")
+
                     if issue_details:
                         needs_update.append({
                             "Author": row["Author"],
                             "Page Title": p_title,
-                            "Issues": ", ".join(issue_details)
+                            "Issues": ", ".join(issue_details),
+                            "Has Chapters": row["Has Chapters"],
+                            "Has Articles": row["Has Articles"]
                         })
 
             # Save to Session State (Persist across reruns)
@@ -738,11 +748,20 @@ with tab_maintenance:
                                 log.write(f"🔨 Creating Page: **{author}**...")
                                 
                                 # --- CREATION LOGIC ---
-                                content = f"{{{{Author|author={author}}}}}"
-                                upload_to_bahaiworks(author, content, "Auto-creating Author Page")
-                                # ----------------------
-                                time.sleep(0.1) 
-                                pb.progress((i+1)/len(to_create))
+                                content_parts = []
+                                
+                                # Part 1: Chapters
+                                if row["Has Chapters"]:
+                                    content_parts.append("==== Contributing author====\n{{#invoke:Chapters|getChaptersByAuthor}}")
+                                
+                                # Part 2: Articles (Add All)
+                                if row["Has Articles"]:
+                                    content_parts.append("===Articles===\n====World Order (1935-1949)====\n{{#invoke:WorldOrder|getArticlesByAuthor}}")
+                                    content_parts.append("====World Order (1966-2007)====\n{{#invoke:WorldOrder2|getArticlesByAuthor}}")
+                                
+                                full_content = "\n\n".join(content_parts)
+                                
+                                upload_to_bahaiworks(author, full_content, "Auto-creating Author Page with dynamic sections")
                             
                             log.success(f"✅ Created {len(to_create)} pages!")
                         
