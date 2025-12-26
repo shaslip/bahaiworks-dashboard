@@ -4,7 +4,6 @@ import re
 import json
 import hashlib
 import pandas as pd
-from pypdf import PdfReader, PdfWriter
 from sqlalchemy.orm import Session
 from src.database import engine, Document
 from src.gemini_processor import extract_metadata_from_pdf, extract_toc_from_pdf
@@ -577,7 +576,7 @@ elif st.session_state.pipeline_stage == "proof":
 # STAGE 3: SPLITTER (BOOKS ONLY)
 # ==============================================================================
 elif st.session_state.pipeline_stage == "split":
-    st.header("Step 3: Verify & Split")
+    st.header("Step 3: Verify & Split Text")
     
     # 1. Load & Parse Text (Once)
     if "page_map" not in st.session_state:
@@ -644,7 +643,7 @@ elif st.session_state.pipeline_stage == "split":
             st.caption(f"TOC Range: {item.get('page_range', 'N/A')}")
         
         with c_nav:
-            # 1. Preview Controls
+            # Navigation Controls
             st.write(f"**Tag: `{{{{page|{current_label}}}}}`**")
             
             c_minus, c_plus = st.columns(2)
@@ -657,12 +656,11 @@ elif st.session_state.pipeline_stage == "split":
                     adjust_index(i, 1)
                     st.rerun()
 
-            # 2. THE MISSING INPUTS (Critical for Splitter)
-            # We attempt to parse the JSON range (e.g. "5-10") to set defaults
+            # --- INPUTS FOR TEXT SLICING ---
+            # Attempt to parse defaults from JSON
             default_s = 1
             default_e = 1
             raw_range = item.get('page_range', "")
-            
             if "-" in str(raw_range):
                 try:
                     parts = str(raw_range).split("-")
@@ -673,13 +671,13 @@ elif st.session_state.pipeline_stage == "split":
             st.divider()
             c_s, c_e = st.columns(2)
             with c_s:
-                st.number_input("Start", value=default_s, min_value=1, key=f"start_{i}")
+                st.number_input("Start Page", value=default_s, min_value=1, key=f"start_{i}")
             with c_e:
-                st.number_input("End", value=default_e, min_value=1, key=f"end_{i}")
+                st.number_input("End Page", value=default_e, min_value=1, key=f"end_{i}")
 
         with c_preview:
             preview_text = page_map.get(current_label, "Error: Content missing")
-            st.text_area("Preview", value=preview_text[:400]+"...", height=120, key=f"pview_{i}_{current_idx}", disabled=True)
+            st.text_area("Preview", value=preview_text[:400]+"...", height=150, key=f"pview_{i}_{current_idx}", disabled=True)
             
         st.divider()
 
@@ -691,13 +689,12 @@ elif st.session_state.pipeline_stage == "split":
             st.rerun()
             
     with c_run:
-        if st.button("✂️ Split & Upload All", type="primary", use_container_width=True):
+        if st.button("✂️ Split & Upload Text", type="primary", use_container_width=True):
             try:
-                # 1. Prepare Headers (RESTORED)
+                # 1. Prepare Headers
                 target_base = st.session_state["target_page"]
                 
                 if is_copyright:
-                     # Clean group name for access control (e.g. "SomeBookTitle" -> "Access:SomeBookTitle")
                      access_group = target_base.replace(" ", "")
                      header_content = f"<accesscontrol>Access:{access_group}</accesscontrol>{{{{Publicationinfo}}}}\n"
                 else:
@@ -706,7 +703,7 @@ elif st.session_state.pipeline_stage == "split":
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 
-                # 2. Update JSON with Real User-Selected Ranges (Sync Logic)
+                # 2. Update JSON with Real User-Selected Ranges
                 for i, item in enumerate(st.session_state["toc_map"]):
                     s_key = f"start_{i}"
                     e_key = f"end_{i}"
@@ -716,48 +713,50 @@ elif st.session_state.pipeline_stage == "split":
                         real_end = st.session_state[e_key]
                         item["page_range"] = f"{real_start}-{real_end}"
 
-                # 3. Save Corrected JSON (Single Source of Truth)
+                # 3. Save Corrected JSON
                 toc_path = os.path.join(folder_path, "toc.json")
                 with open(toc_path, "w", encoding="utf-8") as f:
                     json.dump(st.session_state["toc_map"], f, indent=2, ensure_ascii=False)
                 
-                # 4. Processing Loop
-                pdf_path = os.path.join(folder_path, f"{filename}.pdf")
-                reader = PdfReader(pdf_path)
-                
+                # 4. Processing Loop (TEXT ONLY)
                 for i, item in enumerate(st.session_state["toc_map"]):
                     # Get synced ranges
                     start_p = st.session_state[f"start_{i}"]
                     end_p = st.session_state[f"end_{i}"]
                     
                     if start_p > end_p: continue
-                        
-                    # Split PDF
-                    writer = PdfWriter()
-                    for p_num in range(start_p - 1, end_p):
-                        if 0 <= p_num < len(reader.pages):
-                            writer.add_page(reader.pages[p_num])
                     
-                    # Save PDF
-                    safe_title = re.sub(r'[\\/*?:"<>|]', "", item['page_name'])
-                    safe_title = safe_title.replace(" ", "_")
-                    out_name = f"{safe_title}.pdf"
-                    out_path = os.path.join(folder_path, out_name)
+                    # --- SPLIT TEXT LOGIC ---
+                    # We map the 1-based page numbers to the page_order list
+                    # Note: page_order is 0-indexed list of labels
+                    # Range is inclusive for the user, so we take slice [start-1 : end]
                     
-                    with open(out_path, "wb") as f_out:
-                        writer.write(f_out)
+                    chapter_text_blocks = []
                     
-                    # 5. Upload File & Create Page (RESTORED)
-                    # Upload PDF File
-                    upload_file(out_path, out_name, f"Chapter {i+1} of {target_base}")
+                    # Bounds check
+                    safe_start = max(0, start_p - 1)
+                    safe_end = min(len(page_order), end_p)
                     
-                    # Create Wiki Page with Access Header
-                    page_text = f"{header_content}\n<pdf>File:{out_name}</pdf>"
-                    upload_to_bahaiworks(item['page_name'], page_text, "Splitter Upload")
+                    selected_labels = page_order[safe_start:safe_end]
+                    
+                    for lbl in selected_labels:
+                        if lbl in page_map:
+                            chapter_text_blocks.append(page_map[lbl])
+                    
+                    full_chapter_text = "\n\n".join(chapter_text_blocks)
+                    # ------------------------
+                    
+                    # 5. Create Wiki Page
+                    # We reference the MASTER PDF file with a page range, rather than splitting it.
+                    pdf_tag = f"<pdf>File:{filename}|page={start_p}-{end_p}</pdf>"
+                    
+                    page_content = f"{header_content}\n{full_chapter_text}\n\n{pdf_tag}"
+                    
+                    upload_to_bahaiworks(item['page_name'], page_content, "Splitter Text Upload")
                     
                     progress_bar.progress((i + 1) / len(st.session_state["toc_map"]))
                 
-                status_text.success("✅ Splitting & Upload Complete! TOC.json updated.")
+                status_text.success("✅ Text Splitting & Upload Complete!")
                 st.balloons()
                 
                 st.session_state["split_completed"] = True
@@ -766,19 +765,19 @@ elif st.session_state.pipeline_stage == "split":
             except Exception as e:
                 st.error(f"Failed: {e}")
 
-        if st.session_state.get("split_completed"):
-            st.divider()
-            if st.button("📝 Review & Create Chapter Items", type="primary", width='stretch'):
-                # Pass Data to Chapter Manager
-                chapter_payload = []
-                full_toc = st.session_state.get("toc_map", [])
-                
-                for item in full_toc:
-                    if item.get("page_name") and str(item.get("page_name")).strip() != "":
-                        chapter_payload.append(item)
-                
-                st.session_state["chapter_review_data"] = chapter_payload
-                st.session_state["chapter_parent_qid"] = st.session_state.get("parent_qid", "")
-                st.session_state["chapter_target_base"] = st.session_state.get("target_page", "")
-                
-                st.switch_page("pages/05_chapter_items.py")
+    if st.session_state.get("split_completed"):
+        st.divider()
+        if st.button("📝 Review & Create Chapter Items", type="primary", width='stretch'):
+            # Pass Data to Chapter Manager
+            chapter_payload = []
+            full_toc = st.session_state.get("toc_map", [])
+            
+            for item in full_toc:
+                if item.get("page_name") and str(item.get("page_name")).strip() != "":
+                    chapter_payload.append(item)
+            
+            st.session_state["chapter_review_data"] = chapter_payload
+            st.session_state["chapter_parent_qid"] = st.session_state.get("parent_qid", "")
+            st.session_state["chapter_target_base"] = st.session_state.get("target_page", "")
+            
+            st.switch_page("pages/05_chapter_items.py")
