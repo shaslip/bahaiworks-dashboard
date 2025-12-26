@@ -32,7 +32,7 @@ with st.expander("ℹ️ Help / Instructions"):
 
 st.markdown("---")
 
-tab_author, tab_book, tab_maintenance = st.tabs(["👤 Create Author Pages", "📖 AC Messages", "🔧 Update Author list"])
+tab_create_author, tab_ac, tab_create_author_page = st.tabs(["👤 Create Author Pages", "📖 AC Messages", "🔧 Update Author list"])
 
 # --- Author page maintenance and exclusions ---
 AUTHORS_PAGE_HEADER = """{{header
@@ -199,7 +199,7 @@ def ensure_wikibase_author(author_name):
 
 # --- TAB: CREATE AUTHOR PAGES ---
 
-with tab_author:
+with tab_create_author:
     st.header("Create Author Pages")
     st.info("This tool creates the three required pages (Author, Category, Works Category) for each author.")
 
@@ -350,7 +350,7 @@ with tab_author:
                     st.balloons()
 
 # --- TAB: AC MESSAGE ---
-with tab_book:
+with tab_ac:
     st.header("AC Message")
     
     st.subheader("Copyright AC-Message Creator")
@@ -387,7 +387,7 @@ with tab_book:
                     st.error(f"Error: {e}")
 
 # --- TAB: UPDATE AUTHOR PAGE ---
-with tab_maintenance:
+with tab_create_author_page:
     st.header("🔧 Update Author list")
     
     st.subheader("Update 'Authors' Index Page")
