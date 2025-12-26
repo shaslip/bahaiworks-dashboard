@@ -219,14 +219,16 @@ with tab_author:
         # Cleanup the transfer variable
         del st.session_state["batch_author_list"]
 
+    # Ensure the key exists in session state to avoid KeyErrors
+    if text_area_key not in st.session_state:
+        st.session_state[text_area_key] = ""
+
     c1, c2 = st.columns(2)
     
     with c1:
-        # We bind this widget to 'text_area_key'. 
-        # If the key was updated in the block above, the widget will show that text.
+        # Because 'key' is set, it will automatically read from st.session_state[text_area_key]
         raw_authors = st.text_area(
             "Author Names (comma separated)", 
-            value=st.session_state.get(text_area_key, ""), 
             key=text_area_key,
             placeholder="e.g. Aaron Emmel, John Doe, Jane Smith",
             height=150
