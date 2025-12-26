@@ -643,7 +643,9 @@ with tab_maintenance:
                                 content_map[title] = pdata["revisions"][0]["*"]
                             else:
                                 content_map[title] = "" 
-
+                    except:
+                        pass
+            
             # --- C. Categorize & Display ---
             missing_pages = []
             needs_update = []
@@ -698,7 +700,7 @@ with tab_maintenance:
                         },
                         disabled=["Author", "Has Chapters", "Has Articles"],
                         hide_index=True,
-                        width='stretch'  # Using correct parameter
+                        width='stretch'
                     )
                     
                     if st.button("Add Bahai.works author pages"):
@@ -723,8 +725,8 @@ with tab_maintenance:
                                 log.write(f"🔨 Creating Page: **{author}**...")
                                 
                                 # --- CREATION LOGIC ---
-                                # content = f"{{{{Author|author={author}}}}}"
-                                # upload_to_bahaiworks(author, content, "Auto-creating Author Page")
+                                content = f"{{{{Author|author={author}}}}}"
+                                upload_to_bahaiworks(author, content, "Auto-creating Author Page")
                                 # ----------------------
                                 time.sleep(0.1) 
                                 pb.progress((i+1)/len(to_create))
