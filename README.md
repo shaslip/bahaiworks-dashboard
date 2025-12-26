@@ -1,105 +1,119 @@
 # Bahai.works Digitization Dashboard
 
-A local Python application for scanning, prioritizing, and managing a large queue of PDF documents using Google Gemini AI.
+A comprehensive local Python application for managing the end-to-end digitization workflow for Bahai.works. This tool orchestrates file scanning, AI-driven prioritization, OCR processing, image extraction, and direct publishing to MediaWiki and Wikibase.
 
 ## Features
 
-* **Crawler:** Recursively scans local directories for PDF files and tracks them in a SQLite database.
-* **AI Analysis:** Uses Google Gemini (3-Flash) to generate summaries, detect language, and assign priority scores (1-10) based on historical value.
-* **Dashboard:** Streamlit interface for sorting, searching, and manually reviewing documents.
-* **Local Integration:** Direct file system hooks to open documents or containing folders (optimized for Linux/KDE Dolphin).
+The application is structured into a main dashboard and several specialized workflow pages:
+
+* **📊 Main Dashboard (`app.py`):** Central command for sorting, searching, and managing the document queue. View status (Pending, Digitized, Completed) and launch file system actions.
+* **🤖 AI Analyst:** Uses Google Gemini to analyze PDF content, detect language, generate summaries, and assign priority scores (1-10) based on historical value.
+* **🏭 OCR Assembly Line:** A robust pipeline to:
+    * **Merge:** Detect and combine separated Cover/Content PDF pairs.
+    * **Prep:** Detect double-page spreads and split them automatically.
+    * **Execute:** Run OCR (Tesseract/PyMuPDF) and extract text/images.
+* **🚀 Publication Pipeline:** Automates the creation of MediaWiki pages. Handles copyright headers, TOC extraction, and uploading text directly to Bahai.works.
+* **🖼️ Image Import:** An interactive cropper to process illustrations extracted during OCR and upload them with captions.
+* **📑 Chapter Manager:** Tools to define and link specific chapters to their authors in Wikibase (Bahaidata).
+* **🛠️ Utilities:** Batch creation of Author pages, copyright sub-pages (`/AC-Message`), and system maintenance tasks.
 
 ## Requirements
 
-* Python 3.10+
-* Google Gemini API Key
-* Linux (Recommended for file system integration features)
+* **Python 3.10+**
+* **Google Gemini API Key**
+* **Linux** (Highly recommended for file system integration features like `xdg-open` and `dolphin` hooks)
+* **Tesseract OCR** installed on the system (for the OCR engine)
 
 ## Installation
 
-1. **Clone the repository:**
-```bash
-git clone https://github.com/shaslip/bahaiworks-dashboard.git dashboard
-cd dashboard
+1.  **Clone the repository:**
+    ```bash
+    git clone [https://github.com/shaslip/bahaiworks-dashboard.git](https://github.com/shaslip/bahaiworks-dashboard.git) dashboard
+    cd dashboard
+    ```
 
-```
+2.  **Install Python dependencies:**
+    ```bash
+    pip install -r requirements.txt
+    ```
 
-
-2. **Install dependencies:**
-```bash
-pip install -r requirements.txt
-
-```
-
-
-3. **Configure API Key:**
-Create a `.env` file in the root directory:
-```env
-GEMINI_API_KEY=your_actual_api_key_here
-
-```
-
-
+3.  **Configure API Key:**
+    Create a `.env` file in the root directory:
+    ```env
+    GEMINI_API_KEY=your_actual_api_key_here
+    ```
 
 ## Usage
 
 ### 1. Initialize Database
-
-Scan your local directories to populate the database.
+Scan your local directories to populate the SQLite database with new PDF files.
 
 ```bash
 python -m src.crawler
 
 ```
 
-*Note: Ensure source directories are defined in `src/config.py`.*
+### 2. Launch the Dashboard
 
-### 2. Run the Dashboard
-
-Launch the interactive web interface.
+Start the web interface. This acts as the central hub for all workflows.
 
 ```bash
 streamlit run app.py
 
 ```
 
-* **View:** Sorts by Priority (Highest first), then Filename (A-Z).
-* **Action:** Click a row to view details. Sidebar actions (Open File/Folder) do not reload the table state.
-* **Override:** AI scores can be manually adjusted in the sidebar.
+### 3. Standard Workflow
 
-### 3. Batch Processing (Optional)
+Once the app is running, navigate using the sidebar to move a document through the pipeline:
 
-Process all "Pending" documents in the background without the UI.
+1. **AI Analyst:** Select "Pending" files to generate summaries and priority scores.
+2. **OCR Pipeline:**
+* *Merge* covers and content.
+* *Prep* by splitting double pages and setting page offsets.
+* *Execute* batch OCR processing.
 
-```bash
-python batch_process.py
 
-```
+3. **Publication Pipeline:** Select a digitized document to extract metadata/TOC and upload to Bahai.works.
+4. **Post-Processing:** Use **Image Import** for illustrations or **Chapter Manager** to link specific sections to authors.
 
 ## Project Structure
 
 ```text
 dashboard/
-├── app.py                 # Main Streamlit dashboard
-├── batch_process.py       # Headless script for bulk AI analysis
-├── src/
-│   ├── config.py          # Directory paths and settings
-│   ├── crawler.py         # File scanner and database population
-│   ├── database.py        # SQLAlchemy schema and connection
-│   ├── evaluator.py       # Gemini API integration
-│   └── processor.py       # PDF to Image extraction (PyMuPDF)
+├── app.py                       # Main Dashboard (Queue view)
+├── batch_process.py             # Headless script for bulk AI analysis
+├── pages/                       # Streamlit multi-page workflows
+│   ├── 01_ai_analysis.py        # AI scoring & summary generation
+│   ├── 02_ocr_pipeline.py       # Merge, Split, & OCR execution
+│   ├── 03_publication_pipeline.py # MediaWiki upload & text parsing
+│   ├── 04_image_import.py       # Illustration cropping & processing
+│   ├── 05_chapter_items.py      # Wikibase chapter item management
+│   └── 06_misc_tasks.py         # Author creation & system maintenance
+├── src/                         # Core logic modules
+│   ├── config.py                # Paths and settings
+│   ├── crawler.py               # File scanner
+│   ├── database.py              # SQLAlchemy schema
+│   ├── evaluator.py             # Gemini API integration
+│   ├── ocr_engine.py            # OCR logic & image generation
+│   ├── processor.py             # PDF manipulation (PyMuPDF)
+│   ├── wikibase_importer.py     # Bahaidata API hooks
+│   ├── mediawiki_uploader.py    # Bahai.works API hooks
+│   └── ...
 ├── data/
-│   └── files.db           # SQLite database (auto-generated)
-└── requirements.txt       # Python dependencies
+│   └── files.db                 # SQLite database
+└── requirements.txt
 
 ```
 
 ## Dependencies
 
-* `streamlit`
-* `google-generativeai`
-* `sqlalchemy`
-* `pymupdf` (fitz)
-* `pandas`
-* `python-dotenv`
-* `tqdm`
+Major libraries used:
+
+* `streamlit` & `streamlit-cropper` (UI)
+* `google-generativeai` (LLM analysis)
+* `sqlalchemy` (Database ORM)
+* `pymupdf` (PDF processing)
+* `wikibaseintegrator` (Bahaidata sync)
+* `pandas` (Data manipulation)
+
+```
