@@ -1,6 +1,10 @@
 import streamlit as st
 import re
+import json
+import os
+import time
 import requests
+import urllib.parse
 import pandas as pd
 from src.mediawiki_uploader import upload_to_bahaiworks
 from src.sitelink_manager import set_sitelink
@@ -477,38 +481,75 @@ with tab_update_author:
 # ==============================================================================
 with tab_maintenance:
     st.header("🔧 Maintenance Audit")
+    
+    # ==========================================
+    # 1. BLACKLIST MANAGEMENT
+    # ==========================================
+    BLACKLIST_FILE = "excluded_authors.json"
+
+    def load_blacklist():
+        if os.path.exists(BLACKLIST_FILE):
+            with open(BLACKLIST_FILE, "r") as f:
+                return set(json.load(f))
+        return set()
+
+    def save_blacklist(blocked_set):
+        with open(BLACKLIST_FILE, "w") as f:
+            json.dump(list(blocked_set), f)
+
+    blacklist = load_blacklist()
+
+    with st.expander(f"🚫 Manage Excluded Authors ({len(blacklist)})"):
+        if blacklist:
+            st.write("The following authors are permanently hidden from this audit:")
+            to_remove = st.multiselect(
+                "Select authors to un-block:", 
+                options=sorted(list(blacklist))
+            )
+            if to_remove:
+                if st.button("Un-block Selected"):
+                    blacklist.difference_update(to_remove)
+                    save_blacklist(blacklist)
+                    st.success("Updated blacklist! Refreshing...")
+                    time.sleep(0.5)
+                    st.rerun()
+        else:
+            st.info("No authors are currently blacklisted.")
+
+    st.markdown("---")
+
+    # ==========================================
+    # 2. AUDIT LOGIC
+    # ==========================================
     st.markdown("""
-    **Goal:** Identify authors who have Chapters (P9) or Articles (P7) assigned in Bahaidata 
-    but are missing the corresponding dynamic code on their Bahai.works author page.
+    **Goal:** Identify authors who have publications in Bahaidata but are missing the 
+    corresponding dynamic code on their Bahai.works author page.
     """)
 
-    # Helper: SPARQL Query
     def query_bahaidata_authors():
-        endpoint = "https://query.bahaidata.org/proxy/sparql"
+        endpoint = "https://query.bahaidata.org/proxy/sparql" 
+        
+        # HEADERS: Critical for JSON response
         headers = {
             "User-Agent": "Bot BahaiWorks-Pipeline/1.0",
             "Accept": "application/sparql-results+json"
         }
         
-        # Dictionary to merge results: { "Author Name": {data...} }
         author_map = {}
 
         def run_query(sparql_query, is_chapter_query):
             try:
                 r = requests.get(endpoint, params={'format': 'json', 'query': sparql_query}, headers=headers)
-                r.raise_for_status() # Raise error for bad status codes
+                r.raise_for_status()
                 data = r.json()
                 
                 for row in data['results']['bindings']:
                     label = row['itemLabel']['value']
                     
-                    # Initialize if new
                     if label not in author_map:
-                        # Extract Page Title from URL if present
                         page_title = None
                         url = row.get('sitelink', {}).get('value')
                         if url:
-                            import urllib.parse
                             page_title = urllib.parse.unquote(url.split("bahai.works/")[-1]).replace("_", " ")
 
                         author_map[label] = {
@@ -518,7 +559,6 @@ with tab_maintenance:
                             "Has Articles": False
                         }
                     
-                    # Update flags based on which query we are running
                     if is_chapter_query:
                         author_map[label]["Has Chapters"] = True
                     else:
@@ -527,12 +567,11 @@ with tab_maintenance:
             except Exception as e:
                 st.error(f"Error running {'Chapter' if is_chapter_query else 'Article'} query: {e}")
 
-        # --- QUERY 1: CHAPTERS (P11 -> P9) ---
+        # Query 1: Chapters (P11 -> P9)
         q_chapters = """
         SELECT DISTINCT ?item ?itemLabel ?sitelink WHERE {
           ?item wdt:P11 ?target .
           ?target wdt:P9 ?anyBook .
-          
           OPTIONAL {
             ?sitelink schema:about ?item .
             FILTER(CONTAINS(STR(?sitelink), "bahai.works"))
@@ -540,14 +579,13 @@ with tab_maintenance:
           SERVICE wikibase:label { bd:serviceParam wikibase:language "[AUTO_LANGUAGE],en". }
         }
         """
-        run_query(q_chapters, is_chapter_query=True)
+        run_query(q_chapters, True)
 
-        # --- QUERY 2: ARTICLES (P11 -> P7) ---
+        # Query 2: Articles (P11 -> P7)
         q_articles = """
         SELECT DISTINCT ?item ?itemLabel ?sitelink WHERE {
           ?item wdt:P11 ?target .
           ?target wdt:P7 ?anyIssue .
-          
           OPTIONAL {
             ?sitelink schema:about ?item .
             FILTER(CONTAINS(STR(?sitelink), "bahai.works"))
@@ -555,23 +593,30 @@ with tab_maintenance:
           SERVICE wikibase:label { bd:serviceParam wikibase:language "[AUTO_LANGUAGE],en". }
         }
         """
-        run_query(q_articles, is_chapter_query=False)
+        run_query(q_articles, False)
 
         return pd.DataFrame(list(author_map.values()))
 
+    # ==========================================
+    # 3. INTERFACE & EXECUTION
+    # ==========================================
     if st.button("🔎 Run Audit (SPARQL + Content Check)", type="primary"):
+        
+        # --- A. Fetch Candidates ---
         with st.spinner("1/2 Querying Bahaidata..."):
             df_audit = query_bahaidata_authors()
-        
-        if df_audit.empty:
-            st.warning("No data returned or error occurred.")
-        else:
-            st.write(f"Found {len(df_audit)} candidates with publications.")
             
+            # Filter Blacklist immediately
+            if not df_audit.empty:
+                df_audit = df_audit[~df_audit["Author"].isin(blacklist)]
+
+        if df_audit.empty:
+            st.success("No active authors found matching criteria (or all are blacklisted).")
+        else:
+            # --- B. Check Content on Bahai.works ---
             report_data = []
             
             with st.spinner("2/2 Verifying Page Content on Bahai.works..."):
-                # Prepare batch check
                 pages_to_check = df_audit[df_audit["Page Title"].notna()]["Page Title"].unique().tolist()
                 
                 # Fetch content in chunks
@@ -600,57 +645,108 @@ with tab_maintenance:
                     except:
                         pass
             
-            # Build Final Report
-            for idx, row in df_audit.iterrows():
-                p_title = row["Page Title"]
-                status = "OK"
-                issue_details = []
-                
-                # Check 1: Missing Page
-                if not p_title:
-                    status = "MISSING PAGE"
-                    issue_details.append("No Bahai.works page linked")
-                else:
-                    # Check 2: Content
-                    txt = content_map.get(p_title, "")
+                # Build Final Report
+                for idx, row in df_audit.iterrows():
+                    p_title = row["Page Title"]
+                    status = "OK"
+                    issue_details = []
                     
-                    if row["Has Chapters"] and "getChaptersByAuthor" not in txt:
-                        status = "NEEDS UPDATE"
-                        issue_details.append("Missing 'getChaptersByAuthor'")
+                    if not p_title:
+                        status = "MISSING PAGE"
+                        issue_details.append("No Bahai.works page linked")
+                    else:
+                        txt = content_map.get(p_title, "")
                         
-                    if row["Has Articles"] and "getArticlesByAuthor" not in txt:
-                        status = "NEEDS UPDATE"
-                        issue_details.append("Missing 'getArticlesByAuthor'")
-                
-                if status != "OK":
-                    report_data.append({
-                        "Author": row["Author"],
-                        "Status": status,
-                        "Issues": ", ".join(issue_details),
-                        "Page": p_title if p_title else "N/A"
-                    })
-            
-            # Display
+                        if row["Has Chapters"] and "getChaptersByAuthor" not in txt:
+                            status = "NEEDS UPDATE"
+                            issue_details.append("Missing 'getChaptersByAuthor'")
+                            
+                        if row["Has Articles"] and "getArticlesByAuthor" not in txt:
+                            status = "NEEDS UPDATE"
+                            issue_details.append("Missing 'getArticlesByAuthor'")
+                    
+                    if status != "OK":
+                        report_data.append({
+                            "Author": row["Author"],
+                            "Status": status,
+                            "Issues": ", ".join(issue_details),
+                            "Page Title": p_title if p_title else row["Author"]
+                        })
+
+            # --- C. Display Interactive Triage ---
             if not report_data:
                 st.success("✅ Amazing! All authors are perfectly synced.")
             else:
                 final_df = pd.DataFrame(report_data)
                 
-                # Split display
-                missing_pages = final_df[final_df["Status"] == "MISSING PAGE"]
-                needs_update = final_df[final_df["Status"] == "NEEDS UPDATE"]
+                st.subheader(f"Action Required: {len(final_df)} Authors")
                 
-                st.subheader(f"⚠️ Issues Found: {len(final_df)}")
+                # Add Interaction Columns
+                # Default "Fix" to True for convenience
+                final_df.insert(0, "Create/Fix Page?", True) 
+                final_df.insert(1, "Blacklist?", False)
                 
-                tab_miss, tab_upd = st.tabs([f"Missing Pages ({len(missing_pages)})", f"Needs Code Update ({len(needs_update)})"])
-                
-                with tab_miss:
-                    st.dataframe(missing_pages, use_container_width=True)
-                    if not missing_pages.empty:
-                        if st.button("Send to 'Create Author Pages'"):
-                            st.session_state["batch_author_list"] = missing_pages["Author"].tolist()
-                            st.switch_page("pages/06_misc_tasks.py") 
-                
-                with tab_upd:
-                    st.dataframe(needs_update, use_container_width=True)
-                    st.caption("These pages exist but need the Lua invoke code added.")
+                edited_df = st.data_editor(
+                    final_df,
+                    column_config={
+                        "Create/Fix Page?": st.column_config.CheckboxColumn(
+                            "Fix",
+                            help="Create page or update code",
+                            default=True,
+                        ),
+                        "Blacklist?": st.column_config.CheckboxColumn(
+                            "Ignore",
+                            help="Hide this author forever",
+                            default=False,
+                        ),
+                        "Page Title": st.column_config.LinkColumn("Page Link"),
+                    },
+                    disabled=["Author", "Status", "Issues", "Page Title"],
+                    hide_index=True,
+                    use_container_width=True
+                )
+
+                # --- D. Process Button ---
+                if st.button("🚀 Process Selection"):
+                    
+                    # 1. Handle Blacklist
+                    to_blacklist = edited_df[edited_df["Blacklist?"] == True]["Author"].tolist()
+                    if to_blacklist:
+                        blacklist.update(to_blacklist)
+                        save_blacklist(blacklist)
+                        st.toast(f"🚫 Blacklisted {len(to_blacklist)} authors.")
+
+                    # 2. Handle Creations / Updates
+                    to_fix = edited_df[
+                        (edited_df["Create/Fix Page?"] == True) & 
+                        (edited_df["Blacklist?"] == False)
+                    ]
+                    
+                    if not to_fix.empty:
+                        progress_bar = st.progress(0)
+                        log_container = st.empty()
+                        
+                        for i, (idx, row) in enumerate(to_fix.iterrows()):
+                            author = row["Author"]
+                            p_title = row["Page Title"]
+                            
+                            log_container.write(f"🔨 Processing: **{p_title}**...")
+                            
+                            # ---------------------------------------------------------
+                            # YOUR SAVE LOGIC GOES HERE
+                            # Example:
+                            # new_content = f"{{{{Author|author={author}}}}}"
+                            # st.session_state['wiki_site'].pages[p_title].save(new_content, summary="Auto-creating author page")
+                            # ---------------------------------------------------------
+                            
+                            # Simulate delay so you can see it working
+                            time.sleep(0.1) 
+                            
+                            progress_bar.progress((i + 1) / len(to_fix))
+                        
+                        log_container.success(f"✅ Processed {len(to_fix)} pages!")
+                    
+                    # 3. Refresh
+                    if to_blacklist or not to_fix.empty:
+                        time.sleep(1)
+                        st.rerun()
