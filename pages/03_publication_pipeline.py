@@ -675,7 +675,7 @@ elif st.session_state.pipeline_stage == "split":
         if st.button("✂️ Split & Upload to Bahai.works", type="primary"):
             target_base = st.session_state["target_page"]
             
-            # Access Header
+            # 1. Configure Header & Access Control
             if is_copyright:
                  access_group = target_base.replace(" ", "")
                  header_content = f"<accesscontrol>Access:{access_group}</accesscontrol>{{{{Publicationinfo}}}}\n"
@@ -686,7 +686,23 @@ elif st.session_state.pipeline_stage == "split":
             status_box = st.empty()
             
             try:
-                # 2. Build the cut-list
+                # --- NEW: Apply Protection to the PDF File Page ---
+                if is_copyright:
+                    file_page_title = f"File:{filename}"
+                    file_page_text = f"<accesscontrol>Access:{access_group}</accesscontrol>"
+                    
+                    status_box.write(f"🔒 Securing {file_page_title}...")
+                    
+                    # check_exists=False allows us to overwrite whatever is there
+                    upload_to_bahaiworks(
+                        file_page_title, 
+                        file_page_text, 
+                        "Automated: Applied Access Control tag to File page",
+                        check_exists=False 
+                    )
+                # --------------------------------------------------
+
+                # 2. Build the cut-list (Existing code continues below...)
                 final_split_data = []
                 for i, item in enumerate(toc_list):
                     final_split_data.append({
