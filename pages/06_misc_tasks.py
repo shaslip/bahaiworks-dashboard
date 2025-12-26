@@ -661,6 +661,7 @@ with tab_maintenance:
                 if not p_title:
                     missing_pages.append({
                         "Author": row["Author"],
+                        "QID": row["QID"],
                         "Has Chapters": row["Has Chapters"],
                         "Has Articles": row["Has Articles"]
                     })
