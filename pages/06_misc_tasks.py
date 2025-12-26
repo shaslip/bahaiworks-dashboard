@@ -703,7 +703,7 @@ with tab_maintenance:
                     },
                     disabled=["Author", "Status", "Issues", "Page Title"],
                     hide_index=True,
-                    use_container_width=True
+                    width='content'
                 )
 
                 # --- D. Process Button ---
