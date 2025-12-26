@@ -15,24 +15,24 @@ st.title("🛠️ Miscellaneous Utilities")
 # --- HELP SECTION ---
 with st.expander("ℹ️ Help / Instructions"):
     st.markdown("""
-    **1. Author Manager**
+    **1. Create Author Pages**
     * **Batch Creation:** Paste a list of author names (comma-separated) to create their pages in bulk.
     * **Modes:**
         * *Dynamic:* Uses a Lua module to automatically list all chapters by this author in the works of others.
         * *Static:* Hard-codes a link to a specific book. Use this for authors with a single major work.
     * **Bahaidata:** This tool automatically creates the Bahaidata item for the author (if missing) and links it to the new Bahai.works page.
 
-    **2. Book Manager**
+    **2. AC Messages**
     * **Copyright AC-Message:** Generates the special `/AC-Message` subpage required for copyright-protected books.
     * **Usage:** Enter the exact Book Title (Page Name) and the cover image filename.
 
-    **3. System Maintenance**
+    **3. Update Author list**
     * **Update Authors Index:** Scans all `Category:Authors-A` through `Z` and rebuilds the main [[Authors]] index page. Run this periodically if the main index feels out of date.
     """)
 
 st.markdown("---")
 
-tab_author, tab_book, tab_maintenance = st.tabs(["👤 Author Manager", "📖 Book Manager", "🔧 System Maintenance"])
+tab_author, tab_book, tab_maintenance = st.tabs(["👤 Create Author Pages", "📖 AC Messages", "🔧 Update Author list"])
 
 # --- Author page maintenance and exclusions ---
 AUTHORS_PAGE_HEADER = """{{header
@@ -197,7 +197,7 @@ def ensure_wikibase_author(author_name):
     
     return qid, success, msg
 
-# --- TAB: AUTHOR MANAGER ---
+# --- TAB: CREATE AUTHOR PAGES ---
 
 with tab_author:
     st.header("Create Author Pages")
@@ -349,9 +349,9 @@ with tab_author:
                     status_box.success(f"✅ Process Complete! Processed {success_count} authors.")
                     st.balloons()
 
-# --- TAB: BOOK MANAGER ---
+# --- TAB: AC MESSAGE ---
 with tab_book:
-    st.header("Book Utilities")
+    st.header("AC Message")
     
     st.subheader("Copyright AC-Message Creator")
     st.info("Creates the /AC-Message subpage required for copyright-protected works.")
@@ -386,9 +386,9 @@ with tab_book:
                 except Exception as e:
                     st.error(f"Error: {e}")
 
-# --- TAB: MAINTENANCE ---
+# --- TAB: UPDATE AUTHOR PAGE ---
 with tab_maintenance:
-    st.header("🔧 System Maintenance")
+    st.header("🔧 Update Author list")
     
     st.subheader("Update 'Authors' Index Page")
     st.info("Scans categories Authors-A through Authors-Z, formats the list, and updates the [[Authors]] page.")
