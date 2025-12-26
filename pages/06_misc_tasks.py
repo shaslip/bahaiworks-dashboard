@@ -484,8 +484,11 @@ with tab_maintenance:
 
     # Helper: SPARQL Query
     def query_bahaidata_authors():
-        endpoint = "https://query.bahaidata.org/sparql"
-        headers = {"User-Agent": "Bot BahaiWorks-Pipeline/1.0"}
+        endpoint = "https://query.bahaidata.org/proxy/sparql"
+        headers = {
+            "User-Agent": "Bot BahaiWorks-Pipeline/1.0",
+            "Accept": "application/sparql-results+json"
+        }
         
         # Dictionary to merge results: { "Author Name": {data...} }
         author_map = {}
