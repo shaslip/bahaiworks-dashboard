@@ -205,7 +205,7 @@ should_check = st.session_state["missing_authors_cache"] is None
 
 c_check, c_refresh = st.columns([3, 1])
 with c_refresh:
-    if st.button("🔄 Force Re-scan", type="secondary"):
+    if st.button("🔄 Re-scan Bahai.works", type="secondary"):
         st.session_state["missing_authors_cache"] = None
         st.rerun()
 
