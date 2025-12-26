@@ -4,11 +4,13 @@ import re
 import json
 import hashlib
 import pandas as pd
+from pypdf import PdfReader, PdfWriter
 from sqlalchemy.orm import Session
 from src.database import engine, Document
 from src.gemini_processor import extract_metadata_from_pdf, extract_toc_from_pdf
 from src.wikibase_importer import import_book_to_wikibase
-from src.mediawiki_uploader import upload_to_bahaiworks
+# Add upload_file here
+from src.mediawiki_uploader import upload_to_bahaiworks, upload_file 
 from src.sitelink_manager import set_sitelink
 from src.text_processing import parse_text_file, find_best_match_for_title
 from src.evaluator import translate_summary
@@ -69,6 +71,7 @@ with Session(engine) as session:
     
     filename = record.filename
     file_path = record.file_path
+    folder_path = os.path.dirname(file_path)
     
     # Default Target Page Name
     if "target_page" not in st.session_state:
@@ -641,6 +644,7 @@ elif st.session_state.pipeline_stage == "split":
             st.caption(f"TOC Range: {item.get('page_range', 'N/A')}")
         
         with c_nav:
+            # 1. Preview Controls
             st.write(f"**Tag: `{{{{page|{current_label}}}}}`**")
             
             c_minus, c_plus = st.columns(2)
@@ -652,6 +656,26 @@ elif st.session_state.pipeline_stage == "split":
                 if st.button("▶", key=f"next_{i}", width='stretch'):
                     adjust_index(i, 1)
                     st.rerun()
+
+            # 2. THE MISSING INPUTS (Critical for Splitter)
+            # We attempt to parse the JSON range (e.g. "5-10") to set defaults
+            default_s = 1
+            default_e = 1
+            raw_range = item.get('page_range', "")
+            
+            if "-" in str(raw_range):
+                try:
+                    parts = str(raw_range).split("-")
+                    default_s = int(parts[0])
+                    default_e = int(parts[1])
+                except: pass
+            
+            st.divider()
+            c_s, c_e = st.columns(2)
+            with c_s:
+                st.number_input("Start", value=default_s, min_value=1, key=f"start_{i}")
+            with c_e:
+                st.number_input("End", value=default_e, min_value=1, key=f"end_{i}")
 
         with c_preview:
             preview_text = page_map.get(current_label, "Error: Content missing")
