@@ -411,8 +411,7 @@ elif st.session_state.pipeline_stage == "proof":
                         
                         if auth_list:
                             authors_str = ", ".join(auth_list)
-                            # Display author on next line, indented
-                            computed_toc_wikitext += f"\n: ''{authors_str}''"
+                            computed_toc_wikitext += f"\n:: ''{authors_str}''"
 
                     else:
                         # Logic B: Sub-sections
