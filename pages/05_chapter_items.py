@@ -40,7 +40,12 @@ if "chapter_data_df" not in st.session_state:
         # Flatten for the Editor
         flat_data = []
         for item in raw_list:
-            auth_str = ", ".join(item.get("author", []))
+            authors = item.get("author", [])
+            
+            if not authors:
+                continue
+
+            auth_str = ", ".join(authors)
             
             flat_data.append({
                 "Page Name (Slug)": item.get("page_name", ""),
