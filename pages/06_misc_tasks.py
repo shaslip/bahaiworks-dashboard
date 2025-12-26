@@ -750,18 +750,20 @@ with tab_maintenance:
                                 # --- CREATION LOGIC ---
                                 content_parts = []
                                 
-                                # Part 1: Chapters
+                                # 1. Chapters Section
                                 if row["Has Chapters"]:
                                     content_parts.append("==== Contributing author====\n{{#invoke:Chapters|getChaptersByAuthor}}")
                                 
-                                # Part 2: Articles (Add All)
+                                # 2. Articles Section (Add both, allow user to delete later)
                                 if row["Has Articles"]:
-                                    content_parts.append("===Articles===\n====World Order (1935-1949)====\n{{#invoke:WorldOrder|getArticlesByAuthor}}")
+                                    content_parts.append("===Articles===")
+                                    content_parts.append("====World Order (1935-1949)====\n{{#invoke:WorldOrder|getArticlesByAuthor}}")
                                     content_parts.append("====World Order (1966-2007)====\n{{#invoke:WorldOrder2|getArticlesByAuthor}}")
                                 
                                 full_content = "\n\n".join(content_parts)
                                 
                                 upload_to_bahaiworks(author, full_content, "Auto-creating Author Page with dynamic sections")
+                                # ----------------------
                             
                             log.success(f"✅ Created {len(to_create)} pages!")
                         
