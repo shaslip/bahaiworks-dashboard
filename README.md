@@ -37,10 +37,14 @@ The application is structured into a main dashboard and several specialized work
     pip install -r requirements.txt
     ```
 
-3.  **Configure API Key:**
+3.  **Configure secrets:**
     Create a `.env` file in the root directory:
     ```env
-    GEMINI_API_KEY=your_actual_api_key_here
+    GEMINI_API_KEY=
+    WIKIBASE_USER=
+    WIKIBASE_PASSWORD=
+    BAHAIWORKS_USER=
+    BAHAIWORKS_PASSWORD=
     ```
 
 ## Usage
