@@ -35,15 +35,15 @@ def generate_header(title, author, year, language, is_copyright, filename):
     else:
         # English Template
         header = f"""{{{{header
- | title      = {title}
- | author     = {author}
+ | title      = 
+ | author     = 
  | translator = 
  | compiler   = 
  | section    = 
  | previous   = 
  | next       = 
  | publisher  = 
- | year       = {year}
+ | year       = 
  | notes      = 
  | categories = All publications/Books
  | portal     = 
