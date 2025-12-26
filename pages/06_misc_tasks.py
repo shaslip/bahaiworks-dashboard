@@ -34,7 +34,7 @@ with st.expander("ℹ️ Help / Instructions"):
 st.markdown("---")
 
 # --- TABS ---
-tab_create_author, tab_ac, tab_update_list, tab_maintenance = st.tabs([
+tab_create_author, tab_ac, tab_update_author, tab_maintenance = st.tabs([
     "👤 Create Author Pages", 
     "📖 AC Messages", 
     "📝 Update Author list",
@@ -205,7 +205,6 @@ def ensure_wikibase_author(author_name):
     return qid, success, msg
 
 # --- TAB: CREATE AUTHOR PAGES ---
-
 with tab_create_author:
     st.header("Create Author Pages")
     st.info("This tool creates the three required pages (Author, Category, Works Category) for each author.")
@@ -394,7 +393,7 @@ with tab_ac:
                     st.error(f"Error: {e}")
 
 # --- TAB: UPDATE AUTHOR PAGE ---
-with tab_create_author_page:
+with tab_update_author:
     st.header("🔧 Update Author list")
     
     st.subheader("Update 'Authors' Index Page")
