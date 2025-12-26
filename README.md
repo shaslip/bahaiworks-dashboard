@@ -21,8 +21,11 @@ The application is structured into a main dashboard and several specialized work
 
 * **Python 3.10+**
 * **Google Gemini API Key**
-* **Linux** (Highly recommended for file system integration features like `xdg-open` and `dolphin` hooks)
-* **Tesseract OCR** installed on the system (for the OCR engine)
+* **Tesseract OCR Engine:**
+    * *Linux:* `sudo apt install tesseract-ocr`
+    * *Windows:* Download and install the [Tesseract binary](https://github.com/UB-Mannheim/tesseract/wiki). **Important:** You must add Tesseract to your system PATH environment variable during installation.
+* **Operating System:** Cross-platform (Windows, Linux, MacOS).
+    * *Note: Specific features like "Open Folder" are optimized for Linux (KDE Dolphin).*
 
 ## Installation
 
