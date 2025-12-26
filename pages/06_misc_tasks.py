@@ -510,7 +510,8 @@ with tab_maintenance:
         GROUP BY ?author ?authorLabel ?sitelink
         """
         try:
-            r = requests.get(endpoint, params={'format': 'json', 'query': query})
+            headers = {"User-Agent": "Bot BahaiWorks-Pipeline/1.0"}
+            r = requests.get(endpoint, params={'format': 'json', 'query': query}, headers=headers)
             data = r.json()
             results = []
             for item in data['results']['bindings']:
