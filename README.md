@@ -44,7 +44,7 @@ The application is structured into a main dashboard and several specialized work
     Create a `.env` file in the root directory:
     ```env
     GEMINI_API_KEY=
-    WIKI_USER=
+    WIKI_USERNAME=
     WIKI_PASSWORD=
     ```
 
