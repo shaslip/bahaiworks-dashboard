@@ -408,6 +408,12 @@ elif st.session_state.pipeline_stage == "proof":
                         else:
                             current_section_is_container = False
                             computed_toc_wikitext += f"\n:{prefix}[[/{p_name}|{d_title}]]" 
+                        
+                        if auth_list:
+                            authors_str = ", ".join(auth_list)
+                            # Display author on next line, indented
+                            computed_toc_wikitext += f"\n: ''{authors_str}''"
+
                     else:
                         # Logic B: Sub-sections
                         should_link = (len(auth_list) > 0) or current_section_is_container
