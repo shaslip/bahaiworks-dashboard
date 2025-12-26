@@ -11,11 +11,11 @@ load_dotenv()
 
 # --- Configuration ---
 # Credentials from .env
-WB_USER = os.getenv("WIKIBASE_USER")
-WB_PASS = os.getenv("WIKIBASE_PASSWORD")
+WB_USER = os.getenv("WIKI_USERNAME")
+WB_PASS = os.getenv("WIKI_PASSWORD")
 
 if not WB_USER or not WB_PASS:
-    raise ValueError("Missing WIKIBASE_USER or WIKIBASE_PASSWORD in .env file")
+    raise ValueError("Missing WIKI_USERNAME or WIKI_PASSWORD in .env file")
 
 wbi_config['MEDIAWIKI_API_URL'] = 'https://bahaidata.org/api.php'
 wbi_config['USER_AGENT'] = f'MyWikibaseBot/1.0 (https://bahaidata.org/User:{WB_USER})'
