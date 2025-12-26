@@ -667,65 +667,78 @@ elif st.session_state.pipeline_stage == "split":
             st.rerun()
             
     with c_run:
-        if st.button("✂️ Split & Upload", type="primary"):
-            target_base = st.session_state["target_page"]
-            
-            # Access Header for Chapters (Content Pages)
-            # <accesscontrol> goes here ONLY if copyright is True
-            if is_copyright:
-                 # Clean group name for access control
-                 access_group = target_base.replace(" ", "")
-                 header_content = f"<accesscontrol>Access:{access_group}</accesscontrol>{{{{Publicationinfo}}}}\n"
-            else:
-                 # No access control, just the nav template
-                 header_content = f"{{{{Publicationinfo}}}}\n"
-
-            progress_bar = st.progress(0)
-            status_box = st.empty()
-            
+        if st.button("✂️ Split & Upload All", type="primary", use_container_width=True):
             try:
-                final_split_data = []
-                for i, item in enumerate(toc_list):
-                    # FILTER: Only split Level 1 items.
-                    if item.get('level', 1) == 1:
-                        final_split_data.append({
-                            "title": item['title'],
-                            "page_name": item.get('page_name', item['title']), 
-                            "start_idx": st.session_state["splitter_indices"][i]
-                        })
-
-                if not final_split_data:
-                    st.error("No Level 1 chapters found to split!")
-                    st.stop()
-
-                for i, chapter in enumerate(final_split_data):
-                    ch_title = chapter['title']
-                    ch_page_name = chapter['page_name']
-                    start_idx = chapter['start_idx']
-                    
-                    if i + 1 < len(final_split_data):
-                        end_idx = final_split_data[i+1]['start_idx']
-                    else:
-                        end_idx = len(page_order)
-                    
-                    status_box.write(f"Processing {ch_title}...")
-                    
-                    raw_text = ""
-                    for p_idx in range(start_idx, end_idx):
-                        p_label = page_order[p_idx]
-                        raw_text += page_map[p_label]
-                    
-                    full_content = header_content + raw_text
-                    
-                    full_title = f"{target_base}/{ch_page_name}"
-                    upload_to_bahaiworks(full_title, full_content, "Splitter Upload")
-                    
-                    progress_bar.progress((i + 1) / len(final_split_data))
-                    
-                status_box.success("✅ All chapters split and uploaded!")
-                st.balloons()
-                st.session_state["split_completed"] = True
+                # 1. Prepare Headers (RESTORED)
+                target_base = st.session_state["target_page"]
                 
+                if is_copyright:
+                     # Clean group name for access control (e.g. "SomeBookTitle" -> "Access:SomeBookTitle")
+                     access_group = target_base.replace(" ", "")
+                     header_content = f"<accesscontrol>Access:{access_group}</accesscontrol>{{{{Publicationinfo}}}}\n"
+                else:
+                     header_content = f"{{{{Publicationinfo}}}}\n"
+
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                # 2. Update JSON with Real User-Selected Ranges (Sync Logic)
+                for i, item in enumerate(st.session_state["toc_map"]):
+                    s_key = f"start_{i}"
+                    e_key = f"end_{i}"
+                    
+                    if s_key in st.session_state and e_key in st.session_state:
+                        real_start = st.session_state[s_key]
+                        real_end = st.session_state[e_key]
+                        item["page_range"] = f"{real_start}-{real_end}"
+
+                # 3. Save Corrected JSON (Single Source of Truth)
+                toc_path = os.path.join(folder_path, "toc.json")
+                with open(toc_path, "w", encoding="utf-8") as f:
+                    json.dump(st.session_state["toc_map"], f, indent=2, ensure_ascii=False)
+                
+                # 4. Processing Loop
+                pdf_path = os.path.join(folder_path, f"{filename}.pdf")
+                reader = PdfReader(pdf_path)
+                
+                for i, item in enumerate(st.session_state["toc_map"]):
+                    # Get synced ranges
+                    start_p = st.session_state[f"start_{i}"]
+                    end_p = st.session_state[f"end_{i}"]
+                    
+                    if start_p > end_p: continue
+                        
+                    # Split PDF
+                    writer = PdfWriter()
+                    for p_num in range(start_p - 1, end_p):
+                        if 0 <= p_num < len(reader.pages):
+                            writer.add_page(reader.pages[p_num])
+                    
+                    # Save PDF
+                    safe_title = re.sub(r'[\\/*?:"<>|]', "", item['page_name'])
+                    safe_title = safe_title.replace(" ", "_")
+                    out_name = f"{safe_title}.pdf"
+                    out_path = os.path.join(folder_path, out_name)
+                    
+                    with open(out_path, "wb") as f_out:
+                        writer.write(f_out)
+                    
+                    # 5. Upload File & Create Page (RESTORED)
+                    # Upload PDF File
+                    upload_file(out_path, out_name, f"Chapter {i+1} of {target_base}")
+                    
+                    # Create Wiki Page with Access Header
+                    page_text = f"{header_content}\n<pdf>File:{out_name}</pdf>"
+                    upload_to_bahaiworks(item['page_name'], page_text, "Splitter Upload")
+                    
+                    progress_bar.progress((i + 1) / len(st.session_state["toc_map"]))
+                
+                status_text.success("✅ Splitting & Upload Complete! TOC.json updated.")
+                st.balloons()
+                
+                st.session_state["split_completed"] = True
+                st.rerun()
+
             except Exception as e:
                 st.error(f"Failed: {e}")
 
