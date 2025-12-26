@@ -485,58 +485,76 @@ with tab_maintenance:
     # Helper: SPARQL Query
     def query_bahaidata_authors():
         endpoint = "https://query.bahaidata.org/sparql"
-        query = """
-        PREFIX wdt: <http://www.wikidata.org/prop/direct/>
-        PREFIX schema: <http://schema.org/>
+        headers = {"User-Agent": "Bot BahaiWorks-Pipeline/1.0"}
+        
+        # Dictionary to merge results: { "Author Name": {data...} }
+        author_map = {}
 
-        SELECT ?author ?authorLabel ?sitelink (MAX(?isChapter) as ?hasChapter) (MAX(?isArticle) as ?hasArticle) WHERE {
-          {
-            SELECT ?author (true as ?isChapter) (false as ?isArticle) WHERE {
-              ?work wdt:P11 ?author ; wdt:P9 ?book .
-            }
-          } UNION {
-            SELECT ?author (false as ?isChapter) (true as ?isArticle) WHERE {
-              ?work wdt:P11 ?author ; wdt:P7 ?issue .
-            }
-          }
+        def run_query(sparql_query, is_chapter_query):
+            try:
+                r = requests.get(endpoint, params={'format': 'json', 'query': sparql_query}, headers=headers)
+                r.raise_for_status() # Raise error for bad status codes
+                data = r.json()
+                
+                for row in data['results']['bindings']:
+                    label = row['itemLabel']['value']
+                    
+                    # Initialize if new
+                    if label not in author_map:
+                        # Extract Page Title from URL if present
+                        page_title = None
+                        url = row.get('sitelink', {}).get('value')
+                        if url:
+                            import urllib.parse
+                            page_title = urllib.parse.unquote(url.split("bahai.works/")[-1]).replace("_", " ")
+
+                        author_map[label] = {
+                            "Author": label,
+                            "Page Title": page_title,
+                            "Has Chapters": False,
+                            "Has Articles": False
+                        }
+                    
+                    # Update flags based on which query we are running
+                    if is_chapter_query:
+                        author_map[label]["Has Chapters"] = True
+                    else:
+                        author_map[label]["Has Articles"] = True
+                        
+            except Exception as e:
+                st.error(f"Error running {'Chapter' if is_chapter_query else 'Article'} query: {e}")
+
+        # --- QUERY 1: CHAPTERS (P11 -> P9) ---
+        q_chapters = """
+        SELECT DISTINCT ?item ?itemLabel ?sitelink WHERE {
+          ?item wdt:P11 ?target .
+          ?target wdt:P9 ?anyBook .
           
           OPTIONAL {
-            ?sitelink schema:about ?author ;
-                      schema:isPartOf <https://bahai.works/> .
+            ?sitelink schema:about ?item .
+            FILTER(CONTAINS(STR(?sitelink), "bahai.works"))
           }
-          
-          SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+          SERVICE wikibase:label { bd:serviceParam wikibase:language "[AUTO_LANGUAGE],en". }
         }
-        GROUP BY ?author ?authorLabel ?sitelink
         """
-        try:
-            headers = {"User-Agent": "Bot BahaiWorks-Pipeline/1.0"}
-            r = requests.get(endpoint, params={'format': 'json', 'query': query}, headers=headers)
-            data = r.json()
-            results = []
-            for item in data['results']['bindings']:
-                label = item['authorLabel']['value']
-                url = item.get('sitelink', {}).get('value', None)
-                has_chap = item.get('hasChapter', {}).get('value') == 'true'
-                has_art = item.get('hasArticle', {}).get('value') == 'true'
-                
-                # Clean URL to get Title
-                page_title = None
-                if url:
-                    page_title = url.replace("https://bahai.works/", "").replace("_", " ")
-                    import urllib.parse
-                    page_title = urllib.parse.unquote(page_title)
+        run_query(q_chapters, is_chapter_query=True)
 
-                results.append({
-                    "Author": label,
-                    "Page Title": page_title,
-                    "Has Chapters": has_chap,
-                    "Has Articles": has_art
-                })
-            return pd.DataFrame(results)
-        except Exception as e:
-            st.error(f"SPARQL Error: {e}")
-            return pd.DataFrame()
+        # --- QUERY 2: ARTICLES (P11 -> P7) ---
+        q_articles = """
+        SELECT DISTINCT ?item ?itemLabel ?sitelink WHERE {
+          ?item wdt:P11 ?target .
+          ?target wdt:P7 ?anyIssue .
+          
+          OPTIONAL {
+            ?sitelink schema:about ?item .
+            FILTER(CONTAINS(STR(?sitelink), "bahai.works"))
+          }
+          SERVICE wikibase:label { bd:serviceParam wikibase:language "[AUTO_LANGUAGE],en". }
+        }
+        """
+        run_query(q_articles, is_chapter_query=False)
+
+        return pd.DataFrame(list(author_map.values()))
 
     if st.button("🔎 Run Audit (SPARQL + Content Check)", type="primary"):
         with st.spinner("1/2 Querying Bahaidata..."):
