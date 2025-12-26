@@ -197,29 +197,31 @@ if st.button("🚀 Process Items (Create & Link)", type="primary"):
             
         st.success("Done!")
 
-# --- 3. Check for Missing Author Pages ---
+# --- 3. Check for Missing OR Outdated Author Pages ---
 st.divider()
 st.subheader("3. Author Page Verification")
 
 # Initialize Cache
 if "missing_authors_cache" not in st.session_state:
     st.session_state["missing_authors_cache"] = None
+if "outdated_authors_cache" not in st.session_state:
+    st.session_state["outdated_authors_cache"] = None
 
-# Determine if we need to run the check (First run OR Manual Refresh)
+# Determine if we need to run the check
 should_check = st.session_state["missing_authors_cache"] is None
 
 c_check, c_refresh = st.columns([3, 1])
 with c_refresh:
     if st.button("🔄 Re-scan Bahai.works", type="secondary"):
         st.session_state["missing_authors_cache"] = None
+        st.session_state["outdated_authors_cache"] = None
         st.rerun()
 
 # 1. Logic: Gather Authors & Check API
 if should_check:
-    with st.spinner("Checking which authors need pages on Bahai.works..."):
-        # Gather Unique Authors from the Editor above
+    with st.spinner("Checking authors on Bahai.works (Existence & Content)..."):
+        # Gather Unique Authors
         unique_authors = set()
-        # Ensure we access the edited dataframe from the earlier variable
         if not edited_df.empty:
             for idx, row in edited_df.iterrows():
                 if row["Authors"]:
@@ -228,14 +230,14 @@ if should_check:
         
         if not unique_authors:
             st.session_state["missing_authors_cache"] = []
+            st.session_state["outdated_authors_cache"] = []
         else:
-            # Check Existence via API
             import requests
             missing_list = []
+            needs_update_list = []
             author_list = list(unique_authors)
             
             try:
-                # Batch request (chunk size 50)
                 chunk_size = 50
                 for i in range(0, len(author_list), chunk_size):
                     chunk = author_list[i:i + chunk_size]
@@ -245,34 +247,71 @@ if should_check:
                     params = {
                         "action": "query",
                         "titles": "|".join(titles_to_check),
+                        "prop": "revisions",  # Fetch revisions to see content
+                        "rvprop": "content",  # Get the text content
                         "format": "json"
                     }
+                    
                     resp = requests.get(api_url, params=params).json()
                     pages = resp.get("query", {}).get("pages", {})
                     
                     for pid, pdata in pages.items():
+                        clean_name = pdata['title'].replace("Author:", "")
+                        
+                        # CASE 1: Page Missing (Negative Page ID)
                         if int(pid) < 0:
-                            missing_name = pdata['title'].replace("Author:", "")
-                            missing_list.append(missing_name)
+                            missing_list.append(clean_name)
+                        
+                        # CASE 2: Page Exists -> Check Content
+                        else:
+                            # Safely extract content
+                            revisions = pdata.get("revisions", [])
+                            if revisions:
+                                content = revisions[0].get("*", "")
+                                # The "Smart Check": Look for the Lua module call
+                                if "getChaptersByAuthor" not in content:
+                                    needs_update_list.append(clean_name)
+                            else:
+                                # Edge case: Page exists but no content returned? Treat as update needed.
+                                needs_update_list.append(clean_name)
                 
                 st.session_state["missing_authors_cache"] = missing_list
+                st.session_state["outdated_authors_cache"] = needs_update_list
                 
             except Exception as e:
                 st.error(f"API Check Failed: {e}")
-                # Keep cache None so user can try again
                 st.session_state["missing_authors_cache"] = None
+                st.session_state["outdated_authors_cache"] = None
 
-# 2. Display Results (Read from Cache)
+# 2. Display Results
 missing_authors = st.session_state.get("missing_authors_cache")
+outdated_authors = st.session_state.get("outdated_authors_cache")
 
 if missing_authors is not None:
-    if not missing_authors:
-        st.success("✅ All authors already have pages on Bahai.works!")
-    else:
-        st.warning(f"⚠️ {len(missing_authors)} Authors are missing pages on Bahai.works.")
+    has_issues = False
+    
+    # A. Missing Authors
+    if missing_authors:
+        has_issues = True
+        st.warning(f"⚠️ {len(missing_authors)} Authors are MISSING pages entirely.")
         st.write(f"**Missing:** {', '.join(missing_authors)}")
         
-        # This button works now because it is no longer hidden inside the Process button
-        if st.button("👤 Proceed to create author pages", type="primary"):
+        if st.button("👤 Create missing pages", type="primary", key="btn_missing"):
             st.session_state["batch_author_list"] = missing_authors
             st.switch_page("pages/06_misc_tasks.py")
+            
+    # B. Outdated Authors (Exists but no Lua)
+    if outdated_authors:
+        has_issues = True
+        st.error(f"⚠️ {len(outdated_authors)} Authors exist but lack 'getChaptersByAuthor' logic.")
+        st.caption("These pages exist but won't show the new chapters unless updated.")
+        st.write(f"**Needs Update:** {', '.join(outdated_authors)}")
+        
+        if st.button("🛠️ Update outdated pages", type="secondary", key="btn_outdated"):
+            # We send these to the same tool, but you might want to manually review them 
+            # in 06 before clicking 'Create' to avoid overwriting bio text.
+            st.session_state["batch_author_list"] = outdated_authors
+            st.switch_page("pages/06_misc_tasks.py")
+
+    if not has_issues:
+        st.success("✅ All authors have pages and include the correct dynamic code!")
