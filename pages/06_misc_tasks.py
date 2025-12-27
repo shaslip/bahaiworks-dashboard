@@ -484,43 +484,7 @@ with tab_maintenance:
     st.header("🔧 Maintenance Audit")
     
     # ==========================================
-    # 1. BLACKLIST MANAGEMENT
-    # ==========================================
-    BLACKLIST_FILE = "excluded_authors.json"
-
-    def load_blacklist():
-        if os.path.exists(BLACKLIST_FILE):
-            with open(BLACKLIST_FILE, "r") as f:
-                return set(json.load(f))
-        return set()
-
-    def save_blacklist(blocked_set):
-        with open(BLACKLIST_FILE, "w") as f:
-            json.dump(list(blocked_set), f)
-
-    blacklist = load_blacklist()
-
-    with st.expander(f"🚫 Manage Excluded Authors ({len(blacklist)})"):
-        if blacklist:
-            st.write("The following authors are permanently hidden from this audit:")
-            to_remove = st.multiselect(
-                "Select authors to un-block:", 
-                options=sorted(list(blacklist))
-            )
-            if to_remove:
-                if st.button("Un-block Selected"):
-                    blacklist.difference_update(to_remove)
-                    save_blacklist(blacklist)
-                    st.success("Updated blacklist! Refreshing...")
-                    time.sleep(0.5)
-                    st.rerun()
-        else:
-            st.info("No authors are currently blacklisted.")
-
-    st.markdown("---")
-
-    # ==========================================
-    # 2. AUDIT LOGIC
+    # 1. AUDIT LOGIC
     # ==========================================
     st.markdown("""
     **Goal:** Identify authors who have publications in Bahaidata but are missing the 
@@ -602,7 +566,7 @@ with tab_maintenance:
         return pd.DataFrame(list(author_map.values()))
 
     # ==========================================
-    # 3. INTERFACE & EXECUTION
+    # 2. INTERFACE & EXECUTION
     # ==========================================
     
     # --- A. Run Audit Button (Updates Session State) ---
