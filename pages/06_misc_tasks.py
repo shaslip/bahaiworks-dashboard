@@ -693,17 +693,6 @@ with tab_maintenance:
                         key="editor_missing"
                     )
                     
-                    # Only Blacklist Logic Remains
-                    if st.button("Update Blacklist"):
-                        to_blacklist = edited_missing[edited_missing["Blacklist?"] == True]["Author"].tolist()
-                        if to_blacklist:
-                            blacklist.update(to_blacklist)
-                            save_blacklist(blacklist)
-                            st.toast(f"🚫 Blacklisted {len(to_blacklist)} authors.")
-                            del st.session_state["audit_missing"] # Force re-audit
-                            time.sleep(1)
-                            st.rerun()
-
             # TAB 2: NEEDS UPDATE
             with tab_fix:
                 if not needs_update:
