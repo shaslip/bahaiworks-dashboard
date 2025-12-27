@@ -489,7 +489,7 @@ with tab_maintenance:
     """)
 
     def query_bahaidata_authors():
-        endpoint = "https://query.bahaidata.org/proxy/sparql" 
+        endpoint = "https://query.bahaidata.org/sparql"
         
         # HEADERS: Critical for JSON response
         headers = {
