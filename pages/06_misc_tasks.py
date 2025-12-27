@@ -675,7 +675,7 @@ with tab_maintenance:
                     st.dataframe(
                         df_missing,
                         hide_index=True,
-                        use_container_width=True
+                        width='stretch'
                     )
 
             # TAB 2: NEEDS UPDATE
