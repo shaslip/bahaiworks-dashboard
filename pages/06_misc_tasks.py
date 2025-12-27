@@ -715,141 +715,30 @@ with tab_maintenance:
                     st.success("No missing pages found!")
                 else:
                     df_missing = pd.DataFrame(missing_pages)
-                    df_missing.insert(0, "Create?", True)
-                    df_missing.insert(1, "Blacklist?", False)
+                    # Removed "Create?" column as we removed the functionality
+                    df_missing.insert(0, "Blacklist?", False)
                     
                     edited_missing = st.data_editor(
                         df_missing,
                         column_config={
-                            "Create?": st.column_config.CheckboxColumn("Create", default=True),
                             "Blacklist?": st.column_config.CheckboxColumn("Ignore", default=False),
                         },
-                        disabled=["Author", "Has Chapters", "Has Articles"],
+                        disabled=["Author", "QID", "Has Chapters", "Has Articles"],
                         hide_index=True,
                         width='stretch',
                         key="editor_missing"
                     )
                     
-                    # --- STAGE 1: PREVIEW ---
-                    if st.button("Preview Pages to Create"):
-                        
-                        # Handle Blacklist
+                    # Only Blacklist Logic Remains
+                    if st.button("Update Blacklist"):
                         to_blacklist = edited_missing[edited_missing["Blacklist?"] == True]["Author"].tolist()
                         if to_blacklist:
                             blacklist.update(to_blacklist)
                             save_blacklist(blacklist)
                             st.toast(f"🚫 Blacklisted {len(to_blacklist)} authors.")
-
-                        # Prepare Creation List
-                        to_create = edited_missing[
-                            (edited_missing["Create?"] == True) & 
-                            (edited_missing["Blacklist?"] == False)
-                        ]
-                        
-                        if to_create.empty:
-                            if "pending_creations" in st.session_state: del st.session_state["pending_creations"]
-                            if not to_blacklist:
-                                st.warning("No pages selected for creation.")
-                        else:
-                            pending_list = []
-                            for idx, row in to_create.iterrows():
-                                author = row["Author"]
-                                qid = row.get("QID")
-                                
-                                # USE YOUR HELPER FUNCTION HERE
-                                sort_name = get_lastname_firstname(author)
-                                
-                                # 1. MAIN AUTHOR PAGE CONTENT
-                                content_parts = [f"{{{{author2}}}}\n"]
-                                if row["Has Chapters"]:
-                                    content_parts.append("==== Contributing author====\n{{#invoke:Chapters|getChaptersByAuthor}}")
-                                if row["Has Articles"]:
-                                    content_parts.append("===Articles===")
-                                    content_parts.append("====World Order (1935-1949)====\n{{#invoke:WorldOrder|getArticlesByAuthor}}")
-                                    content_parts.append("====World Order (1966-2007)====\n{{#invoke:WorldOrder2|getArticlesByAuthor}}")
-                                
-                                main_content = "\n\n".join(content_parts)
-                                
-                                # 2. AUTHOR CATEGORY CONTENT
-                                # Template: {{authorcat_desc}} + [[Category:Authors|Last, First]]
-                                cat_auth_title = f"Category:{author}"
-                                cat_auth_content = f"{{{{authorcat_desc}}}}\n[[Category:Authors|{sort_name}]]"
-
-                                # 3. TEXT OF WORKS CATEGORY CONTENT
-                                # Template: {{Textof_desc}} + [[Category:Author Name]]
-                                cat_text_title = f"Category:Text of works by {author}"
-                                cat_text_content = f"{{{{Textof_desc}}}}\n[[Category:{author}]]"
-                                
-                                pending_list.append({
-                                    "Author": author,
-                                    "QID": qid,
-                                    
-                                    # Page 1
-                                    "Main_Title": author,
-                                    "Main_Content": main_content,
-                                    
-                                    # Page 2
-                                    "Cat_Auth_Title": cat_auth_title,
-                                    "Cat_Auth_Content": cat_auth_content,
-                                    
-                                    # Page 3
-                                    "Cat_Text_Title": cat_text_title,
-                                    "Cat_Text_Content": cat_text_content
-                                })
-                            
-                            st.session_state["pending_creations"] = pending_list
+                            del st.session_state["audit_missing"] # Force re-audit
+                            time.sleep(1)
                             st.rerun()
-
-                    # --- STAGE 2: CONFIRMATION UI ---
-                    if "pending_creations" in st.session_state and st.session_state["pending_creations"]:
-                        pending = st.session_state["pending_creations"]
-                        
-                        st.divider()
-                        st.info(f"📝 Review: Ready to create **{len(pending) * 3}** total pages (3 per author).")
-                        
-                        with st.expander("🔍 Click to see payload details (Dry Run)"):
-                            st.json(pending)
-
-                        col1, col2 = st.columns([1, 4])
-                        
-                        with col1:
-                            if st.button("✅ Confirm & Upload", type="primary"):
-                                pb = st.progress(0)
-                                log = st.empty()
-                                
-                                for i, item in enumerate(pending):
-                                    log.write(f"🚀 Processing: **{item['Author']}**...")
-                                    
-                                    # 1. Upload Main Page
-                                    upload_to_bahaiworks(item["Main_Title"], item["Main_Content"], "Auto-creating Author Page")
-                                    
-                                    # 2. Upload Author Category
-                                    upload_to_bahaiworks(item["Cat_Auth_Title"], item["Cat_Auth_Content"], "Auto-creating Author Category")
-                                    
-                                    # 3. Upload Text Category
-                                    upload_to_bahaiworks(item["Cat_Text_Title"], item["Cat_Text_Content"], "Auto-creating Text Category")
-                                    
-                                    # 4. Sitelink (Main Page Only)
-                                    if item.get("QID"):
-                                        try:
-                                            set_sitelink(item["QID"], "bahai", item["Main_Title"])
-                                            log.write(f"🔗 Linked **{item['QID']}**")
-                                        except Exception as e:
-                                            log.error(f"Sitelink failed: {e}")
-                                    
-                                    time.sleep(0.1)
-                                    pb.progress((i + 1) / len(pending))
-                                
-                                log.success("Done!")
-                                time.sleep(1)
-                                del st.session_state["pending_creations"]
-                                del st.session_state["audit_missing"]
-                                st.rerun()
-
-                        with col2:
-                            if st.button("❌ Cancel"):
-                                del st.session_state["pending_creations"]
-                                st.rerun()
 
             # TAB 2: NEEDS UPDATE
             with tab_fix:
@@ -857,19 +746,14 @@ with tab_maintenance:
                     st.success("All existing pages have correct code!")
                 else:
                     df_upd = pd.DataFrame(needs_update)
-                    df_upd.insert(0, "Fix Code?", True)
                     
-                    edited_upd = st.data_editor(
+                    st.data_editor(
                         df_upd,
                         column_config={
-                            "Fix Code?": st.column_config.CheckboxColumn("Fix", default=True),
                             "Page Title": st.column_config.LinkColumn("Page Link"),
                         },
-                        disabled=["Author", "Issues", "Page Title"],
+                        disabled=["Author", "Issues", "Page Title", "Has Chapters", "Has Articles"],
                         hide_index=True,
                         width='stretch',
                         key="editor_update"
                     )
-                    
-                    if st.button("Fix Bahai.works author pages"):
-                        st.info("This feature is coming soon.")
