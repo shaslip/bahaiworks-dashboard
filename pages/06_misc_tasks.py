@@ -1,9 +1,6 @@
-
 import streamlit as st
 import re
-import json
 import os
-import time
 import requests
 import urllib.parse
 import pandas as pd
@@ -574,12 +571,8 @@ with tab_maintenance:
         with st.spinner("1/2 Querying Bahaidata..."):
             df_audit = query_bahaidata_authors()
             
-            # Filter Blacklist
-            if not df_audit.empty:
-                df_audit = df_audit[~df_audit["Author"].isin(blacklist)]
-
         if df_audit.empty:
-            st.success("No active authors found matching criteria (or all are blacklisted).")
+            st.success("No active authors found matching criteria.")
             # Clear previous results if any
             if "audit_missing" in st.session_state:
                 del st.session_state["audit_missing"]
@@ -679,20 +672,12 @@ with tab_maintenance:
                     st.success("No missing pages found!")
                 else:
                     df_missing = pd.DataFrame(missing_pages)
-                    # Removed "Create?" column as we removed the functionality
-                    df_missing.insert(0, "Blacklist?", False)
-                    
-                    edited_missing = st.data_editor(
+                    st.dataframe(
                         df_missing,
-                        column_config={
-                            "Blacklist?": st.column_config.CheckboxColumn("Ignore", default=False),
-                        },
-                        disabled=["Author", "QID", "Has Chapters", "Has Articles"],
                         hide_index=True,
-                        width='stretch',
-                        key="editor_missing"
+                        use_container_width=True
                     )
-                    
+
             # TAB 2: NEEDS UPDATE
             with tab_fix:
                 if not needs_update:
