@@ -28,33 +28,20 @@ genai.configure(api_key=os.environ["GEMINI_API_KEY"])
 st.set_page_config(page_title="Noisy Page Proofreader", page_icon="🔎", layout="wide")
 st.title("🔎 Noisy Page Proofreader")
 st.write(
-    "This tool analyzes a bahai.works XML dump to find pages with a high ratio of 'noise' "
-    "(likely from OCR errors). It then allows you to proofread the page against the original PDF "
-    "using Gemini and update the wiki directly."
+    "This tool analyzes a bahai.works XML dump to find pages that need proofreading "
+    "by looking for the {{ocr}} template. It then allows you to proofread the page against "
+    "the original PDF using Gemini and update the wiki directly."
 )
 
 # --- Helper Functions ---
-def has_category(parsed_code, category_name: str) -> bool:
+
+def has_template(parsed_code, template_name: str) -> bool:
     """
-    Checks if a parsed wikitext object contains a specific category.
+    Checks if a parsed wikitext object contains a template with the given name.
     This is case-insensitive and handles spaces/underscores properly.
     """
-    # Normalize the target category name for reliable comparison
-    target_cat = category_name.strip().replace("_", " ").lower()
-    
-    # mwparserfromhell's filter_wikilinks is the correct tool for this
-    for link in parsed_code.filter_wikilinks():
-        # Check if the link is a category link
-        if link.title.strip().lower().startswith("category:"):
-            # Extract the actual category name (text after the "Category:")
-            page_cat_name = link.title.split(":", 1)[1]
-            
-            # Normalize the category name found on the page
-            normalized_page_cat = page_cat_name.strip().replace("_", " ").lower()
-            
-            if normalized_page_cat == target_cat:
-                return True
-    return False
+    target_name = template_name.strip().replace("_", " ").lower()
+    return bool(parsed_code.filter_templates(matches=lambda t: t.name.strip().replace("_", " ").lower() == target_name))
 
 def calculate_noise(text: str) -> float:
     """Calculates a 'noise' score for a given text."""
@@ -67,18 +54,13 @@ def calculate_noise(text: str) -> float:
 @st.cache_data(show_spinner="Parsing XML dump...")
 def parse_xml_dump(uploaded_file):
     """
-    Parses the XML dump, filtering by category and returning a list of pages
-    to proofread along with diagnostic statistics.
+    Parses the XML dump to find pages that need proofreading by looking
+    for the {{ocr}} template.
     """
     pages_to_proofread = []
-    
-    # --- Diagnostic Counters ---
     stats = {
         'total_pages_processed': 0,
-        'found_needs_proofreading': 0,
-        'excluded_proofread_once': 0,
-        'excluded_proofread_twice': 0,
-        'final_candidates': 0
+        'found_with_ocr_template': [],
     }
 
     context = ET.iterparse(uploaded_file, events=('end',), recover=True, tag='{*}page')
@@ -93,43 +75,23 @@ def parse_xml_dump(uploaded_file):
             wikitext = text_elem.text
             parsed_code = mwparserfromhell.parse(wikitext)
             
-            # --- Perform Category Checks ---
-            needs_proofreading = has_category(parsed_code, "Pages needing proofreading")
-            is_proofread_once = has_category(parsed_code, "Pages_proofread_once")
-            is_proofread_twice = has_category(parsed_code, "Pages_proofread_twice")
+            # Check for the presence of the {{ocr}} template.
+            if has_template(parsed_code, "ocr"):
+                stats['found_with_ocr_template'].append(title)
+                
+                plain_text = parsed_code.strip_code().strip()
+                noise_score = calculate_noise(plain_text) if plain_text else 0
+                
+                pages_to_proofread.append({
+                    'title': title,
+                    'score': noise_score,
+                    'text': wikitext
+                })
 
-            # --- Update Counters Based on Checks ---
-            if needs_proofreading:
-                stats['found_needs_proofreading'] += 1
-            if is_proofread_once:
-                stats['excluded_proofread_once'] += 1
-            if is_proofread_twice:
-                stats['excluded_proofread_twice'] += 1
-
-            # --- Apply Filtering Logic ---
-            if not needs_proofreading or is_proofread_once or is_proofread_twice:
-                elem.clear()
-                while elem.getprevious() is not None:
-                    del elem.getparent()[0]
-                continue
-            
-            # If we get here, the page is a valid candidate
-            stats['final_candidates'] += 1
-            plain_text = parsed_code.strip_code().strip()
-            noise_score = calculate_noise(plain_text) if plain_text else 0
-            
-            pages_to_proofread.append({
-                'title': title,
-                'score': noise_score,
-                'text': wikitext
-            })
-
-        # Memory cleanup
         elem.clear()
         while elem.getprevious() is not None:
             del elem.getparent()[0]
             
-    # Return both the list and the statistics dictionary
     return sorted(pages_to_proofread, key=lambda x: x['score'], reverse=True), stats
 
 def extract_page_info(wikitext: str):
@@ -168,7 +130,6 @@ def proofread_page_image(image: Image.Image) -> str:
     model = genai.GenerativeModel('gemini-pro-vision')
     prompt = """
     You are a meticulous archivist. Your task is to transcribe the text from the following page image exactly as it appears.
-
     - Transcribe every word, including headers, footers, and page numbers.
     - Preserve original paragraph breaks.
     - If you encounter italicized text, wrap it in ''double single quotes'' for MediaWiki formatting.
@@ -211,34 +172,29 @@ if st.session_state.selected_page is None:
     st.info(f"This tool is configured to analyze the following XML dump:\n`{xml_dump_path}`")
     st.write("The script will automatically decompress the `.gz` file.")
     
-    # --- MODIFY THE "Analyze XML Dump" BUTTON LOGIC ---
     if st.button("Analyze XML Dump"):
         if not os.path.exists(xml_dump_path):
             st.error(f"XML dump file not found at the specified path: {xml_dump_path}")
             st.stop()
         
         with gzip.open(xml_dump_path, 'rb') as xml_file:
-            # Capture both the pages and the stats
             pages, stats = parse_xml_dump(xml_file)
             st.session_state.noisy_pages = pages
             st.session_state.analysis_stats = stats
         
         st.rerun()
 
-    # --- ADD/MODIFY THE REPORTING SECTION ---
     if st.session_state.analysis_stats:
-        st.subheader("Analysis Report")
+        st.subheader("Analysis Report (Based on {{ocr}} Template)")
         stats = st.session_state.analysis_stats
-        col1, col2, col3, col4 = st.columns(4)
+        
+        col1, col2 = st.columns(2)
         col1.metric("Total Pages Scanned", f"{stats['total_pages_processed']:,}")
-        col2.metric("In 'Needs Proofreading'", f"{stats['found_needs_proofreading']:,}")
-        col3.metric("Excluded (Already Proofread)", f"{stats['excluded_proofread_once'] + stats['excluded_proofread_twice']:,}")
-        col4.metric("Final Candidate Pages", f"{stats['final_candidates']:,}", delta_color="off")
+        col2.metric("Pages with {{ocr}} Template", f"{len(stats['found_with_ocr_template']):,}")
         
     if st.session_state.noisy_pages is not None:
         if not st.session_state.noisy_pages:
-            # This is the new, more accurate warning message
-            st.warning("No pages matching the required criteria were found. Check the analysis report above to diagnose the issue.")
+            st.warning("No pages containing the {{ocr}} template were found in this XML dump.")
         else:
             st.header("2. Select a Page to Proofread")
             st.write(f"Found **{len(st.session_state.noisy_pages)}** potential pages to fix, sorted by noise score.")
