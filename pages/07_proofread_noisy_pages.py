@@ -47,7 +47,6 @@ def calculate_noise(text: str) -> float:
 def parse_xml_dump(uploaded_file):
     """Parses the XML dump and returns a sorted list of pages by noise score."""
     noisy_pages = []
-    # Use lxml's iterparse for speed and recovery from errors.
     context = ET.iterparse(uploaded_file, events=('end',), recover=True, tag='{*}page')
     
     for _, elem in context:
@@ -58,35 +57,39 @@ def parse_xml_dump(uploaded_file):
             title = title_elem.text
             wikitext = text_elem.text
 
-            # Use mwparserfromhell to properly analyze the page content
+            # We are only interested in pages that are part of a scanned book.
+            # The presence of a {{page|...}} template is the indicator for this.
+            if '{{page|' not in wikitext:
+                # Clean up memory and skip immediately.
+                elem.clear()
+                while elem.getprevious() is not None:
+                    del elem.getparent()[0]
+                continue
+
+            # Use mwparserfromhell to correctly isolate plain text.
+            # .strip_code() removes all templates (header, footer, page, etc.) and other
+            # wiki markup, leaving ONLY the visible text content intended for the reader.
             parsed_code = mwparserfromhell.parse(wikitext)
-
-            # 1. First, confirm the page HAS a {{page}} template. This is our target.
-            if not parsed_code.filter_templates(matches=lambda t: t.name.strip().lower() == 'page'):
-                elem.clear() # Clean up memory and skip to the next page
-                while elem.getprevious() is not None:
-                    del elem.getparent()[0]
-                continue
-
-            # 2. Next, strip ALL templates, links, etc., to get only the real text content.
             plain_text = parsed_code.strip_code().strip()
-
-            # 3. CRITICAL: If there's very little plain text left, it's just a header/footer template. Ignore it.
-            # We check for more than a few characters to ensure it's not just whitespace or a stray character.
-            if len(plain_text) < 20:
-                elem.clear() # Clean up memory
+            
+            # If after stripping all templates there is no text left, then there is no
+            # OCR content to check. Its noise score is 0.
+            if not plain_text:
+                # Clean up memory and skip.
+                elem.clear()
                 while elem.getprevious() is not None:
                     del elem.getparent()[0]
                 continue
-            
-            # 4. Finally, calculate noise on the remaining, meaningful text.
+
+            # Now, calculate noise ONLY on the actual OCR'd text.
             noise_score = calculate_noise(plain_text)
             
+            # Only flag pages that have a high noise score in their content.
             if noise_score > 5.0:
                 noisy_pages.append({
                     'title': title,
                     'score': noise_score,
-                    'text': wikitext  # Store the original wikitext for later use
+                    'text': wikitext  # Store the original wikitext
                 })
 
         # Memory cleanup for the parser
