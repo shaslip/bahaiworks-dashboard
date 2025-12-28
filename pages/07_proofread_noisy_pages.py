@@ -34,6 +34,27 @@ st.write(
 )
 
 # --- Helper Functions ---
+def has_category(parsed_code, category_name: str) -> bool:
+    """
+    Checks if a parsed wikitext object contains a specific category.
+    This is case-insensitive and handles spaces/underscores properly.
+    """
+    # Normalize the target category name for reliable comparison
+    target_cat = category_name.strip().replace("_", " ").lower()
+    
+    # mwparserfromhell's filter_wikilinks is the correct tool for this
+    for link in parsed_code.filter_wikilinks():
+        # Check if the link is a category link
+        if link.title.strip().lower().startswith("category:"):
+            # Extract the actual category name (text after the "Category:")
+            page_cat_name = link.title.split(":", 1)[1]
+            
+            # Normalize the category name found on the page
+            normalized_page_cat = page_cat_name.strip().replace("_", " ").lower()
+            
+            if normalized_page_cat == target_cat:
+                return True
+    return False
 
 def calculate_noise(text: str) -> float:
     """Calculates a 'noise' score for a given text."""
@@ -49,7 +70,7 @@ def parse_xml_dump(uploaded_file):
     Parses the XML dump to find pages that need proofreading based on categories,
     then sorts them by a 'noise' score.
     """
-    noisy_pages = []
+    pages_to_proofread = []
     context = ET.iterparse(uploaded_file, events=('end',), recover=True, tag='{*}page')
     
     for _, elem in context:
@@ -60,24 +81,22 @@ def parse_xml_dump(uploaded_file):
             title = title_elem.text
             wikitext = text_elem.text
 
-            # --- NEW CATEGORY FILTERING LOGIC ---
-            # 1. Check if the page is in the target category.
-            needs_proofreading = "[[Category:Pages needing proofreading]]" in wikitext
+            # Parse the wikitext ONCE for efficiency
+            parsed_code = mwparserfromhell.parse(wikitext)
             
-            # 2. Check if the page is in an exclusion category.
-            is_proofread_once = "[[Category:Pages_proofread_once]]" in wikitext
-            is_proofread_twice = "[[Category:Pages_proofread_twice]]" in wikitext
+            # Use the robust helper function for category checks
+            needs_proofreading = has_category(parsed_code, "Pages needing proofreading")
+            is_proofread_once = has_category(parsed_code, "Pages_proofread_once")
+            is_proofread_twice = has_category(parsed_code, "Pages_proofread_twice")
 
-            # 3. If it's not in our target category, or it's already proofread, skip it immediately.
+            # Skip the page if it doesn't meet the category criteria
             if not needs_proofreading or is_proofread_once or is_proofread_twice:
                 elem.clear()
                 while elem.getprevious() is not None:
                     del elem.getparent()[0]
                 continue
-            # --- END OF NEW LOGIC ---
 
-            # Now, for the remaining pages, calculate noise to prioritize the worst ones first.
-            parsed_code = mwparserfromhell.parse(wikitext)
+            # For the remaining pages, calculate noise to prioritize the worst ones first.
             plain_text = parsed_code.strip_code().strip()
             
             if not plain_text:
@@ -88,21 +107,20 @@ def parse_xml_dump(uploaded_file):
 
             noise_score = calculate_noise(plain_text)
             
-            # We still use the noise score, but now it's for prioritization, not initial selection.
-            # A low threshold is fine, as we already know the page needs work.
-            if noise_score > 1.0: 
-                noisy_pages.append({
-                    'title': title,
-                    'score': noise_score,
-                    'text': wikitext
-                })
+            # Now we can add the page, even with a low noise score, because we
+            # are confident it needs proofreading based on its category.
+            pages_to_proofread.append({
+                'title': title,
+                'score': noise_score,
+                'text': wikitext
+            })
 
         # Memory cleanup
         elem.clear()
         while elem.getprevious() is not None:
             del elem.getparent()[0]
             
-    return sorted(noisy_pages, key=lambda x: x['score'], reverse=True)
+    return sorted(pages_to_proofread, key=lambda x: x['score'], reverse=True)
 
 def extract_page_info(wikitext: str):
     """Finds all {{page}} templates and extracts their data."""
