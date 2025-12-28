@@ -9,30 +9,23 @@ import io
 import fitz  # PyMuPDF
 import google.generativeai as genai
 import gzip
+import mwparserfromhell
 
 # --- Setup Project Path ---
-# This allows the script to find modules in the 'src' directory
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
-# Assuming mediawiki_uploader is in a 'src' folder relative to the script's location
-# If not, you might need to adjust the path or ensure it's installed as a package
 from src.mediawiki_uploader import upload_to_bahaiworks, API_URL, get_csrf_token
 # --- End Setup ---
 
 # --- Gemini API Configuration ---
-# Ensure GEMINI_API_KEY is set in your .env file
 if 'GEMINI_API_KEY' not in os.environ:
     st.error("GEMINI_API_KEY not found in environment variables. Please check your .env file.")
     st.stop()
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
 
 # --- Page Configuration ---
-st.set_page_config(
-    page_title="Noisy Page Proofreader",
-    page_icon="🔎",
-    layout="wide"
-)
+st.set_page_config(page_title="Noisy Page Proofreader", page_icon="🔎", layout="wide")
 st.title("🔎 Noisy Page Proofreader")
 st.write(
     "This tool analyzes a bahai.works XML dump to find pages with a high ratio of 'noise' "
@@ -54,9 +47,6 @@ def calculate_noise(text: str) -> float:
 def parse_xml_dump(uploaded_file):
     """Parses the XML dump and returns a sorted list of pages by noise score."""
     noisy_pages = []
-    # MODIFICATION: Use lxml's iterparse with recover=True and a tag filter for efficiency
-    # This will skip over malformed sections and only parse <page> elements.
-    # The `{*}page` syntax ignores the XML namespace.
     context = ET.iterparse(uploaded_file, events=('end',), recover=True, tag='{*}page')
     
     for _, elem in context:
@@ -65,18 +55,25 @@ def parse_xml_dump(uploaded_file):
         
         if title_elem is not None and text_elem is not None and text_elem.text:
             title = title_elem.text
-            text = text_elem.text
-            noise_score = calculate_noise(text)
+            wikitext = text_elem.text
             
-            if noise_score > 5.0 and '{{page|' in text:
-                noisy_pages.append({
-                    'title': title,
-                    'score': noise_score,
-                    'text': text
-                })
-        # Clear the element to free up memory
+            # We only care about pages with the {{page}} template
+            if '{{page|' in wikitext:
+                # MODIFICATION: Use mwparserfromhell to get clean text
+                # This strips out templates, links, etc., for a more accurate noise calculation
+                parsed_code = mwparserfromhell.parse(wikitext)
+                plain_text = parsed_code.strip_code().strip()
+                
+                # Now, calculate noise only on the visible text content
+                noise_score = calculate_noise(plain_text)
+                
+                if noise_score > 5.0:
+                    noisy_pages.append({
+                        'title': title,
+                        'score': noise_score,
+                        'text': wikitext # Store the original, full wikitext
+                    })
         elem.clear()
-        # Also clear its parent to release more memory
         while elem.getprevious() is not None:
             del elem.getparent()[0]
             
@@ -135,12 +132,8 @@ def get_page_content(title: str) -> str:
     """Fetches the current wikitext of a page."""
     session = requests.Session()
     params = {
-        "action": "query",
-        "prop": "revisions",
-        "titles": title,
-        "rvprop": "content",
-        "format": "json",
-        "rvslots": "main"
+        "action": "query", "prop": "revisions", "titles": title,
+        "rvprop": "content", "format": "json", "rvslots": "main"
     }
     response = session.get(API_URL, params=params)
     data = response.json()
@@ -152,20 +145,15 @@ def get_page_content(title: str) -> str:
 
 # --- Main App Logic ---
 
-# Initialize session state
-if 'noisy_pages' not in st.session_state:
-    st.session_state.noisy_pages = None
-if 'selected_page' not in st.session_state:
-    st.session_state.selected_page = None
-if 'gemini_text' not in st.session_state:
-    st.session_state.gemini_text = None
-if 'pdf_folder' not in st.session_state:
-    st.session_state.pdf_folder = ""
+if 'noisy_pages' not in st.session_state: st.session_state.noisy_pages = None
+if 'selected_page' not in st.session_state: st.session_state.selected_page = None
+if 'gemini_text' not in st.session_state: st.session_state.gemini_text = None
+if 'pdf_folder' not in st.session_state: st.session_state.pdf_folder = ""
 
 # --- View 1: File Upload and Analysis ---
 if st.session_state.selected_page is None:
     st.header("1. Analyze Wiki Dump")
-    xml_dump_path = "/home/sarah/Desktop/Projects/Tools/Bahaiworks/xml/112025-enworks.xml.gz"
+    xml_dump_path = "/home/sarah/Desktop/Projects/Tools/Bahaiworks/xml/120224-enworks.xml.gz" # Adjusted for clarity
     st.info(f"This tool is configured to analyze the following XML dump:\n`{xml_dump_path}`")
     st.write("The script will automatically decompress the `.gz` file.")
     if st.button("Analyze XML Dump"):
@@ -187,8 +175,8 @@ if st.session_state.selected_page is None:
         
         for i, page_data in enumerate(st.session_state.noisy_pages):
             with st.expander(f"**{page_data['title']}** (Noise Score: {page_data['score']:.2f})"):
-                snippet = (page_data['text'][:300] + '...') if len(page_data['text']) > 300 else page_data['text']
-                st.code(snippet, language='text')
+                snippet = (page_data['text'][:400] + '...') if len(page_data['text']) > 400 else page_data['text']
+                st.code(snippet, language='wikitext')
                 
                 if st.button("Proofread This Page", key=f"proof_{i}"):
                     st.session_state.selected_page = page_data
@@ -218,10 +206,7 @@ else:
     st.info(f"This wiki page requires the source PDF: **`{pdf_filename}`** (page `{pdf_page_num}`)")
     
     st.subheader("Locate Source PDF")
-    st.text_input(
-        "Enter the absolute path to the folder containing your PDF files",
-        key='pdf_folder'
-    )
+    st.text_input("Enter the absolute path to the folder containing your PDF files", key='pdf_folder')
 
     if not st.session_state.pdf_folder:
         st.warning("Please provide the path to the folder containing the PDF files to proceed.")
