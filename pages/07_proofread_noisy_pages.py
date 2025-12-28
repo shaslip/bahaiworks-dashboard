@@ -202,6 +202,7 @@ if 'noisy_pages' not in st.session_state: st.session_state.noisy_pages = None
 if 'selected_page' not in st.session_state: st.session_state.selected_page = None
 if 'gemini_text' not in st.session_state: st.session_state.gemini_text = None
 if 'pdf_folder' not in st.session_state: st.session_state.pdf_folder = ""
+if 'analysis_stats' not in st.session_state: st.session_state.analysis_stats = None
 
 # --- View 1: File Upload and Analysis ---
 if st.session_state.selected_page is None:
