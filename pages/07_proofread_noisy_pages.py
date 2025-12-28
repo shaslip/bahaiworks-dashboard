@@ -47,6 +47,7 @@ def calculate_noise(text: str) -> float:
 def parse_xml_dump(uploaded_file):
     """Parses the XML dump and returns a sorted list of pages by noise score."""
     noisy_pages = []
+    # Use lxml's iterparse for speed and recovery from errors.
     context = ET.iterparse(uploaded_file, events=('end',), recover=True, tag='{*}page')
     
     for _, elem in context:
@@ -56,23 +57,39 @@ def parse_xml_dump(uploaded_file):
         if title_elem is not None and text_elem is not None and text_elem.text:
             title = title_elem.text
             wikitext = text_elem.text
+
+            # Use mwparserfromhell to properly analyze the page content
+            parsed_code = mwparserfromhell.parse(wikitext)
+
+            # 1. First, confirm the page HAS a {{page}} template. This is our target.
+            if not parsed_code.filter_templates(matches=lambda t: t.name.strip().lower() == 'page'):
+                elem.clear() # Clean up memory and skip to the next page
+                while elem.getprevious() is not None:
+                    del elem.getparent()[0]
+                continue
+
+            # 2. Next, strip ALL templates, links, etc., to get only the real text content.
+            plain_text = parsed_code.strip_code().strip()
+
+            # 3. CRITICAL: If there's very little plain text left, it's just a header/footer template. Ignore it.
+            # We check for more than a few characters to ensure it's not just whitespace or a stray character.
+            if len(plain_text) < 20:
+                elem.clear() # Clean up memory
+                while elem.getprevious() is not None:
+                    del elem.getparent()[0]
+                continue
             
-            # We only care about pages with the {{page}} template
-            if '{{page|' in wikitext:
-                # MODIFICATION: Use mwparserfromhell to get clean text
-                # This strips out templates, links, etc., for a more accurate noise calculation
-                parsed_code = mwparserfromhell.parse(wikitext)
-                plain_text = parsed_code.strip_code().strip()
-                
-                # Now, calculate noise only on the visible text content
-                noise_score = calculate_noise(plain_text)
-                
-                if noise_score > 5.0:
-                    noisy_pages.append({
-                        'title': title,
-                        'score': noise_score,
-                        'text': wikitext # Store the original, full wikitext
-                    })
+            # 4. Finally, calculate noise on the remaining, meaningful text.
+            noise_score = calculate_noise(plain_text)
+            
+            if noise_score > 5.0:
+                noisy_pages.append({
+                    'title': title,
+                    'score': noise_score,
+                    'text': wikitext  # Store the original wikitext for later use
+                })
+
+        # Memory cleanup for the parser
         elem.clear()
         while elem.getprevious() is not None:
             del elem.getparent()[0]
