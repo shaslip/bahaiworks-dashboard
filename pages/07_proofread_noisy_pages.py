@@ -8,11 +8,15 @@ from PIL import Image
 import io
 import fitz  # PyMuPDF
 import google.generativeai as genai
+import gzip  # Added to handle .gz files
 
 # --- Setup Project Path ---
 # This allows the script to find modules in the 'src' directory
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.append(PROJECT_ROOT)
+if PROJECT_ROOT not in sys.path:
+    sys.path.append(PROJECT_ROOT)
+# Assuming mediawiki_uploader is in a 'src' folder relative to the script's location
+# If not, you might need to adjust the path or ensure it's installed as a package
 from src.mediawiki_uploader import upload_to_bahaiworks, API_URL, get_csrf_token
 # --- End Setup ---
 
@@ -161,19 +165,32 @@ if 'selected_page' not in st.session_state:
     st.session_state.selected_page = None
 if 'gemini_text' not in st.session_state:
     st.session_state.gemini_text = None
+if 'pdf_folder' not in st.session_state:
+    st.session_state.pdf_folder = ""
 
 # --- View 1: File Upload and Analysis ---
 if st.session_state.selected_page is None:
     st.header("1. Analyze Wiki Dump")
-    
-    xml_file = st.file_uploader("Upload bahai.works XML dump", type=['xml'])
-    pdf_folder = st.text_input("Enter the absolute path to the folder containing source PDFs")
 
-    if st.button("Analyze XML Dump", disabled=(not xml_file or not pdf_folder)):
-        st.session_state.noisy_pages = parse_xml_dump(xml_file)
-        st.session_state.pdf_folder = pdf_folder
+    # MODIFICATION: Hard-coded the path to the XML dump
+    xml_dump_path = "/home/sarah/Desktop/Projects/Tools/Bahaiworks/xml/112025-enworks.xml.gz"
+    st.info(f"This tool is configured to analyze the following XML dump:\n`{xml_dump_path}`")
+    st.write("The script will automatically decompress the `.gz` file.")
+
+    if st.button("Analyze XML Dump"):
+        if not os.path.exists(xml_dump_path):
+            st.error(f"XML dump file not found at the specified path: {xml_dump_path}")
+            st.stop()
+        
+        # Use gzip to open the compressed file
+        with gzip.open(xml_dump_path, 'rb') as xml_file:
+            st.session_state.noisy_pages = parse_xml_dump(xml_file)
+        
         if not st.session_state.noisy_pages:
             st.warning("No pages with high noise and a `{{page}}` template were found.")
+        else:
+            # Rerun to show the list of pages immediately
+            st.rerun()
 
     if st.session_state.noisy_pages:
         st.header("2. Select a Page to Proofread")
@@ -181,7 +198,6 @@ if st.session_state.selected_page is None:
         
         for i, page_data in enumerate(st.session_state.noisy_pages):
             with st.expander(f"**{page_data['title']}** (Noise Score: {page_data['score']:.2f})"):
-                # Show a snippet of the text
                 snippet = (page_data['text'][:300] + '...') if len(page_data['text']) > 300 else page_data['text']
                 st.code(snippet, language='text')
                 
@@ -200,24 +216,32 @@ else:
         st.session_state.gemini_text = None
         st.rerun()
 
-    # Step 1: Extract template info from the text
     page_templates = extract_page_info(page_data['text'])
     
     if not page_templates:
         st.error("Could not find a valid `{{page|...}}` template in the wikitext.")
         st.stop()
 
-    # We will work with the first template on the page
     template = page_templates[0]
     pdf_filename = template['filename']
     pdf_page_num = template['pdf_page']
     
-    st.info(f"Identified request: **File:** `{pdf_filename}` | **Page:** `{pdf_page_num}`")
+    st.info(f"This wiki page requires the source PDF: **`{pdf_filename}`** (page `{pdf_page_num}`)")
+    
+    # MODIFICATION: Ask for the PDF folder path here, after a file is selected
+    st.subheader("Locate Source PDF")
+    st.text_input(
+        "Enter the absolute path to the folder containing your PDF files",
+        key='pdf_folder' # This binds the input to st.session_state.pdf_folder
+    )
 
-    # Step 2: Locate file and extract image
+    if not st.session_state.pdf_folder:
+        st.warning("Please provide the path to the folder containing the PDF files to proceed.")
+        st.stop()
+        
     pdf_full_path = os.path.join(st.session_state.pdf_folder, pdf_filename)
     if not os.path.exists(pdf_full_path):
-        st.error(f"PDF file not found at the specified path: `{pdf_full_path}`")
+        st.error(f"**File not found!** The file `{pdf_filename}` was not found in the directory `{st.session_state.pdf_folder}`. Please check the path.")
         st.stop()
         
     page_image = get_page_as_image(pdf_full_path, pdf_page_num)
@@ -231,9 +255,7 @@ else:
         with col2:
             st.subheader("Text Content")
             
-            # Find the text snippet to be replaced
             start_replace_idx = template['end_pos']
-            # If there's a next page tag, end there. Otherwise, end at file end.
             end_replace_idx = page_templates[1]['start_pos'] if len(page_templates) > 1 else len(page_data['text'])
             original_text_snippet = page_data['text'][start_replace_idx:end_replace_idx].strip()
             
@@ -249,24 +271,20 @@ else:
 
                 if st.button("✅ Update bahai.works", type="primary"):
                     with st.spinner("Updating wiki page..."):
-                        # Fetch the absolute latest version of the page before editing
                         live_wikitext = get_page_content(page_data['title'])
                         if not live_wikitext:
                             st.error("Failed to fetch the latest version of the page. Aborting update.")
                             st.stop()
 
-                        # Re-run template extraction on the live text to get fresh positions
                         live_templates = extract_page_info(live_wikitext)
                         if not live_templates:
                             st.error("Live page content is missing the template. Aborting.")
                             st.stop()
                         
                         live_template_one = live_templates[0]
-                        
                         start_idx = live_template_one['end_pos']
                         end_idx = live_templates[1]['start_pos'] if len(live_templates) > 1 else len(live_wikitext)
 
-                        # Construct the new page content
                         new_content = (
                             live_wikitext[:start_idx].strip() +
                             "\n" + st.session_state.gemini_text.strip() + "\n" +
@@ -278,12 +296,10 @@ else:
                             response = upload_to_bahaiworks(page_data['title'], new_content, summary)
                             if response.get('edit', {}).get('result') == 'Success':
                                 st.success(f"Successfully updated page '{page_data['title']}'!")
-                                # Clear state to go back to the list
-                                st.session_state.selected_page = None
-                                st.session_state.gemini_text = None
-                                # This short sleep gives the success message time to be seen before rerun
                                 import time
                                 time.sleep(2)
+                                st.session_state.selected_page = None
+                                st.session_state.gemini_text = None
                                 st.rerun()
                             else:
                                 st.error(f"API Error: {response}")
