@@ -153,7 +153,7 @@ if 'pdf_folder' not in st.session_state: st.session_state.pdf_folder = ""
 # --- View 1: File Upload and Analysis ---
 if st.session_state.selected_page is None:
     st.header("1. Analyze Wiki Dump")
-    xml_dump_path = "/home/sarah/Desktop/Projects/Tools/Bahaiworks/xml/120224-enworks.xml.gz" # Adjusted for clarity
+    xml_dump_path = "/home/sarah/Desktop/Projects/Tools/Bahaiworks/xml/112025-enworks.xml.gz"
     st.info(f"This tool is configured to analyze the following XML dump:\n`{xml_dump_path}`")
     st.write("The script will automatically decompress the `.gz` file.")
     if st.button("Analyze XML Dump"):
