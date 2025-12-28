@@ -1,5 +1,5 @@
 import streamlit as st
-import xml.etree.ElementTree as ET
+from lxml import etree as ET
 import re
 import os
 import sys
@@ -8,7 +8,7 @@ from PIL import Image
 import io
 import fitz  # PyMuPDF
 import google.generativeai as genai
-import gzip  # Added to handle .gz files
+import gzip
 
 # --- Setup Project Path ---
 # This allows the script to find modules in the 'src' directory
@@ -46,48 +46,46 @@ def calculate_noise(text: str) -> float:
     """Calculates a 'noise' score for a given text."""
     if not text:
         return 0.0
-    # A simple heuristic: count characters that are NOT standard letters, numbers,
-    # whitespace, or common punctuation. This is effective at catching OCR gibberish.
     allowed_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\n\t .,!?'\"()[]-")
     noise_chars = sum(1 for char in text if char not in allowed_chars)
-    
-    # Return noise as a percentage of total characters
     return (noise_chars / len(text)) * 100 if len(text) > 0 else 0
 
 @st.cache_data(show_spinner="Parsing XML dump...")
 def parse_xml_dump(uploaded_file):
     """Parses the XML dump and returns a sorted list of pages by noise score."""
     noisy_pages = []
-    # Use iterparse for memory efficiency with large XML files
-    context = ET.iterparse(uploaded_file, events=('end',))
+    # MODIFICATION: Use lxml's iterparse with recover=True and a tag filter for efficiency
+    # This will skip over malformed sections and only parse <page> elements.
+    # The `{*}page` syntax ignores the XML namespace.
+    context = ET.iterparse(uploaded_file, events=('end',), recover=True, tag='{*}page')
+    
     for _, elem in context:
-        if elem.tag.endswith('page'):
-            title_elem = elem.find('{*}title')
-            text_elem = elem.find('{*}revision/{*}text')
+        title_elem = elem.find('{*}title')
+        text_elem = elem.find('{*}revision/{*}text')
+        
+        if title_elem is not None and text_elem is not None and text_elem.text:
+            title = title_elem.text
+            text = text_elem.text
+            noise_score = calculate_noise(text)
             
-            if title_elem is not None and text_elem is not None and text_elem.text:
-                title = title_elem.text
-                text = text_elem.text
-                noise_score = calculate_noise(text)
-                
-                # We only care about pages with potential issues and the {{page}} template
-                if noise_score > 5.0 and '{{page|' in text:
-                    noisy_pages.append({
-                        'title': title,
-                        'score': noise_score,
-                        'text': text
-                    })
-            # Clear the element to free up memory
-            elem.clear()
+            if noise_score > 5.0 and '{{page|' in text:
+                noisy_pages.append({
+                    'title': title,
+                    'score': noise_score,
+                    'text': text
+                })
+        # Clear the element to free up memory
+        elem.clear()
+        # Also clear its parent to release more memory
+        while elem.getprevious() is not None:
+            del elem.getparent()[0]
             
     return sorted(noisy_pages, key=lambda x: x['score'], reverse=True)
 
 def extract_page_info(wikitext: str):
     """Finds all {{page}} templates and extracts their data."""
-    # Regex to find {{page|...}} and capture file and page parameters
     pattern = r"\{\{page\|[^}]*?file=([^|}]+)[^}]*?page=(\d+)[^}]*?\}\}"
     matches = re.finditer(pattern, wikitext)
-    
     page_data = []
     for match in matches:
         page_data.append({
@@ -104,9 +102,7 @@ def get_page_as_image(pdf_path: str, page_num: int) -> Image.Image:
     """Extracts a single page from a PDF and returns it as a PIL Image object."""
     try:
         doc = fitz.open(pdf_path)
-        # page_num from template is 1-based, PyMuPDF is 0-based
         page = doc.load_page(page_num - 1) 
-        # Use 2x zoom (matrix) for higher resolution, improving OCR/Gemini accuracy
         pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
         img_data = pix.tobytes("png")
         image = Image.open(io.BytesIO(img_data))
@@ -120,7 +116,6 @@ def get_page_as_image(pdf_path: str, page_num: int) -> Image.Image:
 def proofread_page_image(image: Image.Image) -> str:
     """Sends a page image to Gemini for high-fidelity transcription."""
     model = genai.GenerativeModel('gemini-pro-vision')
-
     prompt = """
     You are a meticulous archivist. Your task is to transcribe the text from the following page image exactly as it appears.
 
@@ -130,7 +125,6 @@ def proofread_page_image(image: Image.Image) -> str:
     - If a word is clearly unreadable or smudged, represent it as [unreadable].
     - Do not add any commentary, explanation, or greetings. Return ONLY the transcribed text.
     """
-
     try:
         response = model.generate_content([prompt, image])
         return response.text.strip()
@@ -171,25 +165,20 @@ if 'pdf_folder' not in st.session_state:
 # --- View 1: File Upload and Analysis ---
 if st.session_state.selected_page is None:
     st.header("1. Analyze Wiki Dump")
-
-    # MODIFICATION: Hard-coded the path to the XML dump
     xml_dump_path = "/home/sarah/Desktop/Projects/Tools/Bahaiworks/xml/112025-enworks.xml.gz"
     st.info(f"This tool is configured to analyze the following XML dump:\n`{xml_dump_path}`")
     st.write("The script will automatically decompress the `.gz` file.")
-
     if st.button("Analyze XML Dump"):
         if not os.path.exists(xml_dump_path):
             st.error(f"XML dump file not found at the specified path: {xml_dump_path}")
             st.stop()
         
-        # Use gzip to open the compressed file
         with gzip.open(xml_dump_path, 'rb') as xml_file:
             st.session_state.noisy_pages = parse_xml_dump(xml_file)
         
         if not st.session_state.noisy_pages:
             st.warning("No pages with high noise and a `{{page}}` template were found.")
         else:
-            # Rerun to show the list of pages immediately
             st.rerun()
 
     if st.session_state.noisy_pages:
@@ -203,7 +192,7 @@ if st.session_state.selected_page is None:
                 
                 if st.button("Proofread This Page", key=f"proof_{i}"):
                     st.session_state.selected_page = page_data
-                    st.session_state.gemini_text = None # Reset gemini text
+                    st.session_state.gemini_text = None
                     st.rerun()
 
 # --- View 2: Proofreading Interface ---
@@ -228,11 +217,10 @@ else:
     
     st.info(f"This wiki page requires the source PDF: **`{pdf_filename}`** (page `{pdf_page_num}`)")
     
-    # MODIFICATION: Ask for the PDF folder path here, after a file is selected
     st.subheader("Locate Source PDF")
     st.text_input(
         "Enter the absolute path to the folder containing your PDF files",
-        key='pdf_folder' # This binds the input to st.session_state.pdf_folder
+        key='pdf_folder'
     )
 
     if not st.session_state.pdf_folder:
