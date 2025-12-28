@@ -45,7 +45,10 @@ def calculate_noise(text: str) -> float:
 
 @st.cache_data(show_spinner="Parsing XML dump...")
 def parse_xml_dump(uploaded_file):
-    """Parses the XML dump and returns a sorted list of pages by noise score."""
+    """
+    Parses the XML dump to find pages that need proofreading based on categories,
+    then sorts them by a 'noise' score.
+    """
     noisy_pages = []
     context = ET.iterparse(uploaded_file, events=('end',), recover=True, tag='{*}page')
     
@@ -57,42 +60,44 @@ def parse_xml_dump(uploaded_file):
             title = title_elem.text
             wikitext = text_elem.text
 
-            # We are only interested in pages that are part of a scanned book.
-            # The presence of a {{page|...}} template is the indicator for this.
-            if '{{page|' not in wikitext:
-                # Clean up memory and skip immediately.
+            # --- NEW CATEGORY FILTERING LOGIC ---
+            # 1. Check if the page is in the target category.
+            needs_proofreading = "[[Category:Pages needing proofreading]]" in wikitext
+            
+            # 2. Check if the page is in an exclusion category.
+            is_proofread_once = "[[Category:Pages_proofread_once]]" in wikitext
+            is_proofread_twice = "[[Category:Pages_proofread_twice]]" in wikitext
+
+            # 3. If it's not in our target category, or it's already proofread, skip it immediately.
+            if not needs_proofreading or is_proofread_once or is_proofread_twice:
                 elem.clear()
                 while elem.getprevious() is not None:
                     del elem.getparent()[0]
                 continue
+            # --- END OF NEW LOGIC ---
 
-            # Use mwparserfromhell to correctly isolate plain text.
-            # .strip_code() removes all templates (header, footer, page, etc.) and other
-            # wiki markup, leaving ONLY the visible text content intended for the reader.
+            # Now, for the remaining pages, calculate noise to prioritize the worst ones first.
             parsed_code = mwparserfromhell.parse(wikitext)
             plain_text = parsed_code.strip_code().strip()
             
-            # If after stripping all templates there is no text left, then there is no
-            # OCR content to check. Its noise score is 0.
             if not plain_text:
-                # Clean up memory and skip.
                 elem.clear()
                 while elem.getprevious() is not None:
                     del elem.getparent()[0]
                 continue
 
-            # Now, calculate noise ONLY on the actual OCR'd text.
             noise_score = calculate_noise(plain_text)
             
-            # Only flag pages that have a high noise score in their content.
-            if noise_score > 5.0:
+            # We still use the noise score, but now it's for prioritization, not initial selection.
+            # A low threshold is fine, as we already know the page needs work.
+            if noise_score > 1.0: 
                 noisy_pages.append({
                     'title': title,
                     'score': noise_score,
-                    'text': wikitext  # Store the original wikitext
+                    'text': wikitext
                 })
 
-        # Memory cleanup for the parser
+        # Memory cleanup
         elem.clear()
         while elem.getprevious() is not None:
             del elem.getparent()[0]
