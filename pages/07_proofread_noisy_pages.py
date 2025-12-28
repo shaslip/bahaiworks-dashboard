@@ -67,48 +67,57 @@ def calculate_noise(text: str) -> float:
 @st.cache_data(show_spinner="Parsing XML dump...")
 def parse_xml_dump(uploaded_file):
     """
-    Parses the XML dump to find pages that need proofreading based on categories,
-    then sorts them by a 'noise' score.
+    Parses the XML dump, filtering by category and returning a list of pages
+    to proofread along with diagnostic statistics.
     """
     pages_to_proofread = []
+    
+    # --- Diagnostic Counters ---
+    stats = {
+        'total_pages_processed': 0,
+        'found_needs_proofreading': 0,
+        'excluded_proofread_once': 0,
+        'excluded_proofread_twice': 0,
+        'final_candidates': 0
+    }
+
     context = ET.iterparse(uploaded_file, events=('end',), recover=True, tag='{*}page')
     
     for _, elem in context:
+        stats['total_pages_processed'] += 1
         title_elem = elem.find('{*}title')
         text_elem = elem.find('{*}revision/{*}text')
         
         if title_elem is not None and text_elem is not None and text_elem.text:
             title = title_elem.text
             wikitext = text_elem.text
-
-            # Parse the wikitext ONCE for efficiency
             parsed_code = mwparserfromhell.parse(wikitext)
             
-            # Use the robust helper function for category checks
+            # --- Perform Category Checks ---
             needs_proofreading = has_category(parsed_code, "Pages needing proofreading")
             is_proofread_once = has_category(parsed_code, "Pages_proofread_once")
             is_proofread_twice = has_category(parsed_code, "Pages_proofread_twice")
 
-            # Skip the page if it doesn't meet the category criteria
+            # --- Update Counters Based on Checks ---
+            if needs_proofreading:
+                stats['found_needs_proofreading'] += 1
+            if is_proofread_once:
+                stats['excluded_proofread_once'] += 1
+            if is_proofread_twice:
+                stats['excluded_proofread_twice'] += 1
+
+            # --- Apply Filtering Logic ---
             if not needs_proofreading or is_proofread_once or is_proofread_twice:
                 elem.clear()
                 while elem.getprevious() is not None:
                     del elem.getparent()[0]
                 continue
-
-            # For the remaining pages, calculate noise to prioritize the worst ones first.
+            
+            # If we get here, the page is a valid candidate
+            stats['final_candidates'] += 1
             plain_text = parsed_code.strip_code().strip()
+            noise_score = calculate_noise(plain_text) if plain_text else 0
             
-            if not plain_text:
-                elem.clear()
-                while elem.getprevious() is not None:
-                    del elem.getparent()[0]
-                continue
-
-            noise_score = calculate_noise(plain_text)
-            
-            # Now we can add the page, even with a low noise score, because we
-            # are confident it needs proofreading based on its category.
             pages_to_proofread.append({
                 'title': title,
                 'score': noise_score,
@@ -120,7 +129,8 @@ def parse_xml_dump(uploaded_file):
         while elem.getprevious() is not None:
             del elem.getparent()[0]
             
-    return sorted(pages_to_proofread, key=lambda x: x['score'], reverse=True)
+    # Return both the list and the statistics dictionary
+    return sorted(pages_to_proofread, key=lambda x: x['score'], reverse=True), stats
 
 def extract_page_info(wikitext: str):
     """Finds all {{page}} templates and extracts their data."""
@@ -199,32 +209,48 @@ if st.session_state.selected_page is None:
     xml_dump_path = "/home/sarah/Desktop/Projects/Tools/Bahaiworks/xml/112025-enworks.xml.gz"
     st.info(f"This tool is configured to analyze the following XML dump:\n`{xml_dump_path}`")
     st.write("The script will automatically decompress the `.gz` file.")
+    
+    # --- MODIFY THE "Analyze XML Dump" BUTTON LOGIC ---
     if st.button("Analyze XML Dump"):
         if not os.path.exists(xml_dump_path):
             st.error(f"XML dump file not found at the specified path: {xml_dump_path}")
             st.stop()
         
         with gzip.open(xml_dump_path, 'rb') as xml_file:
-            st.session_state.noisy_pages = parse_xml_dump(xml_file)
+            # Capture both the pages and the stats
+            pages, stats = parse_xml_dump(xml_file)
+            st.session_state.noisy_pages = pages
+            st.session_state.analysis_stats = stats
         
-        if not st.session_state.noisy_pages:
-            st.warning("No pages with high noise and a `{{page}}` template were found.")
-        else:
-            st.rerun()
+        st.rerun()
 
-    if st.session_state.noisy_pages:
-        st.header("2. Select a Page to Proofread")
-        st.write(f"Found **{len(st.session_state.noisy_pages)}** potential pages to fix.")
+    # --- ADD/MODIFY THE REPORTING SECTION ---
+    if st.session_state.analysis_stats:
+        st.subheader("Analysis Report")
+        stats = st.session_state.analysis_stats
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Total Pages Scanned", f"{stats['total_pages_processed']:,}")
+        col2.metric("In 'Needs Proofreading'", f"{stats['found_needs_proofreading']:,}")
+        col3.metric("Excluded (Already Proofread)", f"{stats['excluded_proofread_once'] + stats['excluded_proofread_twice']:,}")
+        col4.metric("Final Candidate Pages", f"{stats['final_candidates']:,}", delta_color="off")
         
-        for i, page_data in enumerate(st.session_state.noisy_pages):
-            with st.expander(f"**{page_data['title']}** (Noise Score: {page_data['score']:.2f})"):
-                snippet = (page_data['text'][:400] + '...') if len(page_data['text']) > 400 else page_data['text']
-                st.code(snippet, language='wikitext')
-                
-                if st.button("Proofread This Page", key=f"proof_{i}"):
-                    st.session_state.selected_page = page_data
-                    st.session_state.gemini_text = None
-                    st.rerun()
+    if st.session_state.noisy_pages is not None:
+        if not st.session_state.noisy_pages:
+            # This is the new, more accurate warning message
+            st.warning("No pages matching the required criteria were found. Check the analysis report above to diagnose the issue.")
+        else:
+            st.header("2. Select a Page to Proofread")
+            st.write(f"Found **{len(st.session_state.noisy_pages)}** potential pages to fix, sorted by noise score.")
+            
+            for i, page_data in enumerate(st.session_state.noisy_pages):
+                with st.expander(f"**{page_data['title']}** (Noise Score: {page_data['score']:.2f})"):
+                    snippet = (page_data['text'][:400] + '...') if len(page_data['text']) > 400 else page_data['text']
+                    st.code(snippet, language='wikitext')
+                    
+                    if st.button("Proofread This Page", key=f"proof_{i}"):
+                        st.session_state.selected_page = page_data
+                        st.session_state.gemini_text = None
+                        st.rerun()
 
 # --- View 2: Proofreading Interface ---
 else:
