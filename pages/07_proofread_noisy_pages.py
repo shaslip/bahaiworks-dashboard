@@ -282,21 +282,32 @@ def get_page_id(title):
         return None
 
 def fetch_live_wikitext(title):
-    """Fetches the absolute latest revision from the API to prevent overwriting previous edits."""
+    """
+    Fetches the absolute latest revision from the API.
+    Returns: (content, error_message)
+    """
+    headers = {"User-Agent": "BahaiWorksDashboard/1.0 (internal tool)"}
     params = {
         "action": "query", "prop": "revisions", "titles": title,
         "rvprop": "content", "format": "json", "rvslots": "main"
     }
     try:
-        response = requests.get(API_URL, params=params, timeout=5)
+        # Added generic headers to avoid firewall blocking
+        response = requests.get(API_URL, params=params, headers=headers, timeout=10)
         data = response.json()
-        pages = data['query']['pages']
+        
+        pages = data.get('query', {}).get('pages', {})
         for pid in pages:
-            if pid != "-1":
-                return pages[pid]['revisions'][0]['slots']['main']['*']
+            if pid == "-1":
+                return None, f"Page '{title}' not found on live Wiki (ID -1)."
+            
+            # Success
+            return pages[pid]['revisions'][0]['slots']['main']['*'], None
+            
     except Exception as e:
-        print(f"Error fetching live text: {e}")
-    return None
+        return None, f"Connection Error: {e}"
+    
+    return None, "Unknown API error."
 # ==============================================================================
 # 4. UI LAYOUT
 # ==============================================================================
@@ -592,17 +603,18 @@ elif app_mode == "Batch Processor":
                     bsave, bskip = st.columns([1,1])
                     with bsave:
                         if st.button("💾 Save & Next", type="primary", use_container_width=True):
-                            # 1. Fetch FRESH content right before saving
-                            live_text = fetch_live_wikitext(st.session_state.batch_title)
+                            # 1. Fetch FRESH content with error handling
+                            live_text, fetch_error = fetch_live_wikitext(st.session_state.batch_title)
                             
-                            if not live_text:
-                                st.error("CRITICAL: Could not fetch live page. Save aborted to prevent data loss.")
+                            if fetch_error or not live_text:
+                                st.error(f"CRITICAL: Save Aborted. {fetch_error}")
                             else:
-                                # 2. Find the injection point in the LIVE text (not the cached XML)
+                                # 2. Find injection point in LIVE text
                                 _, start, end, _ = extract_page_content_by_tag(live_text, st.session_state.batch_page_num)
                                 
                                 if start == 0 and end == 0:
                                     st.error(f"Could not find Page {st.session_state.batch_page_num} tag in the live text.")
+                                    st.warning("Has the page structure changed since you loaded this view?")
                                 else:
                                     # 3. Surgical Splice
                                     new_wikitext = live_text[:start] + "\n" + final_text.strip() + "\n" + live_text[end:]
@@ -612,7 +624,6 @@ elif app_mode == "Batch Processor":
                                     
                                     if res.get('edit', {}).get('result') == 'Success':
                                         st.success("Saved!")
-                                        # Update cache with the result we just pushed, so the UI stays consistent
                                         st.session_state.batch_cached_text = new_wikitext 
                                         st.session_state.batch_page_num += 1
                                         st.session_state.gemini_result = None
