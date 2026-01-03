@@ -155,66 +155,53 @@ def get_noisy_pages_from_db(min_noise=20, limit=50):
         conn.close()
 
 # ==============================================================================
-# 2. CORE LOGIC: SMART DIFF & TEXT PROCESSING
+# 2. CORE LOGIC: SIMPLE DIFF (MEDIAWIKI STYLE)
 # ==============================================================================
 
-def calculate_noise_local(text: str) -> float:
-    """Calculates noise score for a specific text chunk."""
-    if not text: return 0.0
-    allowed_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\n\t .,!?'\"()[]-")
-    noise_chars = sum(1 for char in text if char not in allowed_chars)
-    return (noise_chars / len(text)) * 100
+def generate_simple_diff(original: str, new: str) -> str:
+    """
+    Generates a simplified HTML diff, mirroring MediaWiki style.
+    - Unchanged: Plain text
+    - Deleted: Red background + Strikethrough
+    - Added: Green background + Bold
+    """
+    # Split by whitespace to maintain word-level granularity but preserve spacing
+    a_words = re.split(r'(\s+)', original or "")
+    b_words = re.split(r'(\s+)', new or "")
 
-def generate_smart_diff(original: str, new: str) -> str:
-    """
-    Generates HTML for a 'Smart Diff'.
-    - RED BACKGROUND: Mutation (Original was clean, but AI changed it).
-    - GREEN BACKGROUND: Restoration (Original was noise, AI fixed it).
-    """
-    matcher = difflib.SequenceMatcher(None, original, new)
+    matcher = difflib.SequenceMatcher(None, a_words, b_words)
     html = []
-    
+
     for opcode, a0, a1, b0, b1 in matcher.get_opcodes():
-        old_chunk = original[a0:a1]
-        new_chunk = new[b0:b1]
-        
+        old_chunk = "".join(a_words[a0:a1])
+        new_chunk = "".join(b_words[b0:b1])
+
         if opcode == 'equal':
-            html.append(f"<span>{new_chunk}</span>")
-        
+            # Plain text, no styling
+            html.append(f"<span>{old_chunk}</span>")
+
         elif opcode == 'delete':
-            # AI removed text.
-            noise = calculate_noise_local(old_chunk)
-            color = "#ffcccc" if noise < 20 else "#e6ffe6" # Red if clean, Green if noise
-            html.append(f"<del style='background-color:{color}; text-decoration: line-through;'>{old_chunk}</del>")
-            
+            # Deleted text (Red background, Strikethrough)
+            html.append(f"<span style='background-color: #ffe6e6; text-decoration: line-through; color: #b30000;'>{old_chunk}</span>")
+
         elif opcode == 'insert':
-            # AI added text. 
-            html.append(f"<ins style='background-color:#e6ffe6;'>{new_chunk}</ins>")
-            
+            # Added text (Green background, Bold)
+            html.append(f"<span style='background-color: #e6ffe6; font-weight: bold; color: #006600;'>{new_chunk}</span>")
+
         elif opcode == 'replace':
-            # The Critical Zone
-            noise = calculate_noise_local(old_chunk)
-            
-            # Logic: If original was >30% noise, it's a FIX (Green).
-            # If original was <30% noise, it's a MUTATION (Red).
-            if noise > 30:
-                style = "background-color:#e6ffe6; color: #006600;" # Green (Safe Fix)
-                title = f"Restored (Noise: {noise:.1f}%)"
-            else:
-                style = "background-color:#ffcccc; color: #cc0000; font-weight:bold; border-bottom: 2px solid red;" # Red (Danger)
-                title = f"MUTATION WARNING (Original was clean)"
-            
-            html.append(f"<span title='{title}' style='{style}'>{new_chunk}</span>")
-            
+            # Show deletion then insertion
+            html.append(f"<span style='background-color: #ffe6e6; text-decoration: line-through; color: #b30000;'>{old_chunk}</span>")
+            html.append(f"<span style='background-color: #e6ffe6; font-weight: bold; color: #006600;'>{new_chunk}</span>")
+
     return "".join(html)
 
 def extract_page_content_by_tag(wikitext: str, physical_page_num: int):
+    # ... (Keep this function exactly as it was in your original code) ...
     """
     Parses live wikitext to find content for a specific PHYSICAL page.
     Matches: {{page|19|...}} where 19 is the physical_page_num.
     """
     # Regex: {{page | 19 | ... }}
-    # We escape the pipes and allow for spaces
     pattern = re.compile(r'(\{\{page\s*\|\s*' + str(physical_page_num) + r'\s*\|.*?\}\})', re.IGNORECASE)
     match = pattern.search(wikitext)
     
@@ -495,10 +482,17 @@ if app_mode == "Noisy Page Queue":
                         st.session_state.gemini_result = None
                         st.rerun()
             with c_diff:
-                st.markdown("##### 3. Smart Diff (Guide)")
-                diff_html = generate_smart_diff(original_content, st.session_state.gemini_result)
-                st.markdown(f"<div style='border:1px solid #ddd; padding:15px; height:800px; overflow-y:scroll; font-family:monospace; background-color:white; color:black; font-size: 0.9em;'>{diff_html}</div>", unsafe_allow_html=True)
-                st.caption("Red = Mutation (Danger) | Green = Restoration (Fix)")
+                st.markdown("##### 3. Changes")
+                # Updated to use simple diff
+                diff_html = generate_simple_diff(original_content, st.session_state.gemini_result)
+                
+                # Added 'white-space: pre-wrap' to CSS so line breaks render correctly
+                st.markdown(
+                    f"<div style='border:1px solid #ddd; padding:15px; height:800px; overflow-y:scroll; "
+                    f"font-family:monospace; background-color:white; color:black; font-size: 0.9em; "
+                    f"white-space: pre-wrap;'>{diff_html}</div>", 
+                    unsafe_allow_html=True
+                )
 
 # ==============================================================================
 # MODE 2: BATCH PROCESSOR
@@ -638,5 +632,13 @@ elif app_mode == "Batch Processor":
                                 st.rerun()
 
                 with bc_diff:
-                    diff_html = generate_smart_diff(original_content, st.session_state.gemini_result)
-                    st.markdown(f"<div style='border:1px solid #ddd; padding:15px; height:800px; overflow-y:scroll; background:white; color:black;'>{diff_html}</div>", unsafe_allow_html=True)
+                    st.markdown("##### 3. Changes")
+                    # Updated to use simple diff
+                    diff_html = generate_simple_diff(original_content, st.session_state.gemini_result)
+                    
+                    # Added 'white-space: pre-wrap' here as well
+                    st.markdown(
+                        f"<div style='border:1px solid #ddd; padding:15px; height:800px; overflow-y:scroll; "
+                        f"background:white; color:black; font-family:monospace; white-space: pre-wrap;'>{diff_html}</div>", 
+                        unsafe_allow_html=True
+                    )
