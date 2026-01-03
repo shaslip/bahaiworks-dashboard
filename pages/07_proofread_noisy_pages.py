@@ -13,6 +13,7 @@ import sqlite3
 from PIL import Image
 import fitz  # PyMuPDF
 import google.generativeai as genai
+from src.gemini_processor import proofread_page
 
 # --- Path Setup ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -256,22 +257,6 @@ def get_page_image(pdf_folder, filename, page_num):
     except Exception as e:
         return None, str(e)
 
-def proofread_with_gemini(image):
-    model = genai.GenerativeModel('gemini-pro-vision')
-    prompt = """
-    You are a strict archival transcription engine. 
-    1. Transcribe the text from this page image character-for-character.
-    2. Do NOT correct grammar or modernization spelling.
-    3. If the text has an OBVIOUS typo (e.g. "sentance"), transcribe it as: {{sic|sentance|sentence}}
-    4. Preserve paragraph breaks.
-    5. Return ONLY the text. No markdown formatting blocks (```), no conversational filler.
-    """
-    try:
-        response = model.generate_content([prompt, image])
-        return response.text.strip()
-    except Exception as e:
-        return f"Error: {e}"
-
 def get_live_wikitext(title):
     print(f"DEBUG: Fetching wikitext for '{title}'...")
     session = requests.Session()
@@ -458,10 +443,11 @@ else:
             
             # Only show run button if we actually have an image
             if img:
-                if st.button("✨ Run Gemini OCR", type="primary"):
-                    with st.spinner("Gemini is reading..."):
-                        st.session_state.gemini_result = proofread_with_gemini(img)
-                    st.rerun()
+            if st.button("✨ Run Gemini OCR", type="primary"):
+                with st.spinner("Gemini is reading..."):
+                    # Changed from proofread_with_gemini(img)
+                    st.session_state.gemini_result = proofread_page(img)
+                st.rerun()
         else:
             diff_html = generate_smart_diff(original_content, st.session_state.gemini_result)
             st.markdown(f"<div style='border:1px solid #ddd; padding:15px; height:400px; overflow-y:scroll; font-family:monospace; background-color:white; color:black;'>{diff_html}</div>", unsafe_allow_html=True)
