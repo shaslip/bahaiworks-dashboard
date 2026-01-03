@@ -5,6 +5,7 @@ import re
 import os
 import sys
 import io
+import urllib.parse
 import requests
 import sqlite3
 from PIL import Image
@@ -35,6 +36,12 @@ st.set_page_config(page_title="Noisy Page Proofreader", page_icon="🛡️", lay
 # 1. DATABASE HELPERS (Direct Connection to knowledge.db)
 # ==============================================================================
 
+def generate_bahai_works_url(title, page_num):
+    # Encodes title safely: "Child's Way" -> "Child%27s_Way"
+    safe_title = title.replace(" ", "_")
+    safe_title = urllib.parse.quote(safe_title)
+    return f"https://bahai.works/{safe_title}#pg{page_num}"
+
 def get_knowledge_db_connection():
     """
     Connects specifically to the imported knowledge.db file 
@@ -50,24 +57,36 @@ def get_knowledge_db_connection():
 
 def get_noisy_pages_from_db(min_noise=20, limit=50):
     """
-    Queries knowledge.db for pages with high average noise segments.
+    Queries knowledge.db for pages with high noise.
+    Uses a Window Function to grab the text content of the *noisiest* segment 
+    for the preview snippet.
     """
     conn = get_knowledge_db_connection()
     try:
-        # We aggregate segments by physical_page_number to get a "Page View"
         query = f"""
+            WITH RankedSegments AS (
+                SELECT 
+                    s.id,
+                    s.article_id,
+                    s.physical_page_number,
+                    s.ocr_noise_score,
+                    s.text_content,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY s.article_id, s.physical_page_number 
+                        ORDER BY s.ocr_noise_score DESC
+                    ) as rn
+                FROM content_segments s
+            )
             SELECT 
                 a.title,
                 a.source_code,
-                s.physical_page_number,
-                MAX(s.ocr_noise_score) as max_seg_noise,
-                AVG(s.ocr_noise_score) as avg_seg_noise,
-                COUNT(s.id) as segment_count
-            FROM content_segments s
-            JOIN articles a ON s.article_id = a.id
-            GROUP BY a.id, s.physical_page_number
-            HAVING max_seg_noise >= ?
-            ORDER BY max_seg_noise DESC
+                rs.physical_page_number,
+                rs.ocr_noise_score as max_seg_noise,
+                rs.text_content as snippet
+            FROM RankedSegments rs
+            JOIN articles a ON rs.article_id = a.id
+            WHERE rs.rn = 1 AND rs.ocr_noise_score >= ?
+            ORDER BY rs.ocr_noise_score DESC
             LIMIT ?
         """
         df = pd.read_sql(query, conn, params=(min_noise, limit))
@@ -256,18 +275,34 @@ if st.session_state.current_selection is None:
         # We iterate to create buttons for selection
         for idx, row in st.session_state.queue_df.iterrows():
             with st.container(border=True):
-                c1, c2, c3 = st.columns([5, 1, 1])
-                c1.markdown(f"**{row['title']}** (Pg {row['physical_page_number']})")
-                c2.metric("Max Noise", f"{row['max_seg_noise']:.1f}")
+                # Header Row: Title Link | Metrics | Fix Button
+                c1, c2, c3 = st.columns([6, 2, 1])
                 
-                if c3.button("Fix", key=f"btn_{idx}"):
-                    st.session_state.current_selection = row
-                    st.rerun()
+                url = generate_bahai_works_url(row['title'], row['physical_page_number'])
+                
+                with c1:
+                    st.markdown(f"### [{row['title']} (Pg {row['physical_page_number']})]({url})")
+                    st.caption(f"Source: {row['source_code'].upper()}")
+
+                with c2:
+                    st.metric("Max Noise", f"{row['max_seg_noise']:.1f}")
+
+                with c3:
+                    if st.button("🛠️ Fix", key=f"btn_{idx}", use_container_width=True):
+                        st.session_state.current_selection = row
+                        st.rerun()
+
+                # Context Row: The "Garbage" Text
+                # Truncate if insanely long, but usually segments are <1000 chars
+                snippet = row['snippet'].replace("\n", " ")
+                if len(snippet) > 300: snippet = snippet[:300] + "..."
+                st.code(snippet, language="text")
 
 # TAB 2: THE WORKBENCH
 else:
     row = st.session_state.current_selection
-    st.markdown(f"### Editing: {row['title']} (Page {row['physical_page_number']})")
+    url = generate_bahai_works_url(row['title'], row['physical_page_number'])
+    st.markdown(f"### Editing: [{row['title']} (Page {row['physical_page_number']})]({url})")
     
     if st.button("← Back to Queue"):
         st.session_state.current_selection = None
