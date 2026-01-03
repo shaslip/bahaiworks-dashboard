@@ -489,14 +489,14 @@ elif app_mode == "Batch Processor":
     with c_nav:
         c_prev, c_pg, c_next = st.columns([1, 1, 1])
         with c_prev:
-            if st.button("◀", use_container_width=True):
+            if st.button("◀", width='stretch'):
                 st.session_state.batch_page_num = max(1, st.session_state.batch_page_num - 1)
                 st.session_state.gemini_result = None
                 st.rerun()
         with c_pg:
             st.session_state.batch_page_num = st.number_input("Page", min_value=1, value=st.session_state.batch_page_num, label_visibility="collapsed")
         with c_next:
-            if st.button("▶", use_container_width=True):
+            if st.button("▶", width='stretch'):
                 st.session_state.batch_page_num += 1
                 st.session_state.gemini_result = None
                 st.rerun()
@@ -554,12 +554,12 @@ elif app_mode == "Batch Processor":
                 # Pre-Run
                 bc1, bc2 = st.columns([1, 1])
                 with bc1:
-                    if img: st.image(img, use_container_width=True)
+                    if img: st.image(img, width='stretch')
                     elif error: st.error(error)
                 with bc2:
                     st.text_area("Current Content", original_content, height=600, disabled=True)
                     if img:
-                        if st.button("✨ Run Gemini", type="primary", use_container_width=True):
+                        if st.button("✨ Run Gemini", type="primary", width='stretch'):
                             with st.spinner("Reading..."):
                                 st.session_state.gemini_result = proofread_page(img)
                             st.rerun()
@@ -568,14 +568,14 @@ elif app_mode == "Batch Processor":
                 bc_img, bc_edit, bc_diff = st.columns([1, 1, 1])
                 
                 with bc_img: 
-                    if img: st.image(img, use_container_width=True)
+                    if img: st.image(img, width='stretch')
                 
                 with bc_edit:
                     final_text = st.text_area("Final Result", value=st.session_state.gemini_result, height=800)
                     
                     bsave, bskip = st.columns([1,1])
                     with bsave:
-                        if st.button("💾 Save & Next", type="primary", use_container_width=True):
+                        if st.button("💾 Save & Next", type="primary", width='stretch'):
                             new_wikitext = wikitext[:start_idx] + "\n" + final_text.strip() + "\n" + wikitext[end_idx:]
                             summary = f"Batch Proofread Pg {st.session_state.batch_page_num}"
                             res = upload_to_bahaiworks(st.session_state.batch_title, new_wikitext, summary)
@@ -591,7 +591,7 @@ elif app_mode == "Batch Processor":
                                 st.error(f"Save failed: {res}")
                     
                     with bskip:
-                            if st.button("Skip (Next Pg)", use_container_width=True):
+                            if st.button("Skip (Next Pg)", width='stretch'):
                                 st.session_state.batch_page_num += 1
                                 st.session_state.gemini_result = None
                                 st.rerun()
