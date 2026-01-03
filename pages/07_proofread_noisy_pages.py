@@ -353,7 +353,7 @@ else:
     
     with col_left:
         st.subheader("Source PDF")
-        if img: st.image(img, use_column_width=True)
+        if img: st.image(img, width='stretch')
             
     with col_right:
         st.subheader("Smart Diff")
