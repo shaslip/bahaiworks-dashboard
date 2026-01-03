@@ -173,7 +173,7 @@ def proofread_page(image):
     """
     Sends a single page image to Gemini for strict archival transcription.
     """
-    model = genai.GenerativeModel('gemini-pro-vision')
+    model = genai.GenerativeModel('gemini-3-flash-preview')
     prompt = """
     You are a strict archival transcription engine. 
     1. Transcribe the text from this page image character-for-character.
