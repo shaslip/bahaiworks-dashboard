@@ -300,6 +300,7 @@ if st.session_state.current_selection is None:
 else:
     row = st.session_state.current_selection
     url = generate_bahai_works_url(row['title'], row['physical_page_number'])
+    
     st.markdown(f"### Editing: [{row['title']} (Page {row['physical_page_number']})]({url})")
     
     if st.button("← Back to Queue"):
@@ -307,114 +308,86 @@ else:
         st.session_state.gemini_result = None
         st.rerun()
     
-    # 1. Fetch Data
-    with st.spinner("Fetching live Wiki content & PDF Image..."):
+    # --- STEP 1: Fetch Wiki Content (Fast, Automatic) ---
+    with st.spinner("Fetching live Wiki content..."):
         wikitext = get_live_wikitext(row['title'])
         if not wikitext:
             st.error("Could not fetch wikitext.")
             st.stop()
             
-        # Extract the specific page content from the huge wikitext file
         original_content, start_idx, end_idx, page_tag = extract_page_content_by_tag(wikitext, row['physical_page_number'])
         
         if not page_tag:
             st.warning(f"Could not find a {{page}} tag for physical page {row['physical_page_number']} in the live text.")
-            st.code(wikitext[:500], language='text')
             st.stop()
             
-        # Parse filename from tag 
-        # Tag format: {{page|VII|file=Filename.pdf|page=10}}
         file_match = re.search(r'file=([^|]+)', page_tag)
-        filename = file_match.group(1).strip() if file_match else f"{row['title']}.pdf" 
-        
-        # --- NEW: Ask for PDF Path here ---
-        st.info(f"Target PDF: **{filename}**")
-        
-        # Default to previous path if available, otherwise blank
-        if 'last_pdf_path' not in st.session_state: st.session_state.last_pdf_path = ""
-        
-        pdf_folder = st.text_input("Enter folder path for this PDF:", value=st.session_state.last_pdf_path)
-        
-        img = None
-        error = None
-        
-        if pdf_folder:
-            st.session_state.last_pdf_path = pdf_folder # Remember for next time
-            img, error = get_page_image(pdf_folder, filename, row['physical_page_number'])
-        else:
-            st.warning("Please enter the folder path to load the PDF image.")
+        filename = file_match.group(1).strip() if file_match else f"{row['title']}.pdf"
 
-    # 2. Two-Column Layout
+    # --- STEP 2: Ask for PDF Path (Interactive) ---
+    st.info(f"Target PDF: **{filename}**")
+    
+    # Initialize session state for path if missing
+    if 'last_pdf_path' not in st.session_state: st.session_state.last_pdf_path = ""
+    
+    # User Input - NOT inside a spinner
+    pdf_folder = st.text_input("Enter folder path for this PDF:", value=st.session_state.last_pdf_path)
+    
+    img = None
+    error = None
+
+    # --- STEP 3: Fetch Image (Only if path exists) ---
+    if pdf_folder:
+        st.session_state.last_pdf_path = pdf_folder # Save for next time
+        
+        with st.spinner("Extracting Page Image..."):
+            img, error = get_page_image(pdf_folder, filename, row['physical_page_number'])
+            
+        if error:
+            st.error(f"Could not load PDF: {error}")
+    else:
+        st.warning("☝️ Please enter the folder path above to load the PDF.")
+
+    # --- UI: Two-Column Layout ---
     col_left, col_right = st.columns([1, 1])
     
     with col_left:
         st.subheader("Source PDF")
-        if img:
-            st.image(img, use_column_width=True)
-        else:
-            st.error(f"Image Error: {error}")
-            st.warning("Ensure the PDF path in the sidebar is correct.")
+        if img: st.image(img, use_column_width=True)
             
     with col_right:
         st.subheader("Smart Diff")
         
         if st.session_state.gemini_result is None:
-            st.info("Original Text (High Noise detected)")
-            st.text_area("Original", original_content, height=300, disabled=True)
+            st.text_area("Original Text", original_content, height=300, disabled=True)
             
-            if img and st.button("✨ Run Gemini OCR", type="primary"):
-                with st.spinner("Gemini is reading..."):
-                    st.session_state.gemini_result = proofread_with_gemini(img)
-                st.rerun()
-        else:
-            # RENDER SMART DIFF
-            diff_html = generate_smart_diff(original_content, st.session_state.gemini_result)
-            
-            st.markdown(
-                f"""
-                <div style="
-                    border:1px solid #ddd; 
-                    padding:15px; 
-                    height:400px; 
-                    overflow-y:scroll; 
-                    font-family:monospace; 
-                    white-space: pre-wrap;
-                    background-color: white;
-                    color: black;
-                ">
-                    {diff_html}
-                </div>
-                <div style="margin-top:5px; font-size:0.8em; color:gray;">
-                    <span style="background-color:#ffcccc; padding:0 5px;">Red</span> = Mutation (Original was clean) | 
-                    <span style="background-color:#e6ffe6; padding:0 5px;">Green</span> = Restoration (Original was noise)
-                </div>
-                """, 
-                unsafe_allow_html=True
-            )
-            
-            st.divider()
-            
-            # EDITABLE FINAL RESULT
-            final_text = st.text_area("Final Text (Edit before saving)", value=st.session_state.gemini_result, height=200)
-            
-            if st.button("💾 Save to Bahai.works"):
-                # Construct new wikitext
-                new_wikitext = wikitext[:start_idx] + "\n" + final_text.strip() + "\n" + wikitext[end_idx:]
-                
-                summary = f"Proofread Pg {row['physical_page_number']} via Dashboard (Smart Diff)."
-                res = upload_to_bahaiworks(row['title'], new_wikitext, summary)
-                
-                if res.get('edit', {}).get('result') == 'Success':
-                    st.success("Saved!")
-                    # Clear state to force refresh
-                    st.session_state.gemini_result = None
-                    st.session_state.current_selection = None
-                    # Update queue to remove fixed item locally (optional but nice)
-                    st.session_state.queue_df = get_noisy_pages_from_db(min_noise)
+            # Only show run button if we actually have an image
+            if img:
+                if st.button("✨ Run Gemini OCR", type="primary"):
+                    with st.spinner("Gemini is reading..."):
+                        st.session_state.gemini_result = proofread_with_gemini(img)
                     st.rerun()
-                else:
-                    st.error(f"Save failed: {res}")
+        else:
+            diff_html = generate_smart_diff(original_content, st.session_state.gemini_result)
+            st.markdown(f"<div style='border:1px solid #ddd; padding:15px; height:400px; overflow-y:scroll; font-family:monospace; background-color:white; color:black;'>{diff_html}</div>", unsafe_allow_html=True)
+            st.caption("Red = Mutation (Danger) | Green = Restoration (Fix)")
             
-            if st.button("Discard & Retry"):
-                st.session_state.gemini_result = None
-                st.rerun()
+            final_text = st.text_area("Final Text", value=st.session_state.gemini_result, height=200)
+            
+            c_save, c_discard = st.columns([1,1])
+            with c_save:
+                if st.button("💾 Save to Bahai.works", type="primary"):
+                    new_wikitext = wikitext[:start_idx] + "\n" + final_text.strip() + "\n" + wikitext[end_idx:]
+                    summary = f"Proofread Pg {row['physical_page_number']} via Dashboard."
+                    res = upload_to_bahaiworks(row['title'], new_wikitext, summary)
+                    if res.get('edit', {}).get('result') == 'Success':
+                        st.success("Saved!")
+                        st.session_state.gemini_result = None
+                        st.session_state.current_selection = None
+                        st.session_state.queue_df = get_noisy_pages_from_db(min_noise)
+                        st.rerun()
+                    else: st.error(f"Save failed: {res}")
+            with c_discard:
+                if st.button("Discard"):
+                    st.session_state.gemini_result = None
+                    st.rerun()
