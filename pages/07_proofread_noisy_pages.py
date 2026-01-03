@@ -1,306 +1,334 @@
 import streamlit as st
-from lxml import etree as ET
+import pandas as pd
+import difflib
 import re
 import os
 import sys
+import io
 import requests
 from PIL import Image
-import io
 import fitz  # PyMuPDF
 import google.generativeai as genai
-import gzip
-import mwparserfromhell
 
-# --- Setup Project Path ---
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-if PROJECT_ROOT not in sys.path:
-    sys.path.append(PROJECT_ROOT)
-from src.mediawiki_uploader import upload_to_bahaiworks, API_URL, get_csrf_token
-# --- End Setup ---
+# --- Path Setup ---
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+if project_root not in sys.path:
+    sys.path.append(project_root)
 
-# --- Gemini API Configuration ---
+from src.builder.database import get_connection
+from src.mediawiki_uploader import upload_to_bahaiworks, API_URL
+
+# --- Configuration ---
 if 'GEMINI_API_KEY' not in os.environ:
-    st.error("GEMINI_API_KEY not found in environment variables. Please check your .env file.")
+    st.error("GEMINI_API_KEY not found. Check your .env file.")
     st.stop()
+
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
 
-# --- Page Configuration ---
-st.set_page_config(page_title="Noisy Page Proofreader", page_icon="🔎", layout="wide")
-st.title("🔎 Noisy Page Proofreader")
-st.write(
-    "This tool analyzes a bahai.works XML dump to find pages that need proofreading "
-    "by looking for the {{ocr}} template. It then allows you to proofread the page against "
-    "the original PDF using Gemini and update the wiki directly."
-)
+st.set_page_config(page_title="Noisy Page Proofreader", page_icon="🛡️", layout="wide")
 
-# --- Helper Functions ---
+# ==============================================================================
+# 1. CORE LOGIC: SMART DIFF & TEXT PROCESSING
+# ==============================================================================
 
-def has_template(parsed_code, template_name: str) -> bool:
-    """
-    Checks if a parsed wikitext object contains a template with the given name.
-    This is case-insensitive and handles spaces/underscores properly.
-    """
-    target_name = template_name.strip().replace("_", " ").lower()
-    return bool(parsed_code.filter_templates(matches=lambda t: t.name.strip().replace("_", " ").lower() == target_name))
-
-def calculate_noise(text: str) -> float:
-    """Calculates a 'noise' score for a given text."""
-    if not text:
-        return 0.0
+def calculate_noise_local(text: str) -> float:
+    """Calculates noise score for a specific text chunk."""
+    if not text: return 0.0
     allowed_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\n\t .,!?'\"()[]-")
     noise_chars = sum(1 for char in text if char not in allowed_chars)
-    return (noise_chars / len(text)) * 100 if len(text) > 0 else 0
+    return (noise_chars / len(text)) * 100
 
-@st.cache_data(show_spinner="Parsing XML dump...")
-def parse_xml_dump(uploaded_file):
+def generate_smart_diff(original: str, new: str) -> str:
     """
-    Parses the XML dump to find pages that need proofreading by looking
-    for the {{ocr}} template.
+    Generates HTML for a 'Smart Diff'.
+    - RED BACKGROUND: Mutation (Original was clean, but AI changed it).
+    - GREEN BACKGROUND: Restoration (Original was noise, AI fixed it).
     """
-    pages_to_proofread = []
-    stats = {
-        'total_pages_processed': 0,
-        'found_with_ocr_template': [],
-    }
-
-    context = ET.iterparse(uploaded_file, events=('end',), recover=True, tag='{*}page')
+    matcher = difflib.SequenceMatcher(None, original, new)
+    html = []
     
-    for _, elem in context:
-        stats['total_pages_processed'] += 1
-        title_elem = elem.find('{*}title')
-        text_elem = elem.find('{*}revision/{*}text')
+    for opcode, a0, a1, b0, b1 in matcher.get_opcodes():
+        old_chunk = original[a0:a1]
+        new_chunk = new[b0:b1]
         
-        if title_elem is not None and text_elem is not None and text_elem.text:
-            title = title_elem.text
-            wikitext = text_elem.text
-            parsed_code = mwparserfromhell.parse(wikitext)
+        if opcode == 'equal':
+            html.append(f"<span>{new_chunk}</span>")
+        
+        elif opcode == 'delete':
+            # AI removed text. Always high risk unless it was pure noise.
+            noise = calculate_noise_local(old_chunk)
+            color = "#ffcccc" if noise < 20 else "#e6ffe6" # Red if clean, Green if noise
+            html.append(f"<del style='background-color:{color}; text-decoration: line-through;'>{old_chunk}</del>")
             
-            # Check for the presence of the {{ocr}} template.
-            if has_template(parsed_code, "ocr"):
-                stats['found_with_ocr_template'].append(title)
-                
-                plain_text = parsed_code.strip_code().strip()
-                noise_score = calculate_noise(plain_text) if plain_text else 0
-                
-                pages_to_proofread.append({
-                    'title': title,
-                    'score': noise_score,
-                    'text': wikitext
-                })
-
-        elem.clear()
-        while elem.getprevious() is not None:
-            del elem.getparent()[0]
+        elif opcode == 'insert':
+            # AI added text. 
+            html.append(f"<ins style='background-color:#e6ffe6;'>{new_chunk}</ins>")
             
-    return sorted(pages_to_proofread, key=lambda x: x['score'], reverse=True), stats
+        elif opcode == 'replace':
+            # The Critical Zone
+            noise = calculate_noise_local(old_chunk)
+            
+            # Logic: If original was >30% noise, it's a FIX (Green).
+            # If original was <30% noise, it's a MUTATION (Red).
+            if noise > 30:
+                style = "background-color:#e6ffe6; color: #006600;" # Green (Safe Fix)
+                title = f"Restored (Noise: {noise:.1f}%)"
+            else:
+                style = "background-color:#ffcccc; color: #cc0000; font-weight:bold; border-bottom: 2px solid red;" # Red (Danger)
+                title = f"MUTATION WARNING (Original was clean)"
+            
+            html.append(f"<span title='{title}' style='{style}'>{new_chunk}</span>")
+            
+    return "".join(html)
 
-def extract_page_info(wikitext: str):
-    """Finds all {{page}} templates and extracts their data."""
-    pattern = r"\{\{page\|[^}]*?file=([^|}]+)[^}]*?page=(\d+)[^}]*?\}\}"
-    matches = re.finditer(pattern, wikitext)
-    page_data = []
-    for match in matches:
-        page_data.append({
-            'filename': match.group(1).strip(),
-            'pdf_page': int(match.group(2).strip()),
-            'full_tag': match.group(0),
-            'start_pos': match.start(),
-            'end_pos': match.end()
-        })
-    return page_data
+def extract_page_content_by_tag(wikitext: str, pdf_page_num: int):
+    """
+    Parses live wikitext to find the content between {{page|...|page=X}} tags.
+    Returns: (text_content, start_index, end_index, full_template_string)
+    """
+    # Regex to match {{page|LABEL|file=...|page=NUMBER}}
+    # We look for the specific pdf_page_num
+    pattern = re.compile(r'(\{\{page\|[^|]*\|file=[^|]+\|page=' + str(pdf_page_num) + r'\}\})')
+    match = pattern.search(wikitext)
+    
+    if not match:
+        return None, 0, 0, None
+    
+    start_tag_end = match.end()
+    start_tag_full = match.group(1)
+    
+    # Find the NEXT page tag to define the end of this page
+    next_tag_pattern = re.compile(r'\{\{page\|')
+    next_match = next_tag_pattern.search(wikitext, start_tag_end)
+    
+    if next_match:
+        end_index = next_match.start()
+    else:
+        end_index = len(wikitext) # End of file
+        
+    content = wikitext[start_tag_end:end_index]
+    return content, start_tag_end, end_index, start_tag_full
 
-@st.cache_data(show_spinner="Extracting page image from PDF...")
-def get_page_as_image(pdf_path: str, page_num: int) -> Image.Image:
-    """Extracts a single page from a PDF and returns it as a PIL Image object."""
+# ==============================================================================
+# 2. DATA & API LAYER
+# ==============================================================================
+
+def get_noisy_pages_from_db(min_noise=20, limit=50):
+    """Queries knowledge.db for pages with high average noise segments."""
+    conn = get_connection()
+    query = f"""
+        SELECT 
+            a.title,
+            a.source_code,
+            s.physical_page_number,
+            MAX(s.ocr_noise_score) as max_seg_noise,
+            AVG(s.ocr_noise_score) as avg_seg_noise,
+            COUNT(s.id) as segment_count
+        FROM content_segments s
+        JOIN articles a ON s.article_id = a.id
+        GROUP BY a.id, s.physical_page_number
+        HAVING max_seg_noise >= ?
+        ORDER BY max_seg_noise DESC
+        LIMIT ?
+    """
+    df = pd.read_sql(query, conn, params=(min_noise, limit))
+    conn.close()
+    return df
+
+@st.cache_data(show_spinner="Extracting PDF image...")
+def get_page_image(pdf_folder, filename, page_num):
+    path = os.path.join(pdf_folder, filename)
+    if not os.path.exists(path):
+        return None, f"File not found: {path}"
+    
     try:
-        doc = fitz.open(pdf_path)
-        page = doc.load_page(page_num - 1) 
-        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
-        img_data = pix.tobytes("png")
-        image = Image.open(io.BytesIO(img_data))
+        doc = fitz.open(path)
+        # Load page (0-based index)
+        page = doc.load_page(page_num - 1)
+        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2)) # 2x zoom for better OCR
+        img = Image.open(io.BytesIO(pix.tobytes("png")))
         doc.close()
-        return image
+        return img, None
     except Exception as e:
-        st.error(f"Failed to extract page {page_num} from {os.path.basename(pdf_path)}: {e}")
-        return None
+        return None, str(e)
 
-@st.cache_data(show_spinner="Asking Gemini to proofread the page...")
-def proofread_page_image(image: Image.Image) -> str:
-    """Sends a page image to Gemini for high-fidelity transcription."""
+def proofread_with_gemini(image):
     model = genai.GenerativeModel('gemini-pro-vision')
     prompt = """
-    You are a meticulous archivist. Your task is to transcribe the text from the following page image exactly as it appears.
-    - Transcribe every word, including headers, footers, and page numbers.
-    - Preserve original paragraph breaks.
-    - If you encounter italicized text, wrap it in ''double single quotes'' for MediaWiki formatting.
-    - If a word is clearly unreadable or smudged, represent it as [unreadable].
-    - Do not add any commentary, explanation, or greetings. Return ONLY the transcribed text.
+    You are a strict archival transcription engine. 
+    1. Transcribe the text from this page image character-for-character.
+    2. Do NOT correct grammar or modernization spelling.
+    3. If the text has an OBVIOUS typo (e.g. "sentance"), transcribe it as: {{sic|sentance|sentence}}
+    4. Preserve paragraph breaks.
+    5. Return ONLY the text. No markdown formatting blocks (```), no conversational filler.
     """
     try:
         response = model.generate_content([prompt, image])
         return response.text.strip()
     except Exception as e:
-        return f"Error during Gemini transcription: {e}"
+        return f"Error: {e}"
 
-def get_page_content(title: str) -> str:
-    """Fetches the current wikitext of a page."""
+def get_live_wikitext(title):
     session = requests.Session()
     params = {
         "action": "query", "prop": "revisions", "titles": title,
         "rvprop": "content", "format": "json", "rvslots": "main"
     }
-    response = session.get(API_URL, params=params)
-    data = response.json()
-    pages = data['query']['pages']
-    for page_id in pages:
-        if page_id != "-1":
-            return pages[page_id]['revisions'][0]['slots']['main']['*']
+    try:
+        data = session.get(API_URL, params=params).json()
+        pages = data['query']['pages']
+        for pid in pages:
+            if pid != "-1":
+                return pages[pid]['revisions'][0]['slots']['main']['*']
+    except Exception as e:
+        st.error(f"Wiki API Error: {e}")
     return None
 
-# --- Main App Logic ---
+# ==============================================================================
+# 3. UI LAYOUT
+# ==============================================================================
 
-if 'noisy_pages' not in st.session_state: st.session_state.noisy_pages = None
-if 'selected_page' not in st.session_state: st.session_state.selected_page = None
-if 'gemini_text' not in st.session_state: st.session_state.gemini_text = None
-if 'pdf_folder' not in st.session_state: st.session_state.pdf_folder = ""
-if 'analysis_stats' not in st.session_state: st.session_state.analysis_stats = None
-
-# --- View 1: File Upload and Analysis ---
-if st.session_state.selected_page is None:
-    st.header("1. Analyze Wiki Dump")
-    xml_dump_path = "/home/sarah/Desktop/Projects/Tools/Bahaiworks/xml/112025-enworks.xml.gz"
-    st.info(f"This tool is configured to analyze the following XML dump:\n`{xml_dump_path}`")
-    st.write("The script will automatically decompress the `.gz` file.")
+# --- Sidebar Controls ---
+with st.sidebar:
+    st.header("🔍 Discovery Filters")
+    min_noise = st.slider("Min Noise Score", 0, 100, 30)
+    pdf_root = st.text_input("PDF Folder Path", value="/home/kubuntu/pdfs") # Default path
     
-    if st.button("Analyze XML Dump"):
-        if not os.path.exists(xml_dump_path):
-            st.error(f"XML dump file not found at the specified path: {xml_dump_path}")
-            st.stop()
-        
-        with gzip.open(xml_dump_path, 'rb') as xml_file:
-            pages, stats = parse_xml_dump(xml_file)
-            st.session_state.noisy_pages = pages
-            st.session_state.analysis_stats = stats
-        
-        st.rerun()
+    if st.button("Refresh Queue"):
+        st.session_state.queue_df = get_noisy_pages_from_db(min_noise)
 
-    if st.session_state.analysis_stats:
-        st.subheader("Analysis Report (Based on {{ocr}} Template)")
-        stats = st.session_state.analysis_stats
-        
-        col1, col2 = st.columns(2)
-        col1.metric("Total Pages Scanned", f"{stats['total_pages_processed']:,}")
-        col2.metric("Pages with {{ocr}} Template", f"{len(stats['found_with_ocr_template']):,}")
-        
-    if st.session_state.noisy_pages is not None:
-        if not st.session_state.noisy_pages:
-            st.warning("No pages containing the {{ocr}} template were found in this XML dump.")
-        else:
-            st.header("2. Select a Page to Proofread")
-            st.write(f"Found **{len(st.session_state.noisy_pages)}** potential pages to fix, sorted by noise score.")
-            
-            for i, page_data in enumerate(st.session_state.noisy_pages):
-                with st.expander(f"**{page_data['title']}** (Noise Score: {page_data['score']:.2f})"):
-                    snippet = (page_data['text'][:400] + '...') if len(page_data['text']) > 400 else page_data['text']
-                    st.code(snippet, language='wikitext')
-                    
-                    if st.button("Proofread This Page", key=f"proof_{i}"):
-                        st.session_state.selected_page = page_data
-                        st.session_state.gemini_text = None
-                        st.rerun()
+# --- State Init ---
+if 'queue_df' not in st.session_state:
+    st.session_state.queue_df = get_noisy_pages_from_db(min_noise)
+if 'current_selection' not in st.session_state:
+    st.session_state.current_selection = None
+if 'gemini_result' not in st.session_state:
+    st.session_state.gemini_result = None
 
-# --- View 2: Proofreading Interface ---
+# --- Main View ---
+st.title("🛡️ Noisy Page Proofreader")
+
+# TAB 1: THE QUEUE
+if st.session_state.current_selection is None:
+    st.markdown(f"### High Noise Pages ({len(st.session_state.queue_df)})")
+    
+    if st.session_state.queue_df.empty:
+        st.success("No pages found above the noise threshold.")
+    else:
+        # Display as a selectable dataframe
+        # We use a trick: Display table, use index to select
+        for idx, row in st.session_state.queue_df.iterrows():
+            with st.container(border=True):
+                c1, c2, c3 = st.columns([5, 1, 1])
+                c1.markdown(f"**{row['title']}** (Pg {row['physical_page_number']})")
+                c2.metric("Max Noise", f"{row['max_seg_noise']:.1f}")
+                
+                if c3.button("Fix", key=f"btn_{idx}"):
+                    st.session_state.current_selection = row
+                    st.rerun()
+
+# TAB 2: THE WORKBENCH
 else:
-    page_data = st.session_state.selected_page
-    st.header(f"Proofreading: `{page_data['title']}`")
+    row = st.session_state.current_selection
+    st.markdown(f"### Editing: {row['title']} (Page {row['physical_page_number']})")
     
-    if st.button("← Back to List"):
-        st.session_state.selected_page = None
-        st.session_state.gemini_text = None
+    if st.button("← Back to Queue"):
+        st.session_state.current_selection = None
+        st.session_state.gemini_result = None
         st.rerun()
-
-    page_templates = extract_page_info(page_data['text'])
     
-    if not page_templates:
-        st.error("Could not find a valid `{{page|...}}` template in the wikitext.")
-        st.stop()
-
-    template = page_templates[0]
-    pdf_filename = template['filename']
-    pdf_page_num = template['pdf_page']
-    
-    st.info(f"This wiki page requires the source PDF: **`{pdf_filename}`** (page `{pdf_page_num}`)")
-    
-    st.subheader("Locate Source PDF")
-    st.text_input("Enter the absolute path to the folder containing your PDF files", key='pdf_folder')
-
-    if not st.session_state.pdf_folder:
-        st.warning("Please provide the path to the folder containing the PDF files to proceed.")
-        st.stop()
-        
-    pdf_full_path = os.path.join(st.session_state.pdf_folder, pdf_filename)
-    if not os.path.exists(pdf_full_path):
-        st.error(f"**File not found!** The file `{pdf_filename}` was not found in the directory `{st.session_state.pdf_folder}`. Please check the path.")
-        st.stop()
-        
-    page_image = get_page_as_image(pdf_full_path, pdf_page_num)
-
-    if page_image:
-        col1, col2 = st.columns(2)
-        with col1:
-            st.subheader("Original Page Image")
-            st.image(page_image, use_column_width=True)
-        
-        with col2:
-            st.subheader("Text Content")
+    # 1. Fetch Data
+    with st.spinner("Fetching live Wiki content & PDF Image..."):
+        wikitext = get_live_wikitext(row['title'])
+        if not wikitext:
+            st.error("Could not fetch wikitext.")
+            st.stop()
             
-            start_replace_idx = template['end_pos']
-            end_replace_idx = page_templates[1]['start_pos'] if len(page_templates) > 1 else len(page_data['text'])
-            original_text_snippet = page_data['text'][start_replace_idx:end_replace_idx].strip()
+        # Extract the specific page content from the huge wikitext file
+        original_content, start_idx, end_idx, page_tag = extract_page_content_by_tag(wikitext, row['physical_page_number'])
+        
+        if not page_tag:
+            st.warning(f"Could not find a {{page}} tag for physical page {row['physical_page_number']} in the live text.")
+            st.text_area("Debug WikiText Start", wikitext[:500])
+            st.stop()
             
-            st.write("Current OCR Text:")
-            st.text_area("Original", value=original_text_snippet, height=200, disabled=True)
+        # Parse filename from tag (fallback regex if DB source_code logic is complex)
+        # Tag format: {{page|VII|file=Filename.pdf|page=10}}
+        file_match = re.search(r'file=([^|]+)', page_tag)
+        filename = file_match.group(1) if file_match else f"{row['title']}.pdf" # Fallback
+        
+        # Get Image
+        img, error = get_page_image(pdf_root, filename, row['physical_page_number'])
 
-            if st.button("✨ Proofread with Gemini"):
-                st.session_state.gemini_text = proofread_page_image(page_image)
+    # 2. Two-Column Layout
+    col_left, col_right = st.columns([1, 1])
+    
+    with col_left:
+        st.subheader("Source PDF")
+        if img:
+            st.image(img, use_column_width=True)
+        else:
+            st.error(f"Image Error: {error}")
+            
+    with col_right:
+        st.subheader("Smart Diff")
+        
+        if st.session_state.gemini_result is None:
+            st.info("Original Text (High Noise detected)")
+            st.text_area("Original", original_content, height=300, disabled=True)
+            
+            if img and st.button("✨ Run Gemini OCR", type="primary"):
+                with st.spinner("Gemini is reading..."):
+                    st.session_state.gemini_result = proofread_with_gemini(img)
                 st.rerun()
-
-            if st.session_state.gemini_text:
-                st.session_state.gemini_text = st.text_area("Gemini's Proofread Text (Editable)", value=st.session_state.gemini_text, height=300)
-
-                if st.button("✅ Update bahai.works", type="primary"):
-                    with st.spinner("Updating wiki page..."):
-                        live_wikitext = get_page_content(page_data['title'])
-                        if not live_wikitext:
-                            st.error("Failed to fetch the latest version of the page. Aborting update.")
-                            st.stop()
-
-                        live_templates = extract_page_info(live_wikitext)
-                        if not live_templates:
-                            st.error("Live page content is missing the template. Aborting.")
-                            st.stop()
-                        
-                        live_template_one = live_templates[0]
-                        start_idx = live_template_one['end_pos']
-                        end_idx = live_templates[1]['start_pos'] if len(live_templates) > 1 else len(live_wikitext)
-
-                        new_content = (
-                            live_wikitext[:start_idx].strip() +
-                            "\n" + st.session_state.gemini_text.strip() + "\n" +
-                            live_wikitext[end_idx:].strip()
-                        )
-                        
-                        try:
-                            summary = f"Proofread page {pdf_page_num} of {pdf_filename} with Gemini assistance via Dashboard."
-                            response = upload_to_bahaiworks(page_data['title'], new_content, summary)
-                            if response.get('edit', {}).get('result') == 'Success':
-                                st.success(f"Successfully updated page '{page_data['title']}'!")
-                                import time
-                                time.sleep(2)
-                                st.session_state.selected_page = None
-                                st.session_state.gemini_text = None
-                                st.rerun()
-                            else:
-                                st.error(f"API Error: {response}")
-                        except Exception as e:
-                            st.error(f"Failed to update page: {e}")
+        else:
+            # RENDER SMART DIFF
+            diff_html = generate_smart_diff(original_content, st.session_state.gemini_result)
+            
+            st.markdown(
+                f"""
+                <div style="
+                    border:1px solid #ddd; 
+                    padding:15px; 
+                    height:400px; 
+                    overflow-y:scroll; 
+                    font-family:monospace; 
+                    white-space: pre-wrap;
+                    background-color: white;
+                    color: black;
+                ">
+                    {diff_html}
+                </div>
+                <div style="margin-top:5px; font-size:0.8em; color:gray;">
+                    <span style="background-color:#ffcccc; padding:0 5px;">Red</span> = Mutation (Original was clean) | 
+                    <span style="background-color:#e6ffe6; padding:0 5px;">Green</span> = Restoration (Original was noise)
+                </div>
+                """, 
+                unsafe_allow_html=True
+            )
+            
+            st.divider()
+            
+            # EDITABLE FINAL RESULT
+            final_text = st.text_area("Final Text (Edit before saving)", value=st.session_state.gemini_result, height=200)
+            
+            if st.button("💾 Save to Bahai.works"):
+                # Construct new wikitext
+                new_wikitext = wikitext[:start_idx] + "\n" + final_text.strip() + "\n" + wikitext[end_idx:]
+                
+                summary = f"Proofread Pg {row['physical_page_number']} via Dashboard (Smart Diff)."
+                res = upload_to_bahaiworks(row['title'], new_wikitext, summary)
+                
+                if res.get('edit', {}).get('result') == 'Success':
+                    st.success("Saved!")
+                    # Clear state to force refresh
+                    st.session_state.gemini_result = None
+                    st.session_state.current_selection = None
+                    st.rerun()
+                else:
+                    st.error(f"Save failed: {res}")
+            
+            if st.button("Discard & Retry"):
+                st.session_state.gemini_result = None
+                st.rerun()
