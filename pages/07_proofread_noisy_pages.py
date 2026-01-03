@@ -281,6 +281,22 @@ def get_page_id(title):
         st.error(f"API Error resolving title: {e}")
         return None
 
+def fetch_live_wikitext(title):
+    """Fetches the absolute latest revision from the API to prevent overwriting previous edits."""
+    params = {
+        "action": "query", "prop": "revisions", "titles": title,
+        "rvprop": "content", "format": "json", "rvslots": "main"
+    }
+    try:
+        response = requests.get(API_URL, params=params, timeout=5)
+        data = response.json()
+        pages = data['query']['pages']
+        for pid in pages:
+            if pid != "-1":
+                return pages[pid]['revisions'][0]['slots']['main']['*']
+    except Exception as e:
+        print(f"Error fetching live text: {e}")
+    return None
 # ==============================================================================
 # 4. UI LAYOUT
 # ==============================================================================
@@ -575,20 +591,34 @@ elif app_mode == "Batch Processor":
                     
                     bsave, bskip = st.columns([1,1])
                     with bsave:
-                        if st.button("💾 Save & Next", type="primary", width='stretch'):
-                            new_wikitext = wikitext[:start_idx] + "\n" + final_text.strip() + "\n" + wikitext[end_idx:]
-                            summary = f"Batch Proofread Pg {st.session_state.batch_page_num}"
-                            res = upload_to_bahaiworks(st.session_state.batch_title, new_wikitext, summary)
+                        if st.button("💾 Save & Next", type="primary", use_container_width=True):
+                            # 1. Fetch FRESH content right before saving
+                            live_text = fetch_live_wikitext(st.session_state.batch_title)
                             
-                            if res.get('edit', {}).get('result') == 'Success':
-                                st.success("Saved!")
-                                # Update Cache with new text so we don't revert on next page load
-                                st.session_state.batch_cached_text = new_wikitext 
-                                st.session_state.batch_page_num += 1
-                                st.session_state.gemini_result = None
-                                st.rerun()
+                            if not live_text:
+                                st.error("CRITICAL: Could not fetch live page. Save aborted to prevent data loss.")
                             else:
-                                st.error(f"Save failed: {res}")
+                                # 2. Find the injection point in the LIVE text (not the cached XML)
+                                _, start, end, _ = extract_page_content_by_tag(live_text, st.session_state.batch_page_num)
+                                
+                                if start == 0 and end == 0:
+                                    st.error(f"Could not find Page {st.session_state.batch_page_num} tag in the live text.")
+                                else:
+                                    # 3. Surgical Splice
+                                    new_wikitext = live_text[:start] + "\n" + final_text.strip() + "\n" + live_text[end:]
+                                    
+                                    summary = f"Batch Proofread Pg {st.session_state.batch_page_num}"
+                                    res = upload_to_bahaiworks(st.session_state.batch_title, new_wikitext, summary)
+                                    
+                                    if res.get('edit', {}).get('result') == 'Success':
+                                        st.success("Saved!")
+                                        # Update cache with the result we just pushed, so the UI stays consistent
+                                        st.session_state.batch_cached_text = new_wikitext 
+                                        st.session_state.batch_page_num += 1
+                                        st.session_state.gemini_result = None
+                                        st.rerun()
+                                    else:
+                                        st.error(f"Save failed: {res}")
                     
                     with bskip:
                             if st.button("Skip (Next Pg)", width='stretch'):
