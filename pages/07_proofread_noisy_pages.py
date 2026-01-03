@@ -441,13 +441,11 @@ else:
         if st.session_state.gemini_result is None:
             st.text_area("Original Text", original_content, height=300, disabled=True)
             
-            # Only show run button if we actually have an image
             if img:
-            if st.button("✨ Run Gemini OCR", type="primary"):
-                with st.spinner("Gemini is reading..."):
-                    # Changed from proofread_with_gemini(img)
-                    st.session_state.gemini_result = proofread_page(img)
-                st.rerun()
+                if st.button("✨ Run Gemini OCR", type="primary"):
+                    with st.spinner("Gemini is reading..."):
+                        st.session_state.gemini_result = proofread_page(img)
+                    st.rerun()
         else:
             diff_html = generate_smart_diff(original_content, st.session_state.gemini_result)
             st.markdown(f"<div style='border:1px solid #ddd; padding:15px; height:400px; overflow-y:scroll; font-family:monospace; background-color:white; color:black;'>{diff_html}</div>", unsafe_allow_html=True)
