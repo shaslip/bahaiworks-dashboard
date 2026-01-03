@@ -240,14 +240,7 @@ def get_live_wikitext(title):
 with st.sidebar:
     st.header("🔍 Discovery Filters")
     min_noise = st.slider("Min Noise Score", 0, 100, 30)
-    
-    # Store PDF path in session to persist across reruns
-    if 'pdf_root' not in st.session_state:
-        st.session_state.pdf_root = "/home/kubuntu/pdfs"
-    
-    pdf_root = st.text_input("PDF Folder Path", value=st.session_state.pdf_root)
-    st.session_state.pdf_root = pdf_root
-    
+
     if st.button("Refresh Queue"):
         st.session_state.queue_df = get_noisy_pages_from_db(min_noise)
         st.session_state.current_selection = None
@@ -332,13 +325,24 @@ else:
         # Parse filename from tag 
         # Tag format: {{page|VII|file=Filename.pdf|page=10}}
         file_match = re.search(r'file=([^|]+)', page_tag)
-        if file_match:
-            filename = file_match.group(1).strip()
-        else:
-            filename = f"{row['title']}.pdf" 
+        filename = file_match.group(1).strip() if file_match else f"{row['title']}.pdf" 
         
-        # Get Image
-        img, error = get_page_image(st.session_state.pdf_root, filename, row['physical_page_number'])
+        # --- NEW: Ask for PDF Path here ---
+        st.info(f"Target PDF: **{filename}**")
+        
+        # Default to previous path if available, otherwise blank
+        if 'last_pdf_path' not in st.session_state: st.session_state.last_pdf_path = ""
+        
+        pdf_folder = st.text_input("Enter folder path for this PDF:", value=st.session_state.last_pdf_path)
+        
+        img = None
+        error = None
+        
+        if pdf_folder:
+            st.session_state.last_pdf_path = pdf_folder # Remember for next time
+            img, error = get_page_image(pdf_folder, filename, row['physical_page_number'])
+        else:
+            st.warning("Please enter the folder path to load the PDF image.")
 
     # 2. Two-Column Layout
     col_left, col_right = st.columns([1, 1])
