@@ -217,18 +217,26 @@ def proofread_with_gemini(image):
         return f"Error: {e}"
 
 def get_live_wikitext(title):
+    print(f"DEBUG: Fetching wikitext for '{title}'...")
     session = requests.Session()
     params = {
         "action": "query", "prop": "revisions", "titles": title,
         "rvprop": "content", "format": "json", "rvslots": "main"
     }
     try:
-        data = session.get(API_URL, params=params).json()
+        # Added 10s timeout to prevent infinite hangs
+        response = session.get(API_URL, params=params, timeout=10)
+        data = response.json()
+        print("DEBUG: Wiki response received.")
+        
         pages = data['query']['pages']
         for pid in pages:
             if pid != "-1":
-                return pages[pid]['revisions'][0]['slots']['main']['*']
+                text = pages[pid]['revisions'][0]['slots']['main']['*']
+                print(f"DEBUG: Content extracted ({len(text)} chars).")
+                return text
     except Exception as e:
+        print(f"ERROR: Wiki API failed: {e}")
         st.error(f"Wiki API Error: {e}")
     return None
 
@@ -309,30 +317,41 @@ else:
         st.rerun()
     
     # --- STEP 1: Fetch Wiki Content (Fast, Automatic) ---
-    with st.spinner("Fetching live Wiki content..."):
+    # --- STEP 1: Fetch Wiki Content (With Debugging) ---
+    # We use st.status to show progress steps visibly instead of a blind spinner
+    target_pdf_page = None
+    
+    with st.status("Loading Page Context...", expanded=True) as status:
+        st.write("🔌 Connecting to MediaWiki API...")
         wikitext = get_live_wikitext(row['title'])
+        
         if not wikitext:
-            st.error("Could not fetch wikitext.")
+            status.update(label="Wiki Fetch Failed", state="error")
             st.stop()
             
+        st.write(f"🔍 Searching for Physical Page {row['physical_page_number']} tag...")
         original_content, start_idx, end_idx, page_tag = extract_page_content_by_tag(wikitext, row['physical_page_number'])
         
         if not page_tag:
-            st.warning(f"Could not find a {{page}} tag for physical page {row['physical_page_number']} in the live text.")
+            status.update(label="Tag Search Failed", state="error")
+            st.error(f"Could not find `{{{{page|{row['physical_page_number']}|...}}}}` tag in live text.")
             st.stop()
-            
+        
+        st.write(f"📂 Parsing metadata from tag: `{page_tag}`")
         file_match = re.search(r'file=([^|]+)', page_tag)
         filename = file_match.group(1).strip() if file_match else f"{row['title']}.pdf"
 
-        # 2. Parse PDF Page Index (The "Real" Page)
-        # We look for |page=21 in {{page|19|file=...|page=21}}
         pdf_idx_match = re.search(r'\|page=(\d+)', page_tag)
         
         if pdf_idx_match:
             target_pdf_page = int(pdf_idx_match.group(1))
+            st.write(f"🎯 Mapped to PDF Page Index: **{target_pdf_page}**")
         else:
+            status.update(label="PDF Index Missing", state="error")
             st.error(f"Could not find 'page=' parameter in tag: {page_tag}")
             st.stop()
+            
+        status.update(label="Context Loaded Successfully", state="complete", expanded=False)
 
     # --- STEP 2: Ask for PDF Path (Interactive) ---
     st.info(f"Target PDF: **{filename}**")
