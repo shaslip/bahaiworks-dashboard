@@ -294,9 +294,14 @@ if st.session_state.current_selection is None:
 
                 # Context Row: The "Garbage" Text
                 # Truncate if insanely long, but usually segments are <1000 chars
-                snippet = row['snippet'].replace("\n", " ")
-                if len(snippet) > 300: snippet = snippet[:300] + "..."
-                st.code(snippet, language="text")
+                st.text_area(
+                    label="Preview of highest noise segment", 
+                    value=row['snippet'], 
+                    height=100, 
+                    disabled=True, 
+                    label_visibility="collapsed",
+                    key=f"preview_{idx}"
+                )
 
 # TAB 2: THE WORKBENCH
 else:
