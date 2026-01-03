@@ -257,29 +257,29 @@ def get_page_image(pdf_folder, filename, page_num):
     except Exception as e:
         return None, str(e)
 
-def get_live_wikitext(title):
-    print(f"DEBUG: Fetching wikitext for '{title}'...")
-    session = requests.Session()
+def get_page_id(title):
+    """
+    Resolves a Wiki Title to a Page ID using the API.
+    Required because the XML Dump lookup relies on Page ID.
+    """
     params = {
-        "action": "query", "prop": "revisions", "titles": title,
-        "rvprop": "content", "format": "json", "rvslots": "main"
+        "action": "query",
+        "titles": title,
+        "format": "json"
     }
     try:
-        # Added 10s timeout to prevent infinite hangs
-        response = session.get(API_URL, params=params, timeout=10)
+        response = requests.get(API_URL, params=params, timeout=5)
         data = response.json()
-        print("DEBUG: Wiki response received.")
         
-        pages = data['query']['pages']
+        pages = data.get('query', {}).get('pages', {})
         for pid in pages:
+            # If page is missing, API returns "-1" as the key
             if pid != "-1":
-                text = pages[pid]['revisions'][0]['slots']['main']['*']
-                print(f"DEBUG: Content extracted ({len(text)} chars).")
-                return text
+                return pid
+        return None
     except Exception as e:
-        print(f"ERROR: Wiki API failed: {e}")
-        st.error(f"Wiki API Error: {e}")
-    return None
+        st.error(f"API Error resolving title: {e}")
+        return None
 
 # ==============================================================================
 # 4. UI LAYOUT
@@ -287,17 +287,23 @@ def get_live_wikitext(title):
 
 # --- Sidebar Controls ---
 with st.sidebar:
-    st.header("🔍 Discovery Filters")
-    min_noise = st.slider("Min Noise Score", 0, 100, 30)
+    st.header("📍 Navigation")
+    app_mode = st.radio("Mode", ["Noisy Page Queue", "Batch Processor"])
+    
+    st.divider()
 
-    if st.button("Refresh Queue"):
-        st.session_state.queue_df = get_noisy_pages_from_db(min_noise)
-        st.session_state.current_selection = None
-        st.session_state.gemini_result = None
+    if app_mode == "Noisy Page Queue":
+        st.header("🔍 Discovery Filters")
+        min_noise = st.slider("Min Noise Score", 0, 100, 30)
+
+        if st.button("Refresh Queue"):
+            st.session_state.queue_df = get_noisy_pages_from_db(min_noise)
+            st.session_state.current_selection = None
+            st.session_state.gemini_result = None
 
 # --- State Init ---
 if 'queue_df' not in st.session_state:
-    st.session_state.queue_df = get_noisy_pages_from_db(min_noise)
+    st.session_state.queue_df = get_noisy_pages_from_db(30)
 if 'current_selection' not in st.session_state:
     st.session_state.current_selection = None
 if 'gemini_result' not in st.session_state:
@@ -305,213 +311,291 @@ if 'gemini_result' not in st.session_state:
 if 'last_pdf_path' not in st.session_state:
     st.session_state.last_pdf_path = ""
 
+# Batch Processor State
+if 'batch_page_num' not in st.session_state:
+    st.session_state.batch_page_num = 1
+if 'batch_title' not in st.session_state:
+    st.session_state.batch_title = ""
+if 'batch_cached_text' not in st.session_state:
+    st.session_state.batch_cached_text = None
+if 'batch_cached_title' not in st.session_state:
+    st.session_state.batch_cached_title = None
+
 # --- Main View ---
 st.title("🛡️ Noisy Page Proofreader")
 
-# TAB 1: THE QUEUE
-if st.session_state.current_selection is None:
-    st.markdown(f"### High Noise Pages ({len(st.session_state.queue_df)})")
-    
-    if st.session_state.queue_df.empty:
-        st.success("No pages found above the noise threshold.")
-    else:
-        # Display as a selectable dataframe
-        # We iterate to create buttons for selection
-        for idx, row in st.session_state.queue_df.iterrows():
-            with st.container(border=True):
-                # Header Row: Title Link | Metrics | Fix Button
-                c1, c2, c3 = st.columns([6, 2, 1])
-                
-                url = generate_bahai_works_url(row['title'], row['physical_page_number'])
-                
-                with c1:
-                    st.markdown(f"### [{row['title']} (Pg {row['physical_page_number']})]({url})")
-                    st.caption(f"Source: {row['source_code'].upper()}")
-
-                with c2:
-                    st.metric("Max Noise", f"{row['max_seg_noise']:.1f}")
-
-                with c3:
-                    if st.button("🛠️ Fix", key=f"btn_{idx}", width='stretch'):
-                        st.session_state.current_selection = row
-                        st.rerun()
-
-                # Context Row: The "Garbage" Text
-                # Truncate if insanely long, but usually segments are <1000 chars
-                st.text_area(
-                    label="Preview of highest noise segment", 
-                    value=row['snippet'], 
-                    height=100, 
-                    disabled=True, 
-                    label_visibility="collapsed",
-                    key=f"preview_{idx}"
-                )
-
-# TAB 2: THE WORKBENCH
-else:
-    row = st.session_state.current_selection
-    url = generate_bahai_works_url(row['title'], row['physical_page_number'])
-    
-    st.markdown(f"### Editing: [{row['title']} (Page {row['physical_page_number']})]({url})")
-    
-    if st.button("← Back to Queue"):
-        st.session_state.current_selection = None
-        st.session_state.gemini_result = None
-        st.rerun()
-    
-    # --- STEP 1: Fetch Wiki Content (Local XML) ---
-    target_pdf_page = None
-    wikitext = None
-
-    with st.status("Loading Page Context (Local)...", expanded=True) as status:
-        # Auto-detect XML path
-        xml_path, path_error = get_default_xml_path()
-        if path_error:
-            status.update(label="XML Missing", state="error")
-            st.error(path_error)
-            st.stop()
-            
-        st.write(f"📂 Scanning `{os.path.basename(xml_path)}` for Page ID {row['source_page_id']}...")
-
-        wikitext, error = fetch_from_xml(xml_path, row['source_page_id'])
+# ==============================================================================
+# MODE 1: NOISY PAGE QUEUE
+# ==============================================================================
+if app_mode == "Noisy Page Queue":
+    # TAB 1: THE QUEUE
+    if st.session_state.current_selection is None:
+        st.markdown(f"### High Noise Pages ({len(st.session_state.queue_df)})")
         
-        if error or not wikitext:
-            status.update(label="XML Load Failed", state="error")
-            st.error(error)
-            st.stop()
-            
-        st.write(f"🔍 Searching for Physical Page {row['physical_page_number']} tag...")
-        
-        original_content, start_idx, end_idx, page_tag = extract_page_content_by_tag(wikitext, row['physical_page_number'])
-        
-        if not page_tag:
-            status.update(label="Tag Search Failed", state="error")
-            st.error(f"Could not find `{{{{page|{row['physical_page_number']}|...}}}}` tag in text.")
-            st.stop()
-        
-        # Parse Metadata
-        file_match = re.search(r'file=([^|]+)', page_tag)
-        filename = file_match.group(1).strip() if file_match else f"{row['title']}.pdf"
-
-        pdf_idx_match = re.search(r'\|page=(\d+)', page_tag)
-        
-        if pdf_idx_match:
-            target_pdf_page = int(pdf_idx_match.group(1))
-            st.write(f"🎯 Mapped to PDF Page Index: **{target_pdf_page}**")
+        if st.session_state.queue_df.empty:
+            st.success("No pages found above the noise threshold.")
         else:
-            status.update(label="PDF Index Missing", state="error")
-            st.error(f"Could not find 'page=' parameter in tag: {page_tag}")
-            st.stop()
-            
-        status.update(label="Context Loaded Successfully", state="complete", expanded=False)
-
-    # --- STEP 2: Ask for PDF Path (Interactive) ---
-    st.info(f"Target PDF: **{filename}**")
-    
-    # User Input - NOT inside a spinner
-    pdf_folder = st.text_input("Enter folder path for this PDF:", value=st.session_state.last_pdf_path)
-    
-    img = None
-    error = None
-
-    # --- STEP 3: Fetch Image (Only if path exists) ---
-    if pdf_folder:
-        st.session_state.last_pdf_path = pdf_folder # Save for next time
-        
-        with st.spinner("Extracting Page Image..."):
-            # Use target_pdf_page (e.g. 21) instead of row['physical_page_number'] (e.g. 19)
-            img, error = get_page_image(pdf_folder, filename, target_pdf_page)
-            
-        if error:
-            st.error(f"Could not load PDF: {error}")
-    else:
-        st.warning("☝️ Please enter the folder path above to load the PDF.")
-
-    # --- UI LAYOUT LOGIC ---
-    
-    if st.session_state.gemini_result is None:
-        # STATE 1: PRE-RUN (2 Columns: Image | Original Text)
-        c_left, c_right = st.columns([1, 1])
-        
-        with c_left:
-            st.subheader("Source PDF")
-            if img: st.image(img, width='stretch')
-            
-        with c_right:
-            st.subheader("Original Text (Noisy)")
-            st.text_area("Current Content", original_content, height=600, disabled=True)
-            
-            if img:
-                st.write("---")
-                if st.button("✨ Run Gemini OCR", type="primary", width='stretch'):
-                    with st.spinner("Gemini is reading..."):
-                        st.session_state.gemini_result = proofread_page(img)
-                    st.rerun()
-
-    else:
-        # STATE 2: POST-RUN (3 Columns: Image | Final Text | Smart Diff)
-        # Using 1,1,1 ratio for the 60-inch monitor
-        c_img, c_edit, c_diff = st.columns([1, 1, 1])
-        
-        # 1. Source Image
-        with c_img:
-            st.markdown("##### 1. Source Image")
-            if img: st.image(img, width='stretch')
-
-        # 2. Final Text (Editable) - Large Box
-        with c_edit:
-            st.markdown("##### 2. Final Text (Editable)")
-            
-            # Height 800px to match a typical page view on a large screen
-            final_text = st.text_area(
-                "Final Result", 
-                value=st.session_state.gemini_result, 
-                height=800,
-                label_visibility="collapsed"
-            )
-            
-            # Save / Discard buttons
-            c_save, c_discard = st.columns([1, 1])
-            with c_save:
-                if st.button("💾 Save to Bahai.works", type="primary", width='stretch'):
-                    new_wikitext = wikitext[:start_idx] + "\n" + final_text.strip() + "\n" + wikitext[end_idx:]
-                    summary = f"Proofread Pg {row['physical_page_number']} via Dashboard."
+            for idx, row in st.session_state.queue_df.iterrows():
+                with st.container(border=True):
+                    c1, c2, c3 = st.columns([6, 2, 1])
+                    url = generate_bahai_works_url(row['title'], row['physical_page_number'])
                     
-                    res = upload_to_bahaiworks(row['title'], new_wikitext, summary)
-                    if res.get('edit', {}).get('result') == 'Success':
-                        st.success("Saved!")
-                        st.session_state.gemini_result = None
-                        st.session_state.current_selection = None
-                        st.session_state.queue_df = get_noisy_pages_from_db(min_noise)
-                        st.rerun()
-                    else: st.error(f"Save failed: {res}")
-            with c_discard:
-                if st.button("Discard Changes", width='stretch'):
-                    st.session_state.gemini_result = None
-                    st.rerun()
+                    with c1:
+                        st.markdown(f"### [{row['title']} (Pg {row['physical_page_number']})]({url})")
+                        st.caption(f"Source: {row['source_code'].upper()}")
 
-        # 3. Smart Diff (Guide)
-        with c_diff:
-            st.markdown("##### 3. Smart Diff (Guide)")
+                    with c2:
+                        st.metric("Max Noise", f"{row['max_seg_noise']:.1f}")
+
+                    with c3:
+                        if st.button("🛠️ Fix", key=f"btn_{idx}", width='stretch'):
+                            st.session_state.current_selection = row
+                            st.rerun()
+
+                    st.text_area(
+                        label="Preview", 
+                        value=row['snippet'], 
+                        height=100, 
+                        disabled=True, 
+                        label_visibility="collapsed",
+                        key=f"preview_{idx}"
+                    )
+
+    # TAB 2: THE WORKBENCH
+    else:
+        row = st.session_state.current_selection
+        url = generate_bahai_works_url(row['title'], row['physical_page_number'])
+        
+        st.markdown(f"### Editing: [{row['title']} (Page {row['physical_page_number']})]({url})")
+        
+        if st.button("← Back to Queue"):
+            st.session_state.current_selection = None
+            st.session_state.gemini_result = None
+            st.rerun()
+        
+        # --- WORKBENCH LOGIC (Queue Mode) ---
+        target_pdf_page = None
+        wikitext = None
+
+        with st.status("Loading Page Context (Local)...", expanded=True) as status:
+            xml_path, path_error = get_default_xml_path()
+            if path_error:
+                status.update(label="XML Missing", state="error")
+                st.error(path_error)
+                st.stop()
+                
+            st.write(f"📂 Scanning `{os.path.basename(xml_path)}` for Page ID {row['source_page_id']}...")
+            wikitext, error = fetch_from_xml(xml_path, row['source_page_id'])
             
-            diff_html = generate_smart_diff(original_content, st.session_state.gemini_result)
+            if error or not wikitext:
+                status.update(label="XML Load Failed", state="error")
+                st.error(error)
+                st.stop()
+                
+            original_content, start_idx, end_idx, page_tag = extract_page_content_by_tag(wikitext, row['physical_page_number'])
             
-            # Scrollable container matching the height of the editor
-            st.markdown(
-                f"""
-                <div style='
-                    border:1px solid #ddd; 
-                    padding:15px; 
-                    height:800px; 
-                    overflow-y:scroll; 
-                    font-family:monospace; 
-                    background-color:white; 
-                    color:black;
-                    font-size: 0.9em;
-                '>
-                {diff_html}
-                </div>
-                """, 
-                unsafe_allow_html=True
-            )
-            st.caption("Red = Mutation (Danger) | Green = Restoration (Fix)")
+            if not page_tag:
+                status.update(label="Tag Search Failed", state="error")
+                st.error(f"Could not find `{{{{page|{row['physical_page_number']}|...}}}}` tag.")
+                st.stop()
+            
+            file_match = re.search(r'file=([^|]+)', page_tag)
+            filename = file_match.group(1).strip() if file_match else f"{row['title']}.pdf"
+
+            pdf_idx_match = re.search(r'\|page=(\d+)', page_tag)
+            
+            if pdf_idx_match:
+                target_pdf_page = int(pdf_idx_match.group(1))
+                st.write(f"🎯 Mapped to PDF Page Index: **{target_pdf_page}**")
+            else:
+                status.update(label="PDF Index Missing", state="error")
+                st.error(f"Could not find 'page=' parameter in tag: {page_tag}")
+                st.stop()
+                
+            status.update(label="Context Loaded Successfully", state="complete", expanded=False)
+
+        st.info(f"Target PDF: **{filename}**")
+        pdf_folder = st.text_input("Enter folder path for this PDF:", value=st.session_state.last_pdf_path)
+        img = None
+        error = None
+
+        if pdf_folder:
+            st.session_state.last_pdf_path = pdf_folder
+            with st.spinner("Extracting Page Image..."):
+                img, error = get_page_image(pdf_folder, filename, target_pdf_page)
+            if error: st.error(f"Could not load PDF: {error}")
+        else:
+            st.warning("☝️ Please enter the folder path above to load the PDF.")
+
+        # --- EDITOR UI (Reused) ---
+        if st.session_state.gemini_result is None:
+            c_left, c_right = st.columns([1, 1])
+            with c_left:
+                st.subheader("Source PDF")
+                if img: st.image(img, width='stretch')
+            with c_right:
+                st.subheader("Original Text (Noisy)")
+                st.text_area("Current Content", original_content, height=600, disabled=True)
+                if img:
+                    st.write("---")
+                    if st.button("✨ Run Gemini OCR", type="primary", width='stretch'):
+                        with st.spinner("Gemini is reading..."):
+                            st.session_state.gemini_result = proofread_page(img)
+                        st.rerun()
+        else:
+            c_img, c_edit, c_diff = st.columns([1, 1, 1])
+            with c_img:
+                st.markdown("##### 1. Source Image")
+                if img: st.image(img, width='stretch')
+            with c_edit:
+                st.markdown("##### 2. Final Text (Editable)")
+                final_text = st.text_area("Final Result", value=st.session_state.gemini_result, height=800, label_visibility="collapsed")
+                c_save, c_discard = st.columns([1, 1])
+                with c_save:
+                    if st.button("💾 Save", type="primary", width='stretch'):
+                        new_wikitext = wikitext[:start_idx] + "\n" + final_text.strip() + "\n" + wikitext[end_idx:]
+                        summary = f"Proofread Pg {row['physical_page_number']} via Dashboard."
+                        res = upload_to_bahaiworks(row['title'], new_wikitext, summary)
+                        if res.get('edit', {}).get('result') == 'Success':
+                            st.success("Saved!")
+                            st.session_state.gemini_result = None
+                            st.session_state.current_selection = None
+                            st.session_state.queue_df = get_noisy_pages_from_db(min_noise)
+                            st.rerun()
+                        else: st.error(f"Save failed: {res}")
+                with c_discard:
+                    if st.button("Discard Changes", width='stretch'):
+                        st.session_state.gemini_result = None
+                        st.rerun()
+            with c_diff:
+                st.markdown("##### 3. Smart Diff (Guide)")
+                diff_html = generate_smart_diff(original_content, st.session_state.gemini_result)
+                st.markdown(f"<div style='border:1px solid #ddd; padding:15px; height:800px; overflow-y:scroll; font-family:monospace; background-color:white; color:black; font-size: 0.9em;'>{diff_html}</div>", unsafe_allow_html=True)
+                st.caption("Red = Mutation (Danger) | Green = Restoration (Fix)")
+
+# ==============================================================================
+# MODE 2: BATCH PROCESSOR
+# ==============================================================================
+elif app_mode == "Batch Processor":
+    st.subheader("📚 Sequential Batch Processor")
+
+    # 1. Inputs & Navigation
+    c_input, c_path, c_nav = st.columns([2, 3, 2])
+    with c_input:
+        st.session_state.batch_title = st.text_input("Page Title", value=st.session_state.batch_title, placeholder="e.g. Child's Way")
+    with c_path:
+        pdf_folder = st.text_input("PDF Folder Path", value=st.session_state.last_pdf_path)
+        if pdf_folder: st.session_state.last_pdf_path = pdf_folder
+    with c_nav:
+        c_prev, c_pg, c_next = st.columns([1, 1, 1])
+        with c_prev:
+            if st.button("◀", use_container_width=True):
+                st.session_state.batch_page_num = max(1, st.session_state.batch_page_num - 1)
+                st.session_state.gemini_result = None
+                st.rerun()
+        with c_pg:
+            st.session_state.batch_page_num = st.number_input("Page", min_value=1, value=st.session_state.batch_page_num, label_visibility="collapsed")
+        with c_next:
+            if st.button("▶", use_container_width=True):
+                st.session_state.batch_page_num += 1
+                st.session_state.gemini_result = None
+                st.rerun()
+
+    # 2. Logic: Title -> ID -> XML -> Content
+    if st.session_state.batch_title and pdf_folder:
+        st.divider()
+        
+        # Cache handling: Only re-fetch XML if the title changed
+        if st.session_state.batch_cached_title != st.session_state.batch_title:
+            with st.spinner(f"Resolving '{st.session_state.batch_title}'..."):
+                # A. Get ID from API
+                page_id = get_page_id(st.session_state.batch_title)
+                
+                if not page_id:
+                    st.error(f"Could not find Page ID for '{st.session_state.batch_title}'")
+                    st.stop()
+                
+                # B. Get Text from XML
+                xml_path, _ = get_default_xml_path()
+                st.caption(f"Fetching XML content for Page ID: {page_id}")
+                wikitext, error = fetch_from_xml(xml_path, page_id)
+                
+                if error:
+                    st.error(error)
+                    st.stop()
+                    
+                st.session_state.batch_cached_text = wikitext
+                st.session_state.batch_cached_title = st.session_state.batch_title
+        
+        # Use Cached Text
+        wikitext = st.session_state.batch_cached_text
+        
+        # C. Extract Content for Current Page Number
+        original_content, start_idx, end_idx, page_tag = extract_page_content_by_tag(wikitext, st.session_state.batch_page_num)
+
+        if not page_tag:
+            st.info(f"Page tag `{{{{page|{st.session_state.batch_page_num}|...}}}}` not found.")
+            st.text_area("Raw Text Dump", wikitext[:1000] + "...", height=200)
+        else:
+            # D. Parse PDF Mapping
+            file_match = re.search(r'file=([^|]+)', page_tag)
+            filename = file_match.group(1).strip() if file_match else f"{st.session_state.batch_title}.pdf"
+            
+            pdf_idx_match = re.search(r'\|page=(\d+)', page_tag)
+            target_pdf_page = int(pdf_idx_match.group(1)) if pdf_idx_match else st.session_state.batch_page_num
+
+            st.caption(f"Editing **Page {st.session_state.batch_page_num}** | File: `{filename}` (Pg {target_pdf_page})")
+
+            # E. Load Image
+            img, error = get_page_image(pdf_folder, filename, target_pdf_page)
+
+            # F. Workbench UI
+            if st.session_state.gemini_result is None:
+                # Pre-Run
+                bc1, bc2 = st.columns([1, 1])
+                with bc1:
+                    if img: st.image(img, use_container_width=True)
+                    elif error: st.error(error)
+                with bc2:
+                    st.text_area("Current Content", original_content, height=600, disabled=True)
+                    if img:
+                        if st.button("✨ Run Gemini", type="primary", use_container_width=True):
+                            with st.spinner("Reading..."):
+                                st.session_state.gemini_result = proofread_page(img)
+                            st.rerun()
+            else:
+                # Post-Run
+                bc_img, bc_edit, bc_diff = st.columns([1, 1, 1])
+                
+                with bc_img: 
+                    if img: st.image(img, use_container_width=True)
+                
+                with bc_edit:
+                    final_text = st.text_area("Final Result", value=st.session_state.gemini_result, height=800)
+                    
+                    bsave, bskip = st.columns([1,1])
+                    with bsave:
+                        if st.button("💾 Save & Next", type="primary", use_container_width=True):
+                            new_wikitext = wikitext[:start_idx] + "\n" + final_text.strip() + "\n" + wikitext[end_idx:]
+                            summary = f"Batch Proofread Pg {st.session_state.batch_page_num}"
+                            res = upload_to_bahaiworks(st.session_state.batch_title, new_wikitext, summary)
+                            
+                            if res.get('edit', {}).get('result') == 'Success':
+                                st.success("Saved!")
+                                # Update Cache with new text so we don't revert on next page load
+                                st.session_state.batch_cached_text = new_wikitext 
+                                st.session_state.batch_page_num += 1
+                                st.session_state.gemini_result = None
+                                st.rerun()
+                            else:
+                                st.error(f"Save failed: {res}")
+                    
+                    with bskip:
+                            if st.button("Skip (Next Pg)", use_container_width=True):
+                                st.session_state.batch_page_num += 1
+                                st.session_state.gemini_result = None
+                                st.rerun()
+
+                with bc_diff:
+                    diff_html = generate_smart_diff(original_content, st.session_state.gemini_result)
+                    st.markdown(f"<div style='border:1px solid #ddd; padding:15px; height:800px; overflow-y:scroll; background:white; color:black;'>{diff_html}</div>", unsafe_allow_html=True)
