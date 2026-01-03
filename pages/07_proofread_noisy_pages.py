@@ -151,21 +151,21 @@ def generate_smart_diff(original: str, new: str) -> str:
             
     return "".join(html)
 
-def extract_page_content_by_tag(wikitext: str, pdf_page_num: int):
+def extract_page_content_by_tag(wikitext: str, physical_page_num: int):
     """
-    Parses live wikitext to find the content between {{page|...|page=X}} tags.
-    Returns: (text_content, start_index, end_index, full_template_string)
+    Parses live wikitext to find content for a specific PHYSICAL page.
+    Matches: {{page|19|...}} where 19 is the physical_page_num.
     """
-    # Regex to match {{page|LABEL|file=...|page=NUMBER}}
-    # We look for the specific pdf_page_num
-    pattern = re.compile(r'(\{\{page\|[^|]*\|file=[^|]+\|page=' + str(pdf_page_num) + r'\}\})')
+    # Regex: {{page | 19 | ... }}
+    # We escape the pipes and allow for spaces
+    pattern = re.compile(r'(\{\{page\s*\|\s*' + str(physical_page_num) + r'\s*\|.*?\}\})', re.IGNORECASE)
     match = pattern.search(wikitext)
     
     if not match:
         return None, 0, 0, None
     
     start_tag_end = match.end()
-    start_tag_full = match.group(1)
+    full_tag = match.group(1)
     
     # Find the NEXT page tag to define the end of this page
     next_tag_pattern = re.compile(r'\{\{page\|')
@@ -174,10 +174,10 @@ def extract_page_content_by_tag(wikitext: str, pdf_page_num: int):
     if next_match:
         end_index = next_match.start()
     else:
-        end_index = len(wikitext) # End of file
+        end_index = len(wikitext) 
         
     content = wikitext[start_tag_end:end_index]
-    return content, start_tag_end, end_index, start_tag_full
+    return content, start_tag_end, end_index, full_tag
 
 # ==============================================================================
 # 3. API & IMAGE UTILS
@@ -324,6 +324,16 @@ else:
         file_match = re.search(r'file=([^|]+)', page_tag)
         filename = file_match.group(1).strip() if file_match else f"{row['title']}.pdf"
 
+        # 2. Parse PDF Page Index (The "Real" Page)
+        # We look for |page=21 in {{page|19|file=...|page=21}}
+        pdf_idx_match = re.search(r'\|page=(\d+)', page_tag)
+        
+        if pdf_idx_match:
+            target_pdf_page = int(pdf_idx_match.group(1))
+        else:
+            st.error(f"Could not find 'page=' parameter in tag: {page_tag}")
+            st.stop()
+
     # --- STEP 2: Ask for PDF Path (Interactive) ---
     st.info(f"Target PDF: **{filename}**")
     
@@ -341,7 +351,8 @@ else:
         st.session_state.last_pdf_path = pdf_folder # Save for next time
         
         with st.spinner("Extracting Page Image..."):
-            img, error = get_page_image(pdf_folder, filename, row['physical_page_number'])
+            # Use target_pdf_page (e.g. 21) instead of row['physical_page_number'] (e.g. 19)
+            img, error = get_page_image(pdf_folder, filename, target_pdf_page)
             
         if error:
             st.error(f"Could not load PDF: {error}")
