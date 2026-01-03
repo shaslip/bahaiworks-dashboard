@@ -168,3 +168,22 @@ def extract_toc_from_pdf(pdf_path, page_range_str):
     except Exception as e:
         print(f"Debug: API Exception: {e}")
         return {"toc_json": [], "toc_wikitext": "", "error": str(e)}
+
+def proofread_page(image):
+    """
+    Sends a single page image to Gemini for strict archival transcription.
+    """
+    model = genai.GenerativeModel('gemini-pro-vision')
+    prompt = """
+    You are a strict archival transcription engine. 
+    1. Transcribe the text from this page image character-for-character.
+    2. Do NOT correct grammar or modernization spelling.
+    3. If the text has an OBVIOUS typo (e.g. "sentance"), transcribe it as: {{sic|sentance|sentence}}
+    4. Preserve paragraph breaks.
+    5. Return ONLY the text. No markdown formatting blocks (```), no conversational filler.
+    """
+    try:
+        response = model.generate_content([prompt, image])
+        return response.text.strip()
+    except Exception as e:
+        return f"Error: {e}"
