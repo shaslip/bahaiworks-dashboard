@@ -38,6 +38,24 @@ st.set_page_config(page_title="Noisy Page Proofreader", page_icon="🛡️", lay
 # 1. DATABASE HELPERS (Direct Connection to knowledge.db)
 # ==============================================================================
 
+def get_default_xml_path():
+    """
+    Auto-detects the XML dump in the project's 'xml' folder.
+    Returns the absolute path to the first .xml.gz file found.
+    """
+    xml_dir = os.path.join(project_root, 'xml')
+    if not os.path.exists(xml_dir):
+        return None, f"Directory not found: {xml_dir}"
+        
+    # Find all .xml.gz files
+    candidates = [f for f in os.listdir(xml_dir) if f.endswith('.xml.gz')]
+    
+    if not candidates:
+        return None, f"No .xml.gz files found in {xml_dir}"
+        
+    # return the full path to the first one found
+    return os.path.join(xml_dir, candidates[0]), None
+
 def fetch_from_xml(xml_path, target_page_id):
     """
     Scans the local XML dump for a specific page ID and extracts the text.
