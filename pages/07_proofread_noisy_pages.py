@@ -332,7 +332,7 @@ if st.session_state.current_selection is None:
                     st.metric("Max Noise", f"{row['max_seg_noise']:.1f}")
 
                 with c3:
-                    if st.button("🛠️ Fix", key=f"btn_{idx}", use_container_width=True):
+                    if st.button("🛠️ Fix", key=f"btn_{idx}", width='stretch'):
                         st.session_state.current_selection = row
                         st.rerun()
 
@@ -435,7 +435,7 @@ else:
         
         with c_left:
             st.subheader("Source PDF")
-            if img: st.image(img, use_container_width=True)
+            if img: st.image(img, width='stretch')
             
         with c_right:
             st.subheader("Original Text (Noisy)")
@@ -443,7 +443,7 @@ else:
             
             if img:
                 st.write("---")
-                if st.button("✨ Run Gemini OCR", type="primary", use_container_width=True):
+                if st.button("✨ Run Gemini OCR", type="primary", width='stretch'):
                     with st.spinner("Gemini is reading..."):
                         st.session_state.gemini_result = proofread_page(img)
                     st.rerun()
@@ -456,7 +456,7 @@ else:
         # 1. Source Image
         with c_img:
             st.markdown("##### 1. Source Image")
-            if img: st.image(img, use_container_width=True)
+            if img: st.image(img, width='stretch')
 
         # 2. Final Text (Editable) - Large Box
         with c_edit:
@@ -473,7 +473,7 @@ else:
             # Save / Discard buttons
             c_save, c_discard = st.columns([1, 1])
             with c_save:
-                if st.button("💾 Save to Bahai.works", type="primary", use_container_width=True):
+                if st.button("💾 Save to Bahai.works", type="primary", width='stretch'):
                     new_wikitext = wikitext[:start_idx] + "\n" + final_text.strip() + "\n" + wikitext[end_idx:]
                     summary = f"Proofread Pg {row['physical_page_number']} via Dashboard."
                     
@@ -486,7 +486,7 @@ else:
                         st.rerun()
                     else: st.error(f"Save failed: {res}")
             with c_discard:
-                if st.button("Discard Changes", use_container_width=True):
+                if st.button("Discard Changes", width='stretch'):
                     st.session_state.gemini_result = None
                     st.rerun()
 
