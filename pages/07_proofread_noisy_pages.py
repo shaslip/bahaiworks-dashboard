@@ -385,6 +385,16 @@ else:
             st.stop()
             
         st.write(f"📂 Scanning `{os.path.basename(xml_path)}` for Page ID {row['source_page_id']}...")
+
+        wikitext, error = fetch_from_xml(xml_path, row['source_page_id'])
+        
+        if error or not wikitext:
+            status.update(label="XML Load Failed", state="error")
+            st.error(error)
+            st.stop()
+            
+        st.write(f"🔍 Searching for Physical Page {row['physical_page_number']} tag...")
+        
         original_content, start_idx, end_idx, page_tag = extract_page_content_by_tag(wikitext, row['physical_page_number'])
         
         if not page_tag:
