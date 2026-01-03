@@ -5,6 +5,8 @@ import re
 import os
 import sys
 import io
+import gzip
+import xml.etree.ElementTree as ET
 import urllib.parse
 import requests
 import sqlite3
@@ -35,6 +37,39 @@ st.set_page_config(page_title="Noisy Page Proofreader", page_icon="🛡️", lay
 # ==============================================================================
 # 1. DATABASE HELPERS (Direct Connection to knowledge.db)
 # ==============================================================================
+
+def fetch_from_xml(xml_path, target_page_id):
+    """
+    Scans the local XML dump for a specific page ID and extracts the text.
+    """
+    if not os.path.exists(xml_path):
+        return None, f"XML Dump not found at: {xml_path}"
+
+    target_page_id = str(target_page_id)
+    
+    try:
+        with gzip.open(xml_path, 'rb') as f:
+            # We use iterparse for memory efficiency
+            context = ET.iterparse(f, events=('end',))
+            
+            for event, elem in context:
+                if elem.tag.endswith('page'):
+                    # Check if this is the page we want
+                    id_elem = elem.find('{*}id')
+                    if id_elem is not None and id_elem.text == target_page_id:
+                        # Found it! Extract text.
+                        text_elem = elem.find('.//{*}text')
+                        if text_elem is not None:
+                            return text_elem.text, None
+                        return None, "Page found, but no text content."
+                    
+                    # Clear element to save memory
+                    elem.clear()
+                    
+        return None, f"Page ID {target_page_id} not found in dump."
+        
+    except Exception as e:
+        return None, f"XML Parse Error: {e}"
 
 def generate_bahai_works_url(title, page_num):
     # Encodes title safely: "Child's Way" -> "Child%27s_Way"
@@ -78,8 +113,11 @@ def get_noisy_pages_from_db(min_noise=20, limit=50):
                 FROM content_segments s
             )
             SELECT 
+                a.id as article_db_id, -- Added
                 a.title,
                 a.source_code,
+                a.source_page_id,      -- Added: Needed for XML lookup
+                a.language_code,       -- Added: Needed for XML lookup
                 rs.physical_page_number,
                 rs.ocr_noise_score as max_seg_noise,
                 rs.text_content as snippet
@@ -316,17 +354,18 @@ else:
         st.session_state.gemini_result = None
         st.rerun()
     
-    # --- STEP 1: Fetch Wiki Content (Fast, Automatic) ---
-    # --- STEP 1: Fetch Wiki Content (With Debugging) ---
-    # We use st.status to show progress steps visibly instead of a blind spinner
+    # --- STEP 1: Fetch Wiki Content (Local XML) ---
     target_pdf_page = None
-    
-    with st.status("Loading Page Context...", expanded=True) as status:
-        st.write("🔌 Connecting to MediaWiki API...")
-        wikitext = get_live_wikitext(row['title'])
+    wikitext = None
+
+    with st.status("Loading Page Context (Local)...", expanded=True) as status:
+        st.write(f"📂 Scanning XML Dump for Page ID {row['source_page_id']}...")
         
-        if not wikitext:
-            status.update(label="Wiki Fetch Failed", state="error")
+        wikitext, error = fetch_from_xml(st.session_state.xml_dump_path, row['source_page_id'])
+        
+        if error or not wikitext:
+            status.update(label="XML Load Failed", state="error")
+            st.error(error)
             st.stop()
             
         st.write(f"🔍 Searching for Physical Page {row['physical_page_number']} tag...")
@@ -334,10 +373,10 @@ else:
         
         if not page_tag:
             status.update(label="Tag Search Failed", state="error")
-            st.error(f"Could not find `{{{{page|{row['physical_page_number']}|...}}}}` tag in live text.")
+            st.error(f"Could not find `{{{{page|{row['physical_page_number']}|...}}}}` tag in text.")
             st.stop()
         
-        st.write(f"📂 Parsing metadata from tag: `{page_tag}`")
+        # Parse Metadata
         file_match = re.search(r'file=([^|]+)', page_tag)
         filename = file_match.group(1).strip() if file_match else f"{row['title']}.pdf"
 
