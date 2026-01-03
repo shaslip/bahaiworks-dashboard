@@ -6,6 +6,7 @@ import os
 import sys
 import io
 import requests
+import sqlite3
 from PIL import Image
 import fitz  # PyMuPDF
 import google.generativeai as genai
@@ -16,7 +17,9 @@ project_root = os.path.dirname(current_dir)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-from src.builder.database import get_connection
+# We do NOT import src.database because it points to the local 'documents' DB,
+# but we need to query 'knowledge.db' which has a different schema.
+
 from src.mediawiki_uploader import upload_to_bahaiworks, API_URL
 
 # --- Configuration ---
@@ -29,7 +32,54 @@ genai.configure(api_key=os.environ["GEMINI_API_KEY"])
 st.set_page_config(page_title="Noisy Page Proofreader", page_icon="🛡️", layout="wide")
 
 # ==============================================================================
-# 1. CORE LOGIC: SMART DIFF & TEXT PROCESSING
+# 1. DATABASE HELPERS (Direct Connection to knowledge.db)
+# ==============================================================================
+
+def get_knowledge_db_connection():
+    """
+    Connects specifically to the imported knowledge.db file 
+    located in the project root.
+    """
+    db_path = os.path.join(project_root, 'knowledge.db')
+    
+    if not os.path.exists(db_path):
+        st.error(f"CRITICAL: knowledge.db not found at {db_path}. Please copy it to the project root.")
+        st.stop()
+        
+    return sqlite3.connect(db_path)
+
+def get_noisy_pages_from_db(min_noise=20, limit=50):
+    """
+    Queries knowledge.db for pages with high average noise segments.
+    """
+    conn = get_knowledge_db_connection()
+    try:
+        # We aggregate segments by physical_page_number to get a "Page View"
+        query = f"""
+            SELECT 
+                a.title,
+                a.source_code,
+                s.physical_page_number,
+                MAX(s.ocr_noise_score) as max_seg_noise,
+                AVG(s.ocr_noise_score) as avg_seg_noise,
+                COUNT(s.id) as segment_count
+            FROM content_segments s
+            JOIN articles a ON s.article_id = a.id
+            GROUP BY a.id, s.physical_page_number
+            HAVING max_seg_noise >= ?
+            ORDER BY max_seg_noise DESC
+            LIMIT ?
+        """
+        df = pd.read_sql(query, conn, params=(min_noise, limit))
+        return df
+    except Exception as e:
+        st.error(f"Database Query Error: {e}")
+        return pd.DataFrame()
+    finally:
+        conn.close()
+
+# ==============================================================================
+# 2. CORE LOGIC: SMART DIFF & TEXT PROCESSING
 # ==============================================================================
 
 def calculate_noise_local(text: str) -> float:
@@ -56,7 +106,7 @@ def generate_smart_diff(original: str, new: str) -> str:
             html.append(f"<span>{new_chunk}</span>")
         
         elif opcode == 'delete':
-            # AI removed text. Always high risk unless it was pure noise.
+            # AI removed text.
             noise = calculate_noise_local(old_chunk)
             color = "#ffcccc" if noise < 20 else "#e6ffe6" # Red if clean, Green if noise
             html.append(f"<del style='background-color:{color}; text-decoration: line-through;'>{old_chunk}</del>")
@@ -111,30 +161,8 @@ def extract_page_content_by_tag(wikitext: str, pdf_page_num: int):
     return content, start_tag_end, end_index, start_tag_full
 
 # ==============================================================================
-# 2. DATA & API LAYER
+# 3. API & IMAGE UTILS
 # ==============================================================================
-
-def get_noisy_pages_from_db(min_noise=20, limit=50):
-    """Queries knowledge.db for pages with high average noise segments."""
-    conn = get_connection()
-    query = f"""
-        SELECT 
-            a.title,
-            a.source_code,
-            s.physical_page_number,
-            MAX(s.ocr_noise_score) as max_seg_noise,
-            AVG(s.ocr_noise_score) as avg_seg_noise,
-            COUNT(s.id) as segment_count
-        FROM content_segments s
-        JOIN articles a ON s.article_id = a.id
-        GROUP BY a.id, s.physical_page_number
-        HAVING max_seg_noise >= ?
-        ORDER BY max_seg_noise DESC
-        LIMIT ?
-    """
-    df = pd.read_sql(query, conn, params=(min_noise, limit))
-    conn.close()
-    return df
 
 @st.cache_data(show_spinner="Extracting PDF image...")
 def get_page_image(pdf_folder, filename, page_num):
@@ -186,17 +214,25 @@ def get_live_wikitext(title):
     return None
 
 # ==============================================================================
-# 3. UI LAYOUT
+# 4. UI LAYOUT
 # ==============================================================================
 
 # --- Sidebar Controls ---
 with st.sidebar:
     st.header("🔍 Discovery Filters")
     min_noise = st.slider("Min Noise Score", 0, 100, 30)
-    pdf_root = st.text_input("PDF Folder Path", value="/home/kubuntu/pdfs") # Default path
+    
+    # Store PDF path in session to persist across reruns
+    if 'pdf_root' not in st.session_state:
+        st.session_state.pdf_root = "/home/kubuntu/pdfs"
+    
+    pdf_root = st.text_input("PDF Folder Path", value=st.session_state.pdf_root)
+    st.session_state.pdf_root = pdf_root
     
     if st.button("Refresh Queue"):
         st.session_state.queue_df = get_noisy_pages_from_db(min_noise)
+        st.session_state.current_selection = None
+        st.session_state.gemini_result = None
 
 # --- State Init ---
 if 'queue_df' not in st.session_state:
@@ -217,7 +253,7 @@ if st.session_state.current_selection is None:
         st.success("No pages found above the noise threshold.")
     else:
         # Display as a selectable dataframe
-        # We use a trick: Display table, use index to select
+        # We iterate to create buttons for selection
         for idx, row in st.session_state.queue_df.iterrows():
             with st.container(border=True):
                 c1, c2, c3 = st.columns([5, 1, 1])
@@ -250,16 +286,19 @@ else:
         
         if not page_tag:
             st.warning(f"Could not find a {{page}} tag for physical page {row['physical_page_number']} in the live text.")
-            st.text_area("Debug WikiText Start", wikitext[:500])
+            st.code(wikitext[:500], language='text')
             st.stop()
             
-        # Parse filename from tag (fallback regex if DB source_code logic is complex)
+        # Parse filename from tag 
         # Tag format: {{page|VII|file=Filename.pdf|page=10}}
         file_match = re.search(r'file=([^|]+)', page_tag)
-        filename = file_match.group(1) if file_match else f"{row['title']}.pdf" # Fallback
+        if file_match:
+            filename = file_match.group(1).strip()
+        else:
+            filename = f"{row['title']}.pdf" 
         
         # Get Image
-        img, error = get_page_image(pdf_root, filename, row['physical_page_number'])
+        img, error = get_page_image(st.session_state.pdf_root, filename, row['physical_page_number'])
 
     # 2. Two-Column Layout
     col_left, col_right = st.columns([1, 1])
@@ -270,6 +309,7 @@ else:
             st.image(img, use_column_width=True)
         else:
             st.error(f"Image Error: {error}")
+            st.warning("Ensure the PDF path in the sidebar is correct.")
             
     with col_right:
         st.subheader("Smart Diff")
@@ -325,6 +365,8 @@ else:
                     # Clear state to force refresh
                     st.session_state.gemini_result = None
                     st.session_state.current_selection = None
+                    # Update queue to remove fixed item locally (optional but nice)
+                    st.session_state.queue_df = get_noisy_pages_from_db(min_noise)
                     st.rerun()
                 else:
                     st.error(f"Save failed: {res}")
