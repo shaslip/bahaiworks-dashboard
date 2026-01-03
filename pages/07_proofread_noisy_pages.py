@@ -386,13 +386,6 @@ else:
             
         st.write(f"📂 Scanning `{os.path.basename(xml_path)}` for Page ID {row['source_page_id']}...")
         
-        wikitext, error = fetch_from_xml(xml_path, row['source_page_id'])
-        
-        if error or not wikitext:
-            status.update(label="XML Load Failed", state="error")
-            st.error(error)
-            st.stop()
-        
         wikitext, error = fetch_from_xml(st.session_state.xml_dump_path, row['source_page_id'])
         
         if error or not wikitext:
