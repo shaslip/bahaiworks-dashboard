@@ -302,6 +302,8 @@ if 'current_selection' not in st.session_state:
     st.session_state.current_selection = None
 if 'gemini_result' not in st.session_state:
     st.session_state.gemini_result = None
+if 'last_pdf_path' not in st.session_state:
+    st.session_state.last_pdf_path = ""
 
 # --- Main View ---
 st.title("🛡️ Noisy Page Proofreader")
@@ -406,9 +408,6 @@ else:
     # --- STEP 2: Ask for PDF Path (Interactive) ---
     st.info(f"Target PDF: **{filename}**")
     
-    # Initialize session state for path if missing
-    if 'last_pdf_path' not in st.session_state: st.session_state.last_pdf_path = ""
-    
     # User Input - NOT inside a spinner
     pdf_folder = st.text_input("Enter folder path for this PDF:", value=st.session_state.last_pdf_path)
     
@@ -428,36 +427,56 @@ else:
     else:
         st.warning("☝️ Please enter the folder path above to load the PDF.")
 
-    # --- UI: Two-Column Layout ---
-    col_left, col_right = st.columns([1, 1])
+    # --- UI LAYOUT LOGIC ---
     
-    with col_left:
-        st.subheader("Source PDF")
-        if img: st.image(img, width='stretch')
-            
-    with col_right:
-        st.subheader("Smart Diff")
+    if st.session_state.gemini_result is None:
+        # STATE 1: PRE-RUN (2 Columns: Image | Original Text)
+        c_left, c_right = st.columns([1, 1])
         
-        if st.session_state.gemini_result is None:
-            st.text_area("Original Text", original_content, height=300, disabled=True)
+        with c_left:
+            st.subheader("Source PDF")
+            if img: st.image(img, use_container_width=True)
+            
+        with c_right:
+            st.subheader("Original Text (Noisy)")
+            st.text_area("Current Content", original_content, height=600, disabled=True)
             
             if img:
-                if st.button("✨ Run Gemini OCR", type="primary"):
+                st.write("---")
+                if st.button("✨ Run Gemini OCR", type="primary", use_container_width=True):
                     with st.spinner("Gemini is reading..."):
                         st.session_state.gemini_result = proofread_page(img)
                     st.rerun()
-        else:
-            diff_html = generate_smart_diff(original_content, st.session_state.gemini_result)
-            st.markdown(f"<div style='border:1px solid #ddd; padding:15px; height:400px; overflow-y:scroll; font-family:monospace; background-color:white; color:black;'>{diff_html}</div>", unsafe_allow_html=True)
-            st.caption("Red = Mutation (Danger) | Green = Restoration (Fix)")
+
+    else:
+        # STATE 2: POST-RUN (3 Columns: Image | Final Text | Smart Diff)
+        # Using 1,1,1 ratio for the 60-inch monitor
+        c_img, c_edit, c_diff = st.columns([1, 1, 1])
+        
+        # 1. Source Image
+        with c_img:
+            st.markdown("##### 1. Source Image")
+            if img: st.image(img, use_container_width=True)
+
+        # 2. Final Text (Editable) - Large Box
+        with c_edit:
+            st.markdown("##### 2. Final Text (Editable)")
             
-            final_text = st.text_area("Final Text", value=st.session_state.gemini_result, height=200)
+            # Height 800px to match a typical page view on a large screen
+            final_text = st.text_area(
+                "Final Result", 
+                value=st.session_state.gemini_result, 
+                height=800,
+                label_visibility="collapsed"
+            )
             
-            c_save, c_discard = st.columns([1,1])
+            # Save / Discard buttons
+            c_save, c_discard = st.columns([1, 1])
             with c_save:
-                if st.button("💾 Save to Bahai.works", type="primary"):
+                if st.button("💾 Save to Bahai.works", type="primary", use_container_width=True):
                     new_wikitext = wikitext[:start_idx] + "\n" + final_text.strip() + "\n" + wikitext[end_idx:]
                     summary = f"Proofread Pg {row['physical_page_number']} via Dashboard."
+                    
                     res = upload_to_bahaiworks(row['title'], new_wikitext, summary)
                     if res.get('edit', {}).get('result') == 'Success':
                         st.success("Saved!")
@@ -467,6 +486,32 @@ else:
                         st.rerun()
                     else: st.error(f"Save failed: {res}")
             with c_discard:
-                if st.button("Discard"):
+                if st.button("Discard Changes", use_container_width=True):
                     st.session_state.gemini_result = None
                     st.rerun()
+
+        # 3. Smart Diff (Guide)
+        with c_diff:
+            st.markdown("##### 3. Smart Diff (Guide)")
+            
+            diff_html = generate_smart_diff(original_content, st.session_state.gemini_result)
+            
+            # Scrollable container matching the height of the editor
+            st.markdown(
+                f"""
+                <div style='
+                    border:1px solid #ddd; 
+                    padding:15px; 
+                    height:800px; 
+                    overflow-y:scroll; 
+                    font-family:monospace; 
+                    background-color:white; 
+                    color:black;
+                    font-size: 0.9em;
+                '>
+                {diff_html}
+                </div>
+                """, 
+                unsafe_allow_html=True
+            )
+            st.caption("Red = Mutation (Danger) | Green = Restoration (Fix)")
