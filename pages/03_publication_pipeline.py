@@ -658,7 +658,7 @@ elif st.session_state.pipeline_stage == "split":
         c_title, c_nav, c_preview = st.columns([2, 1, 4])
         
         with c_title:
-            st.subheader(item['title'])
+            st.subheader(item['page_name'])
             st.caption(f"TOC Range: {item.get('page_range', 'N/A')}")
         
         with c_nav:
