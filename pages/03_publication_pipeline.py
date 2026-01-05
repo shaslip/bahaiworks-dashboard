@@ -808,10 +808,10 @@ elif st.session_state.pipeline_stage == "split":
         has_authors = any(len(item.get("author", [])) > 0 for item in full_toc)
 
         if has_authors:
-            st.subheader("4. Chapter Metadata")
-            
-            if st.button("📝 Review & Create Chapter Items", type="primary", width='stretch'):
-                chapter_payload = []
+        st.subheader("4. Chapter Metadata")
+        
+        if st.button("📝 Review & Create Chapter Items", type="primary", width='stretch'):
+            chapter_payload = []
             full_toc = st.session_state.get("toc_map", [])
             
             for item in full_toc:
