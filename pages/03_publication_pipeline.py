@@ -791,12 +791,10 @@ elif st.session_state.pipeline_stage == "split":
     # --- PART B: HANDOFF ---
     if st.session_state.get("split_completed"):
         st.divider()
-        
-        # FIX: Check if any item in the TOC has authors before showing the button
         full_toc = st.session_state.get("toc_map", [])
         has_authors = any(len(item.get("author", [])) > 0 for item in full_toc)
 
-        if has_authors:
+    if has_authors:
         st.subheader("4. Chapter Metadata")
         
         if st.button("📝 Review & Create Chapter Items", type="primary", width='stretch'):
