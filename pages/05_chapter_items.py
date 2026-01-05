@@ -125,7 +125,8 @@ if st.button("🚀 Process Items (Create & Link)", type="primary"):
             continue
         
         # Logic: If Item Label is blank, fallback to Page Name
-        final_label = row["Item Label"] if row["Item Label"].strip() else p_name
+        clean_label = (row["Item Label"] or "").strip()
+        final_label = clean_label if clean_label else p_name
         
         # Parse Authors
         raw_auth = str(row["Authors"])
