@@ -299,7 +299,7 @@ if missing_authors is not None:
         
         if st.button("👤 Create missing pages", type="primary", key="btn_missing"):
             st.session_state["batch_author_list"] = missing_authors
-            st.switch_page("pages/06_misc_tasks.py")
+            st.switch_page("pages/07_misc_tasks.py")
             
     # B. Outdated Authors (Exists but no Lua)
     if outdated_authors:
@@ -312,7 +312,7 @@ if missing_authors is not None:
             # We send these to the same tool, but you might want to manually review them 
             # in 06 before clicking 'Create' to avoid overwriting bio text.
             st.session_state["batch_author_list"] = outdated_authors
-            st.switch_page("pages/06_misc_tasks.py")
+            st.switch_page("pages/07_misc_tasks.py")
 
     if not has_issues:
         st.success("✅ All authors have pages and include the correct dynamic code!")
