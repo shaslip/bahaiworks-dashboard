@@ -400,14 +400,20 @@ elif st.session_state.pipeline_stage == "proof":
                     # Generate Wikitext
                     indent = ":" * level
                     
+                    # We need to capture the decision of "should this be a link?"
+                    # to make sure the JSON matches the Wikitext.
+                    is_linked = False 
+
                     if level == 1:
                         # Logic A: Level 1 (Chapters / Sections)
                         if not p_name or not p_name.strip():
                             current_section_is_container = True
                             computed_toc_wikitext += f"\n:{prefix}{d_title}" 
+                            is_linked = False
                         else:
                             current_section_is_container = False
                             computed_toc_wikitext += f"\n:{prefix}[[/{p_name}|{d_title}]]" 
+                            is_linked = True
                         
                         if auth_list:
                             authors_str = ", ".join(auth_list)
@@ -422,8 +428,26 @@ elif st.session_state.pipeline_stage == "proof":
                             if auth_list:
                                 authors_str = ", ".join(auth_list)
                                 computed_toc_wikitext += f"\n{indent}: ''{authors_str}''"
+                            is_linked = True
                         else:
                             computed_toc_wikitext += f"\n{indent}{prefix}{d_title}"
+                            is_linked = False
+                
+                    # FIX: Enforce consistency. 
+                    # If the visual logic above decided NOT to link it, we must clear 
+                    # the page_name in the data so the splitter doesn't create a page for it.
+                    final_page_name_for_json = p_name if is_linked else ""
+
+                    # Reconstruct JSON Object (Moved down to use final_page_name_for_json)
+                    updated_toc_list.append({
+                        "title": d_title,
+                        "page_name": final_page_name_for_json, # <--- MODIFIED
+                        "display_title": d_title,
+                        "prefix": prefix,
+                        "level": level,
+                        "page_range": row["Page Range"],
+                        "author": auth_list
+                    })                            
                 
                 # Sync back to JSON (Source of Truth)
                 # We check if data actually changed to avoid unnecessary re-renders
