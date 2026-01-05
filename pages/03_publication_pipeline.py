@@ -751,9 +751,8 @@ elif st.session_state.pipeline_stage == "split":
                             raw_text += page_map.get(p_label, "") + "\n\n"
                     
                     # Build Content
-                    pdf_tag = f"<pdf>File:{filename}|page={real_start_lbl}-{real_end_lbl}</pdf>"
                     # Note: We prepend the target_base to sub-pages
-                    full_content = f"{header_content}\n{raw_text}\n{pdf_tag}"
+                    full_content = f"{header_content}\n{raw_text}"
                     
                     # Upload (Handle naming: if it's not the main page, prepend base)
                     # The logic usually is target_base/Page_Name
@@ -779,10 +778,16 @@ elif st.session_state.pipeline_stage == "split":
     # --- PART B: HANDOFF ---
     if st.session_state.get("split_completed"):
         st.divider()
-        st.subheader("4. Chapter Metadata")
         
-        if st.button("📝 Review & Create Chapter Items", type="primary", width='stretch'):
-            chapter_payload = []
+        # FIX: Check if any item in the TOC has authors before showing the button
+        full_toc = st.session_state.get("toc_map", [])
+        has_authors = any(len(item.get("author", [])) > 0 for item in full_toc)
+
+        if has_authors:
+            st.subheader("4. Chapter Metadata")
+            
+            if st.button("📝 Review & Create Chapter Items", type="primary", width='stretch'):
+                chapter_payload = []
             full_toc = st.session_state.get("toc_map", [])
             
             for item in full_toc:
