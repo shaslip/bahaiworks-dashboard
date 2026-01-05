@@ -386,17 +386,6 @@ elif st.session_state.pipeline_stage == "proof":
 
                     if prefix is None: prefix = ""
                     
-                    # Reconstruct JSON Object
-                    updated_toc_list.append({
-                        "title": d_title,
-                        "page_name": p_name,
-                        "display_title": d_title,
-                        "prefix": prefix,
-                        "level": level,
-                        "page_range": row["Page Range"],
-                        "author": auth_list
-                    })
-                    
                     # Generate Wikitext
                     indent = ":" * level
                     
