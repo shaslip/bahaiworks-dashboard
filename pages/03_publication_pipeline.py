@@ -658,7 +658,7 @@ elif st.session_state.pipeline_stage == "split":
         c_title, c_nav, c_preview = st.columns([2, 1, 4])
         
         with c_title:
-            st.subheader(item['page_name'])
+            st.subheader(item.get('page_name', item['title'])) 
             st.caption(f"TOC Range: {item.get('page_range', 'N/A')}")
         
         with c_nav:
@@ -791,22 +791,27 @@ elif st.session_state.pipeline_stage == "split":
     # --- PART B: HANDOFF ---
     if st.session_state.get("split_completed"):
         st.divider()
+        
         full_toc = st.session_state.get("toc_map", [])
+        # Define variable INSIDE the block
         has_authors = any(len(item.get("author", [])) > 0 for item in full_toc)
 
-    if has_authors:
-        st.subheader("4. Chapter Metadata")
-        
-        if st.button("📝 Review & Create Chapter Items", type="primary", width='stretch'):
-            chapter_payload = []
-            full_toc = st.session_state.get("toc_map", [])
+        # Check variable INSIDE the block (Indented)
+        if has_authors:
+            st.subheader("4. Chapter Metadata")
             
-            for item in full_toc:
-                if item.get("page_name") and str(item.get("page_name")).strip() != "":
-                    chapter_payload.append(item)
-            
-            st.session_state["chapter_review_data"] = chapter_payload
-            st.session_state["chapter_parent_qid"] = st.session_state.get("parent_qid", "")
-            st.session_state["chapter_target_base"] = st.session_state.get("target_page", "")
-            
-            st.switch_page("pages/05_chapter_items.py")
+            if st.button("📝 Review & Create Chapter Items", type="primary", width='stretch'):
+                chapter_payload = []
+                # Re-fetch strictly to be safe, though full_toc is already there
+                current_toc = st.session_state.get("toc_map", [])
+                
+                for item in current_toc:
+                    # Filter for items that actually have a page destination
+                    if item.get("page_name") and str(item.get("page_name")).strip() != "":
+                        chapter_payload.append(item)
+                
+                st.session_state["chapter_review_data"] = chapter_payload
+                st.session_state["chapter_parent_qid"] = st.session_state.get("parent_qid", "")
+                st.session_state["chapter_target_base"] = st.session_state.get("target_page", "")
+                
+                st.switch_page("pages/05_chapter_items.py")
