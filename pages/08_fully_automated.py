@@ -329,15 +329,6 @@ if start_btn:
                 if "GEMINI_ERROR" in new_text:
                     raise Exception(new_text)
 
-                # --- HEADER INJECTION (Page 1 Only) ---
-                if page_num == 1:
-                    # Extract issue number from filename (e.g. US_Supplement_1.pdf -> 1)
-                    match = re.search(r'(\d+)', short_name)
-                    if match:
-                        issue_num = match.group(1)
-                        header = generate_header(issue_num)
-                        new_text = header + "\n" + new_text
-
                 # --- NOTOC INJECTION (Last Page Only) ---
                 # We need to know if this is the last page. 
                 # fitz (PyMuPDF) lets us check page count.
