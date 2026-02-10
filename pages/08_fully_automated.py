@@ -356,6 +356,23 @@ if start_btn:
                     st.error(f"CRITICAL ERROR: Could not fetch '{wiki_title}'. Does the page exist?")
                     st.stop()
                 
+                # --- PAGE 1 SPECIAL HANDLING (Header & OCR Removal) ---
+                if page_num == 1:
+                    # 1. Remove {{ocr}} tags (with or without params)
+                    # Matches {{ocr}} or {{ocr|amount=5}} etc.
+                    current_wikitext = re.sub(r'\{\{ocr.*?\}\}\n?', '', current_wikitext, flags=re.IGNORECASE)
+
+                    # 2. Generate and Prepend Header (if not already present)
+                    match = re.search(r'(\d+)', short_name)
+                    if match:
+                        issue_num = match.group(1)
+                        header = generate_header(issue_num)
+                        
+                        # Only prepend if it's not already there to avoid duplicates on re-runs
+                        if "{{header" not in current_wikitext:
+                            current_wikitext = header + "\n" + current_wikitext.lstrip()
+                # ------------------------------------------------------
+                
                 # D. Inject Content
                 log_area.text(f"💉 Injecting content into {{page|{page_num}}}...")
                 final_wikitext, inject_error = inject_text_into_page(current_wikitext, page_num, new_text)
