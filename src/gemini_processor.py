@@ -8,6 +8,9 @@ from google.generativeai.types import HarmCategory, HarmBlockThreshold
 # Configure Gemini
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
+# Your specific model
+MODEL_NAME = 'gemini-3-flash-preview'
+
 def parse_range_string(range_str):
     pages = []
     if not range_str: return pages
@@ -26,23 +29,17 @@ def parse_range_string(range_str):
 def json_to_wikitext(toc_list):
     """
     Converts the structured JSON list into MediaWiki format.
-    Format: 
-    - Level 1 (Chapters): : [[/Title|Title]]
-    - Level 2+ (Subtopics): :: Title (No link)
     """
     wikitext = ""
     for item in toc_list:
         title = item.get("title", "").strip()
         level = item.get("level", 1) # Default to 1 if missing
         
-        # Skip empty entries
         if not title: continue
             
         if level == 1:
-            # Main Chapter: Link it
             line = f": [[/{title}|{title}]]"
         else:
-            # Subtopic: Indent using :: and do not link
             line = f":: {title}"
             
         wikitext += line + "\n"
@@ -59,7 +56,7 @@ def extract_metadata_from_pdf(pdf_path, page_range_str):
 
     if not images: return {"error": "No images extracted"}
 
-    model = genai.GenerativeModel('gemini-3-flash-preview')
+    model = genai.GenerativeModel(MODEL_NAME)
     
     prompt = """
     Analyze these images of a book's copyright/title pages. 
@@ -67,13 +64,12 @@ def extract_metadata_from_pdf(pdf_path, page_range_str):
     
     1. "copyright_text": A string containing the full, verbatim text from these pages (clean OCR).
     2. "data": A flat JSON object with these keys (leave blank if not found):
-       - TITLE, FULL_TITLE, AUTHOR, EDITOR, TRANSLATOR, COMPILER
-       - PUBLISHER, COUNTRY, PUBYEAR, PAGES, ISBN10, ISBN13
+        - TITLE, FULL_TITLE, AUTHOR, EDITOR, TRANSLATOR, COMPILER
+        - PUBLISHER, COUNTRY, PUBYEAR, PAGES, ISBN10, ISBN13
     
     Output strictly valid JSON.
     """
     
-    # Safety settings to prevent blocking
     safety_settings = {
         HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
         HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -86,7 +82,6 @@ def extract_metadata_from_pdf(pdf_path, page_range_str):
         response = model.generate_content([prompt, *images], safety_settings=safety_settings)
         print("Debug: Metadata response received.")
         
-        # Robust regex extraction to ignore markdown code blocks
         match = re.search(r'\{.*\}', response.text, re.DOTALL)
         if match:
             return json.loads(match.group(0))
@@ -96,9 +91,6 @@ def extract_metadata_from_pdf(pdf_path, page_range_str):
         return {"error": f"API Error: {e}"}
 
 def extract_toc_from_pdf(pdf_path, page_range_str):
-    """
-    Returns a dict with 'toc_json' (list) and 'toc_wikitext' (string).
-    """
     print(f"--- Debug: Extracting TOC for {page_range_str} ---")
     pages_to_process = parse_range_string(page_range_str)
     images = []
@@ -112,7 +104,7 @@ def extract_toc_from_pdf(pdf_path, page_range_str):
         print(f"Debug: PDF Conversion Error: {e}")
         return {"toc_json": [], "toc_wikitext": "", "error": f"PDF Conversion Error: {e}"}
 
-    model = genai.GenerativeModel('gemini-3-flash-preview')
+    model = genai.GenerativeModel(MODEL_NAME)
     
     prompt = """
     Analyze these images of a Table of Contents.
@@ -132,7 +124,6 @@ def extract_toc_from_pdf(pdf_path, page_range_str):
     Output strictly valid JSON.
     """
     
-    # Safety settings to prevent blocking
     safety_settings = {
         HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
         HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -145,16 +136,13 @@ def extract_toc_from_pdf(pdf_path, page_range_str):
         response = model.generate_content([prompt, *images], safety_settings=safety_settings)
         print("Debug: TOC response received.")
         
-        # Check for safety blocks if response is empty
         if response.prompt_feedback:
              print(f"Debug: Prompt Feedback: {response.prompt_feedback}")
         
-        # Regex to find the list [ ... ]
         match = re.search(r'\[.*\]', response.text, re.DOTALL)
         
         if match:
             toc_list = json.loads(match.group(0))
-            # Python generates the wikitext to avoid JSON syntax errors
             toc_wikitext = json_to_wikitext(toc_list)
             
             return {
@@ -171,9 +159,9 @@ def extract_toc_from_pdf(pdf_path, page_range_str):
 
 def proofread_page(image):
     """
-    Sends a single page image to Gemini for strict archival transcription.
+    Strict archival transcription (Original Logic).
     """
-    model = genai.GenerativeModel('gemini-3-flash-preview')
+    model = genai.GenerativeModel(MODEL_NAME)
     prompt = """
     You are a strict archival transcription engine. 
     1. Transcribe the text from this page image character-for-character.
@@ -187,3 +175,28 @@ def proofread_page(image):
         return response.text.strip()
     except Exception as e:
         return f"Error: {e}"
+
+def proofread_with_formatting(image):
+    """
+    Transcription WITH MediaWiki formatting (Headers, Tables, Bold/Italic).
+    """
+    model = genai.GenerativeModel(MODEL_NAME)
+    
+    prompt = """
+    You are an expert transcriber and editor for a MediaWiki archive.
+    
+    Your task:
+    1.  Transcribe the text from this image exactly as it appears, correcting only obvious OCR errors.
+    2.  **FORMATTING IS CRITICAL:**
+        -   If you see a **Header**, use MediaWiki syntax (e.g., `== Header ==` or `=== Subheader ===`).
+        -   If you see a **Table**, transcribe it as a MediaWiki table (`{| class="wikitable" ... |}`).
+        -   If you see **Bold** or *Italic* text, preserve it using `'''bold'''` and `''italic''`.
+        -   Do NOT add any conversational filler ("Here is the text").
+        -   Output ONLY the raw wikitext.
+    """
+    
+    try:
+        response = model.generate_content([prompt, image])
+        return response.text.strip()
+    except Exception as e:
+        return f"GEMINI_ERROR: {str(e)}"
