@@ -178,22 +178,28 @@ def proofread_page(image):
 
 def proofread_with_formatting(image):
     """
-    Transcription WITH MediaWiki formatting (Headers, Tables, Bold/Italic).
+    Transcription WITH MediaWiki formatting.
+    - Enforces specific Baha'i orthography (curly apostrophes).
+    - Removes page headers/footers/page numbers.
     """
     model = genai.GenerativeModel(MODEL_NAME)
     
     prompt = """
-    You are a strict archival transcription engine.
-    1. Transcribe the text from this page image character-for-character.
-    2. Do NOT correct grammar or modernization spelling.
-    3. If the text has an OBVIOUS typo (e.g. "sentance"), transcribe it as: {{sic|sentance|sentence}}
-    4. Paragraph breaks require an extra return
-    5.  **FORMATTING IS CRITICAL:**
-        -   If you see a **Header**, use MediaWiki syntax (e.g., `== Header ==` or `=== Subheader ===`).
-        -   If you see a **Table**, transcribe it as a MediaWiki table (`{| class="wikitable" ... |}`).
-        -   If you see **Bold** or *Italic* text, preserve it using `'''bold'''` and `''italic''`.
-        -   Do NOT add any conversational filler ("Here is the text").
-        -   Output ONLY the raw wikitext.
+    You are an expert transcriber and editor for a MediaWiki archive.
+    
+    Your task:
+    1.  Transcribe the **MAIN CONTENT** of this page.
+    2.  From the second page on, **EXCLUDE** all page headers, running heads, and page numbers at the top or bottom of the page.
+    3.  **ORTHOGRAPHY:** You MUST use the curly apostrophe (’) for these terms:
+        -   Write "Bahá’í" (Not Bahá'í)
+        -   Write "Bahá’u’lláh" (Not Bahá'u'lláh)
+        -   Write "‘Abdu’l-Bahá" (Not 'Abdu'l-Bahá)
+    4.  **FORMATTING:**
+        -   If you see a **Header** (that is part of the text, not a running head), use `== Header ==`.
+        -   If you see a **Table**, use `{| class="wikitable" ... |}`.
+        -   If you see **Bold** or *Italic*, use `'''bold'''` and `''italic''`.
+    5.  Paragraph breaks require an extra return.
+    6.  Output ONLY the clean wikitext.
     """
     
     try:
