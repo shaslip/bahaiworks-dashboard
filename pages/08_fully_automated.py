@@ -102,16 +102,16 @@ def get_all_pdf_files(root_folder):
 def get_wiki_title(local_path, root_folder, base_wiki_title):
     """
     Converts local path to Wiki Title.
-    Ex: /data/US_Supp/Vol1/Issue_1.pdf -> U.S._Supplement/Vol1/Issue_1/Text
+    Ex: /data/US_Supp/Vol1/Issue_1.pdf -> U.S._Supplement/Issue_1/Text
+    Ignores intermediate folders, uses filename only.
     """
-    rel_path = os.path.relpath(local_path, root_folder)
-    # Remove extension
-    clean_path = os.path.splitext(rel_path)[0]
-    # Replace OS separators with slashes
-    clean_path = clean_path.replace(os.sep, '/')
+    # Get just the filename "Issue_1.pdf"
+    filename = os.path.basename(local_path)
+    # Remove extension "Issue_1"
+    clean_name = os.path.splitext(filename)[0]
     
-    # Construct final title
-    return f"{base_wiki_title}/{clean_path}/Text".replace("//", "/")
+    # Construct final title: Base + Filename + /Text
+    return f"{base_wiki_title}/{clean_name}/Text"
 
 def get_page_image_data(pdf_path, page_num_1_based):
     doc = fitz.open(pdf_path)
