@@ -183,11 +183,12 @@ def proofread_with_formatting(image):
     model = genai.GenerativeModel(MODEL_NAME)
     
     prompt = """
-    You are an expert transcriber and editor for a MediaWiki archive.
-    
-    Your task:
-    1.  Transcribe the text from this image exactly as it appears, correcting only obvious OCR errors.
-    2.  **FORMATTING IS CRITICAL:**
+    You are a strict archival transcription engine.
+    1. Transcribe the text from this page image character-for-character.
+    2. Do NOT correct grammar or modernization spelling.
+    3. If the text has an OBVIOUS typo (e.g. "sentance"), transcribe it as: {{sic|sentance|sentence}}
+    4. Paragraph breaks require an extra return
+    5.  **FORMATTING IS CRITICAL:**
         -   If you see a **Header**, use MediaWiki syntax (e.g., `== Header ==` or `=== Subheader ===`).
         -   If you see a **Table**, transcribe it as a MediaWiki table (`{| class="wikitable" ... |}`).
         -   If you see **Bold** or *Italic* text, preserve it using `'''bold'''` and `''italic''`.
