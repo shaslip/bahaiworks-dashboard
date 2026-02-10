@@ -190,7 +190,7 @@ def proofread_with_formatting(image):
     Your task:
     1.  Transcribe the **MAIN CONTENT** of this page.
     2.  From the second page on, **EXCLUDE** all page headers, running heads, and page numbers at the top or bottom of the page.
-    3.  **ORTHOGRAPHY:** You MUST use the curly apostrophe (’) for these terms:
+    3.  **ORTHOGRAPHY:** You MUST match the curly apostrophe (’) if used in the document, eg:
         -   Write "Bahá’í" (Not Bahá'í)
         -   Write "Bahá’u’lláh" (Not Bahá'u'lláh)
         -   Write "‘Abdu’l-Bahá" (Not 'Abdu'l-Bahá)
