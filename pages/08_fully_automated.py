@@ -81,24 +81,35 @@ def inject_text_into_page(wikitext, page_num, new_content):
     """
     # Regex matches: {{page | 19 }} OR {{page | 19 | file=... }}
     # We use re.IGNORECASE to handle variations like {{Page...}}
-    pattern_start = re.compile(r'(\{\{page\s*\|\s*' + str(page_num) + r'(?:\||\}\}))', re.IGNORECASE)
-    match_start = pattern_start.search(wikitext)
+    pattern_tag_start = re.compile(r'\{\{page\s*\|\s*' + str(page_num) + r'(?:\||\}\})', re.IGNORECASE)
+    match = pattern_tag_start.search(wikitext)
     
-    if not match_start:
+    if not match:
         return None, f"Tag {{page|{page_num}}} not found in live text."
         
-    # The insertion point starts immediately after the closing brackets/pipe of the first tag
-    start_pos = match_start.end()
+    # 2. Find the CLOSING }} of this specific tag to ensure we don't cut off attributes
+    # We search starting from the beginning of the match
+    tag_start_index = match.start()
+    tag_end_index = wikitext.find("}}", tag_start_index)
     
-    # Find the START of the NEXT page tag to define the boundary
+    if tag_end_index == -1:
+         return None, f"Malformed tag: {{page|{page_num}}} has no closing '}}'."
+         
+    # The content starts AFTER the closing brackets }}
+    content_start_pos = tag_end_index + 2
+    
+    # 3. Find the START of the NEXT page tag to define the end of content
     pattern_next = re.compile(r'\{\{page\s*\|')
-    match_next = pattern_next.search(wikitext, start_pos)
+    match_next = pattern_next.search(wikitext, content_start_pos)
     
-    # If no next tag, assume we replace until the end of the document
-    end_pos = match_next.start() if match_next else len(wikitext)
+    content_end_pos = match_next.start() if match_next else len(wikitext)
     
-    # Construct the new string
-    new_wikitext = wikitext[:start_pos] + "\n" + new_content.strip() + "\n" + wikitext[end_pos:]
+    # 4. Splice
+    # Keep everything up to the end of the current tag }}
+    # Add newline + new content + newline
+    # Keep everything from the next tag onwards
+    new_wikitext = wikitext[:content_start_pos] + "\n" + new_content.strip() + "\n" + wikitext[content_end_pos:]
+    
     return new_wikitext, None
 
 # ==============================================================================
