@@ -170,6 +170,32 @@ def reset_state():
 # ==============================================================================
 # 3. HELPER FUNCTIONS
 # ==============================================================================
+def cleanup_page_seams(wikitext):
+    """
+    Fixes text artifacts that occur at page boundaries:
+    1. Recombines hyphenated words split across pages (participat- \n {{page}} \n ing).
+    2. Removes unwanted newlines after page tags to maintain sentence flow.
+    """
+    
+    # 1. Fix Hyphenated Words
+    # PATTERN: word- [newline] {{page...}} [newline] remainder
+    # REPLACEMENT: {{page...}}wordremainder (Hyphen removed, tag moved before)
+    wikitext = re.sub(
+        r'([a-zA-Z]+)-\n\s*(\{\{page\|[^}]+\}\})\s*\n([a-zA-Z]+)',
+        r'\2\1\3',
+        wikitext
+    )
+
+    # 2. Fix Broken Sentences (Line Join)
+    # PATTERN: {{page...}} [newline] Text
+    # REPLACEMENT: {{page...}}Text (Newline removed)
+    wikitext = re.sub(
+        r'(\{\{page\|[^}]+\}\})\n',
+        r'\1',
+        wikitext
+    )
+    
+    return wikitext
 
 def get_all_pdf_files(root_folder):
     """Recursively finds all PDF files and sorts them naturally."""
@@ -341,6 +367,24 @@ if start_btn:
 
                 if is_last_page:
                     new_text = new_text + "\n__NOTOC__"
+                
+                # ... [Upload Logic for the current page] ...
+                res = upload_to_bahaiworks(wiki_title, final_wikitext, summary)
+                
+                # --- CLEANUP STEP (Trigger only on last page) ---
+                if is_last_page:
+                    log_area.text(f"🧹 Running final seam cleanup on {short_name}...")
+                    
+                    # 1. Fetch the FULL finished document
+                    full_text, _ = fetch_wikitext(wiki_title)
+                    
+                    # 2. Run the regex fixes
+                    cleaned_text = cleanup_page_seams(full_text)
+                    
+                    # 3. Save again if changes were made
+                    if cleaned_text != full_text:
+                        upload_to_bahaiworks(wiki_title, cleaned_text, "Automated Cleanup: Seams & Hyphens")
+                        log_area.text(f"✨ Cleanup saved!")
                 
                 if "GEMINI_ERROR" in new_text:
                     raise Exception(new_text)
