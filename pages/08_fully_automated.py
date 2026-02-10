@@ -30,15 +30,18 @@ STATE_FILE = os.path.join(project_root, "automation_state.json")
 st.set_page_config(page_title="Fully Automated Proofreader", page_icon="🤖", layout="wide")
 
 # ==============================================================================
-# 1. UPDATED GEMINI PROMPT (With Formatting)
+# 1. HELPER FUNCTIONS
 # ==============================================================================
+
 def fetch_wikitext(title):
     """
-    Fetches the latest revision of a page.
-    Returns: (content, error_message)
+    Fetches the absolute latest revision of a page from the live Wiki.
+    
+    Returns: 
+        (content, error_message)
     """
     try:
-        # Generic header to avoid blocking
+        # User-Agent header is often required to avoid 403 blocks from Wiki APIs
         headers = {"User-Agent": "BahaiWorksDashboard/1.0 (internal tool)"}
         params = {
             "action": "query",
@@ -54,10 +57,11 @@ def fetch_wikitext(title):
         
         pages = data.get('query', {}).get('pages', {})
         for pid in pages:
+            # MediaWiki returns "-1" if the page is missing
             if pid == "-1":
                 return None, f"Page '{title}' does not exist (ID -1)."
             
-            # Return content
+            # Extract the raw wikitext from the main slot
             return pages[pid]['revisions'][0]['slots']['main']['*'], None
             
     except Exception as e:
@@ -65,30 +69,36 @@ def fetch_wikitext(title):
     
     return None, "Unknown Error"
 
-def proofread_with_formatting(image):
+
+def inject_text_into_page(wikitext, page_num, new_content):
     """
-    Sends image to Gemini with specific instructions for MediaWiki formatting.
+    Surgically replaces content between {{page|X}} tags.
+    
+    1. Finds {{page|X|...}}
+    2. Finds the START of the NEXT {{page|...}} tag (or end of file).
+    3. Replaces everything in between with `new_content`.
     """
-    model = genai.GenerativeModel('gemini-1.5-pro')
+    # Regex matches: {{page | 19 }} OR {{page | 19 | file=... }}
+    # We use re.IGNORECASE to handle variations like {{Page...}}
+    pattern_start = re.compile(r'(\{\{page\s*\|\s*' + str(page_num) + r'(?:\||\}\}))', re.IGNORECASE)
+    match_start = pattern_start.search(wikitext)
     
-    prompt = """
-    You are an expert transcriber and editor for a MediaWiki archive.
+    if not match_start:
+        return None, f"Tag {{page|{page_num}}} not found in live text."
+        
+    # The insertion point starts immediately after the closing brackets/pipe of the first tag
+    start_pos = match_start.end()
     
-    Your task:
-    1.  Transcribe the text from this image exactly as it appears, correcting only obvious OCR errors (typos, broken words).
-    2.  **FORMATTING IS CRITICAL:**
-        -   If you see a **Header**, use MediaWiki syntax (e.g., `== Header ==` or `=== Subheader ===`).
-        -   If you see a **Table**, transcribe it as a MediaWiki table (`{| class="wikitable" ... |}`).
-        -   If you see **Bold** or *Italic* text, preserve it using `'''bold'''` and `''italic''`.
-        -   Do NOT add any conversational filler ("Here is the text", "I have transcribed...").
-        -   Output ONLY the raw wikitext.
-    """
+    # Find the START of the NEXT page tag to define the boundary
+    pattern_next = re.compile(r'\{\{page\s*\|')
+    match_next = pattern_next.search(wikitext, start_pos)
     
-    try:
-        response = model.generate_content([prompt, image])
-        return response.text
-    except Exception as e:
-        return f"GEMINI_ERROR: {str(e)}"
+    # If no next tag, assume we replace until the end of the document
+    end_pos = match_next.start() if match_next else len(wikitext)
+    
+    # Construct the new string
+    new_wikitext = wikitext[:start_pos] + "\n" + new_content.strip() + "\n" + wikitext[end_pos:]
+    return new_wikitext, None
 
 # ==============================================================================
 # 2. STATE MANAGEMENT
