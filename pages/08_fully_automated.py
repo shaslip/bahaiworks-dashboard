@@ -8,6 +8,7 @@ import fitz  # PyMuPDF
 import google.generativeai as genai
 from PIL import Image
 import io
+import requests
 
 # --- Path Setup ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -15,7 +16,7 @@ project_root = os.path.dirname(current_dir)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-from src.mediawiki_uploader import upload_to_bahaiworks, fetch_wikitext, API_URL
+from src.mediawiki_uploader import upload_to_bahaiworks, API_URL
 
 # --- Configuration ---
 if 'GEMINI_API_KEY' not in os.environ:
@@ -31,6 +32,38 @@ st.set_page_config(page_title="Fully Automated Proofreader", page_icon="🤖", l
 # ==============================================================================
 # 1. UPDATED GEMINI PROMPT (With Formatting)
 # ==============================================================================
+def fetch_wikitext(title):
+    """
+    Fetches the latest revision of a page.
+    Returns: (content, error_message)
+    """
+    try:
+        # Generic header to avoid blocking
+        headers = {"User-Agent": "BahaiWorksDashboard/1.0 (internal tool)"}
+        params = {
+            "action": "query",
+            "prop": "revisions",
+            "titles": title,
+            "rvprop": "content",
+            "format": "json",
+            "rvslots": "main"
+        }
+        
+        response = requests.get(API_URL, params=params, headers=headers, timeout=10)
+        data = response.json()
+        
+        pages = data.get('query', {}).get('pages', {})
+        for pid in pages:
+            if pid == "-1":
+                return None, f"Page '{title}' does not exist (ID -1)."
+            
+            # Return content
+            return pages[pid]['revisions'][0]['slots']['main']['*'], None
+            
+    except Exception as e:
+        return None, str(e)
+    
+    return None, "Unknown Error"
 
 def proofread_with_formatting(image):
     """
