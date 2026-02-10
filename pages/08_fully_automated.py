@@ -163,11 +163,12 @@ def cleanup_page_seams(wikitext):
     return wikitext
 
 def get_all_pdf_files(root_folder):
-    """Recursively finds all PDF files and sorts them naturally."""
+    """Recursively finds all PDF files, ignoring those marked as '-old', and sorts them naturally."""
     pdf_files = []
     for dirpath, _, filenames in os.walk(root_folder):
         for f in filenames:
-            if f.lower().endswith(".pdf"):
+            # Check if it is a PDF and NOT an 'old' version
+            if f.lower().endswith(".pdf") and "-old" not in f.lower():
                 full_path = os.path.join(dirpath, f)
                 pdf_files.append(full_path)
     
