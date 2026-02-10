@@ -99,42 +99,55 @@ def fetch_wikitext(title):
     
     return None, "Unknown Error"
 
-def inject_text_into_page(wikitext, page_num, new_content):
+def inject_text_into_page(wikitext, page_num, new_content, pdf_filename):
     """
-    Surgically replaces content FOLLOWING {{page|X...}} tag, preserving the tag itself.
+    Surgically replaces content FOLLOWING {{page|X...}} tag.
+    
+    NEW: If the tag does NOT exist, it appends the new page to the end of the file.
     """
-    # 1. Find the start of the specific page tag
-    # Matches {{page|2}} or {{page|2|...}}
+    # 1. Try to find the existing tag
     pattern_tag_start = re.compile(r'\{\{page\s*\|\s*' + str(page_num) + r'(?:\||\}\})', re.IGNORECASE)
     match = pattern_tag_start.search(wikitext)
     
-    if not match:
-        return None, f"Tag {{page|{page_num}}} not found in live text."
+    if match:
+        # --- EXISTING PAGE LOGIC ---
+        # Find closing }}
+        tag_start_index = match.start()
+        tag_end_index = wikitext.find("}}", tag_start_index)
         
-    # 2. Find the CLOSING }} of this specific tag to ensure we don't cut off attributes
-    # We search starting from the beginning of the match
-    tag_start_index = match.start()
-    
-    # We need to find the FIRST "}}" that occurs after the start of the tag
-    # This correctly handles {{page|2|file=foo.pdf}}
-    tag_end_index = wikitext.find("}}", tag_start_index)
-    
-    if tag_end_index == -1:
-         return None, f"Malformed tag: {{page|{page_num}}} has no closing '}}'."
-         
-    # The content starts AFTER the closing brackets }} (index + 2 chars)
-    content_start_pos = tag_end_index + 2
-    
-    # 3. Find the START of the NEXT page tag to define the end of content
-    pattern_next = re.compile(r'\{\{page\s*\|')
-    match_next = pattern_next.search(wikitext, content_start_pos)
-    
-    content_end_pos = match_next.start() if match_next else len(wikitext)
-    
-    # 4. Splice
-    new_wikitext = wikitext[:content_start_pos] + "\n" + new_content.strip() + "\n" + wikitext[content_end_pos:]
-    
-    return new_wikitext, None
+        if tag_end_index == -1:
+             return None, f"Malformed tag: {{page|{page_num}}} has no closing '}}'."
+             
+        # Content starts after closing }}
+        content_start_pos = tag_end_index + 2
+        
+        # Find start of NEXT tag to define end of content
+        pattern_next = re.compile(r'\{\{page\s*\|')
+        match_next = pattern_next.search(wikitext, content_start_pos)
+        
+        content_end_pos = match_next.start() if match_next else len(wikitext)
+        
+        # Splice
+        new_wikitext = wikitext[:content_start_pos] + "\n" + new_content.strip() + "\n" + wikitext[content_end_pos:]
+        return new_wikitext, None
+
+    else:
+        # --- NEW PAGE APPEND LOGIC ---
+        # The tag doesn't exist. We assume this is a new page at the end of the document.
+        # Check if we should append. Usually, if page_num is > 1, it's safe to append.
+        
+        # Construct the new tag
+        # We use the filename from the script state to build {{page|X|file=...|page=X}}
+        new_tag = f"{{{{page|{page_num}|file={pdf_filename}|page={page_num}}}}}"
+        
+        # Append to the end
+        # Ensure there is a newline before the new page
+        if not wikitext.endswith("\n"):
+            wikitext += "\n"
+            
+        new_wikitext = wikitext + "\n" + new_tag + "\n" + new_content.strip()
+        
+        return new_wikitext, None
 
 def cleanup_page_seams(wikitext):
     """
