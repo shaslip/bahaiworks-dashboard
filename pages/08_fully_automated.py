@@ -33,6 +33,36 @@ st.set_page_config(page_title="Fully Automated Proofreader", page_icon="🤖", l
 # ==============================================================================
 # 1. HELPER FUNCTIONS
 # ==============================================================================
+def generate_header(current_issue_num):
+    """
+    Generates the MediaWiki {{header}} template.
+    Calculates Previous/Next links based on the current issue number.
+    """
+    try:
+        curr = int(current_issue_num)
+        prev_num = curr - 1
+        next_num = curr + 1
+        
+        # Logic for first issue (No Previous)
+        prev_link = f"[[../../Issue {prev_num}/Text|Previous]]" if prev_num > 0 else ""
+        
+        # We assume there is always a next issue for now, or you can add max_issue logic
+        next_link = f"[[../../Issue {next_num}/Text|Next]]"
+
+        header = f"""{{{{header
+ | title      = [[../../]]
+ | author     = 
+ | translator = 
+ | section    = Issue {curr}
+ | previous   = {prev_link}
+ | next       = {next_link}
+ | notes      = {{{{bnreturn}}}}{{{{ps|1}}}}
+ | categories = 
+}}}}
+"""
+        return header
+    except ValueError:
+        return "" # Fail gracefully if issue isn't a number
 
 def fetch_wikitext(title):
     """
@@ -289,6 +319,28 @@ if start_btn:
                 # B. Gemini Processing
                 log_area.text(f"✨ Gemini is proofreading Page {page_num}...")
                 new_text = proofread_with_formatting(img)
+                
+                if "GEMINI_ERROR" in new_text:
+                    raise Exception(new_text)
+
+                # --- HEADER INJECTION (Page 1 Only) ---
+                if page_num == 1:
+                    # Extract issue number from filename (e.g. US_Supplement_1.pdf -> 1)
+                    match = re.search(r'(\d+)', short_name)
+                    if match:
+                        issue_num = match.group(1)
+                        header = generate_header(issue_num)
+                        new_text = header + "\n" + new_text
+
+                # --- NOTOC INJECTION (Last Page Only) ---
+                # We need to know if this is the last page. 
+                # fitz (PyMuPDF) lets us check page count.
+                doc = fitz.open(pdf_path)
+                is_last_page = (page_num == len(doc))
+                doc.close()
+
+                if is_last_page:
+                    new_text = new_text + "\n__NOTOC__"
                 
                 if "GEMINI_ERROR" in new_text:
                     raise Exception(new_text)
