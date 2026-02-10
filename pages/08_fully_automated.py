@@ -338,5 +338,8 @@ if start_btn:
 
     # End of Loop
     st.success("🎉 Batch Processing Complete!")
-    # Reset state or mark as done
-    save_state(0, 1, "done")
+    
+    # FIX: Save the index of the NEXT file so we can resume later
+    # If we just finished file 'i', we want to start at 'i + 1' next time
+    # 'end_idx' holds the value of the next file index in the logic
+    save_state(end_idx, 1, "done", last_file_path=short_name)
