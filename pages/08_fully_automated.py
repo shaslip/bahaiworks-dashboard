@@ -349,17 +349,27 @@ if start_btn:
                 
                 # --- PAGE 1 SPECIAL HANDLING (Header & OCR Removal) ---
                 if page_num == 1:
-                    # 1. Remove {{ocr}} tags (with or without params)
-                    # Matches {{ocr}} or {{ocr|amount=5}} etc.
+                    # 1. Remove {{ocr}} tags
                     current_wikitext = re.sub(r'\{\{ocr.*?\}\}\n?', '', current_wikitext, flags=re.IGNORECASE)
 
-                    # 2. Generate and Prepend Header (if not already present)
+                    # 2. Extract Year from [[Category:YYYY]]
+                    # We search the WHOLE document (current_wikitext) for the year category
+                    found_year = None
+                    cat_match = re.search(r'\[\[Category:\s*(\d{4})\s*\]\]', current_wikitext, re.IGNORECASE)
+                    
+                    if cat_match:
+                        found_year = cat_match.group(1)
+                        # Remove the category tag from the text (Move it to header)
+                        current_wikitext = re.sub(r'\[\[Category:\s*\d{4}\s*\]\]\n?', '', current_wikitext, flags=re.IGNORECASE)
+
+                    # 3. Generate and Prepend Header
                     match = re.search(r'(\d+)', short_name)
                     if match:
                         issue_num = match.group(1)
-                        header = generate_header(issue_num)
+                        # Pass the found year to the header generator
+                        header = generate_header(issue_num, year=found_year)
                         
-                        # Only prepend if it's not already there to avoid duplicates on re-runs
+                        # Prepend if missing
                         if "{{header" not in current_wikitext:
                             current_wikitext = header + "\n" + current_wikitext.lstrip()
                 # ------------------------------------------------------
