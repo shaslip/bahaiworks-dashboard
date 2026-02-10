@@ -389,7 +389,7 @@ if start_btn:
                 
                 # D. Inject Content
                 log_area.text(f"💉 Injecting content into {{page|{page_num}}}...")
-                final_wikitext, inject_error = inject_text_into_page(current_wikitext, page_num, new_text)
+                final_wikitext, inject_error = inject_text_into_page(current_wikitext, page_num, new_text, short_name)
                 
                 if inject_error:
                     st.error(f"CRITICAL ERROR on {short_name} Page {page_num}: {inject_error}")
