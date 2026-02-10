@@ -16,6 +16,7 @@ project_root = os.path.dirname(current_dir)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
+from src.gemini_processor import proofread_with_formatting
 from src.mediawiki_uploader import upload_to_bahaiworks, API_URL
 
 # --- Configuration ---
@@ -168,31 +169,6 @@ def get_page_image_data(pdf_path, page_num_1_based):
     img = Image.open(io.BytesIO(pix.tobytes("png")))
     doc.close()
     return img
-
-def inject_text_into_page(wikitext, page_num, new_content):
-    """
-    Finds {{page|X|...}} and replaces content until the next tag.
-    """
-    # Regex to find the specific page tag
-    # We look for {{page|X}} or {{page|X|...}} 
-    # The 'X' must be exact match, so we use boundary or pipe
-    pattern_start = re.compile(r'(\{\{page\s*\|\s*' + str(page_num) + r'(?:\||\}\}))', re.IGNORECASE)
-    match_start = pattern_start.search(wikitext)
-    
-    if not match_start:
-        return None, f"Tag {{page|{page_num}}} not found."
-        
-    start_pos = match_start.end()
-    
-    # Find the START of the NEXT page tag (or end of string)
-    pattern_next = re.compile(r'\{\{page\s*\|')
-    match_next = pattern_next.search(wikitext, start_pos)
-    
-    end_pos = match_next.start() if match_next else len(wikitext)
-    
-    # Splice
-    new_wikitext = wikitext[:start_pos] + "\n" + new_content.strip() + "\n" + wikitext[end_pos:]
-    return new_wikitext, None
 
 # ==============================================================================
 # 4. UI & MAIN LOGIC
