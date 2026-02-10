@@ -204,6 +204,13 @@ def proofread_with_formatting(image):
     
     try:
         response = model.generate_content([prompt, image])
-        return response.text.strip()
+        text = response.text.strip()
+        
+        # Remove leading whitespace from every line.
+        # Gemini sometimes indents paragraphs, which MediaWiki renders as <pre> blocks.
+        # This regex matches the start of any line (^) followed by spaces/tabs ([ \t]+) and removes them.
+        text = re.sub(r'^[ \t]+', '', text, flags=re.MULTILINE)
+        
+        return text
     except Exception as e:
         return f"GEMINI_ERROR: {str(e)}"
