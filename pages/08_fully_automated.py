@@ -32,21 +32,21 @@ st.set_page_config(page_title="Fully Automated Proofreader", page_icon="🤖", l
 # 1. HELPER FUNCTIONS
 # ==============================================================================
 
-def generate_header(current_issue_num):
+def generate_header(current_issue_num, year=None):
     """
     Generates the MediaWiki {{header}} template.
-    Calculates Previous/Next links based on the current issue number.
+    Now supports an optional 'year' for the categories parameter.
     """
     try:
         curr = int(current_issue_num)
         prev_num = curr - 1
         next_num = curr + 1
         
-        # Logic for first issue (No Previous)
         prev_link = f"[[../../Issue {prev_num}/Text|Previous]]" if prev_num > 0 else ""
-        
-        # We assume there is always a next issue for now
         next_link = f"[[../../Issue {next_num}/Text|Next]]"
+        
+        # Format categories
+        cat_str = str(year) if year else ""
 
         header = f"""{{{{header
  | title      = [[../../]]
@@ -56,12 +56,12 @@ def generate_header(current_issue_num):
  | previous   = {prev_link}
  | next       = {next_link}
  | notes      = {{{{bnreturn}}}}{{{{ps|1}}}}
- | categories = 
+ | categories = {cat_str}
 }}}}
 """
         return header
     except ValueError:
-        return "" # Fail gracefully if issue isn't a number
+        return ""
 
 def fetch_wikitext(title):
     """
