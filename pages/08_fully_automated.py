@@ -145,16 +145,21 @@ def get_all_pdf_files(root_folder):
 
 def get_wiki_title(local_path, root_folder, base_wiki_title):
     """
-    Converts local path to Wiki Title.
-    Ex: /data/US_Supp/Vol1/Issue_1.pdf -> U.S._Supplement/Issue_1/Text
-    Ignores intermediate folders, uses filename only.
+    Extracts the issue number from the filename to match Wiki format.
+    Ex: 'US_Supplement_1.pdf' -> 'U.S._Supplement/Issue_1/Text'
     """
-    # Get just the filename "Issue_1.pdf"
     filename = os.path.basename(local_path)
-    # Remove extension "Issue_1"
-    clean_name = os.path.splitext(filename)[0]
     
-    # Construct final title: Base + Filename + /Text
+    # Extract the number from the filename (e.g., "1" from "US_Supplement_1")
+    match = re.search(r'(\d+)', filename)
+    
+    if match:
+        issue_num = match.group(1)
+        # Construct standard Wiki format: Base / Issue_X / Text
+        return f"{base_wiki_title}/Issue_{issue_num}/Text"
+    
+    # Fallback: Use full filename if no number is found
+    clean_name = os.path.splitext(filename)[0]
     return f"{base_wiki_title}/{clean_name}/Text"
 
 def get_page_image_data(pdf_path, page_num_1_based):
