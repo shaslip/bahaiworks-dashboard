@@ -352,15 +352,14 @@ if start_btn:
                     # 1. Remove {{ocr}} tags
                     current_wikitext = re.sub(r'\{\{ocr.*?\}\}\n?', '', current_wikitext, flags=re.IGNORECASE)
 
-                    # 2. Extract Year from [[Category:YYYY]]
-                    # We search the WHOLE document (current_wikitext) for the year category
+                    # 2. Extract Year from [[Category:YYYY]] (Read-only)
+                    # We grab it now so we can put it in the header. 
+                    # We rely on the Last Page overwrite to actually delete the tag from the footer later.
                     found_year = None
                     cat_match = re.search(r'\[\[Category:\s*(\d{4})\s*\]\]', current_wikitext, re.IGNORECASE)
                     
                     if cat_match:
                         found_year = cat_match.group(1)
-                        # Remove the category tag from the text (Move it to header)
-                        current_wikitext = re.sub(r'\[\[Category:\s*\d{4}\s*\]\]\n?', '', current_wikitext, flags=re.IGNORECASE)
 
                     # 3. Generate and Prepend Header
                     match = re.search(r'(\d+)', short_name)
