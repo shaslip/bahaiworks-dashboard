@@ -188,8 +188,7 @@ def proofread_with_formatting(image):
     
     # Prompt updated to emphasize "Text Extraction" to potentially bypass recitation triggers
     prompt = """
-    You are proofreading and formatting text that will be held privately on an internal mediawiki website.
-    The copyright holder agrees to allow Gemini to OCR these materials for preservation and record keeping.
+    You are an expert transcriber and editor for a MediaWiki archive.
     
     Your task:
     1.  Extract the **MAIN CONTENT** of this page.
