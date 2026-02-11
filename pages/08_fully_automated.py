@@ -16,7 +16,7 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 # --- Imports ---
-from src.gemini_processor import proofread_with_formatting
+from src.gemini_processor import proofread_with_formatting, transcribe_with_document_ai
 from src.mediawiki_uploader import upload_to_bahaiworks, API_URL
 
 # --- Configuration ---
@@ -317,12 +317,17 @@ if start_btn:
         status_container.caption(f"Target Wiki Page: `{wiki_title}`")
         
         # 4b. Resume Page Logic
-        # If we are on the same file as saved state, resume page. Else start at 1.
         if i == state['current_file_index']:
             start_page = state['current_page_num']
         else:
             start_page = 1
             
+        # --- NEW: Fallback Flag Reset ---
+        # We reset this for every new file. If we resume a file in the middle, 
+        # it defaults to False (try Gemini first), but will quickly switch back 
+        # if it hits a copyright block again.
+        fallback_enabled = False 
+        
         # 4c. Iterate Pages in PDF
         page_num = start_page
         
@@ -336,28 +341,42 @@ if start_btn:
                 break
             
             try:
-                # B. Gemini Processing
-                log_area.text(f"✨ Gemini is proofreading Page {page_num}...")
-                new_text = proofread_with_formatting(img)
+                # B. Processing (Gemini vs Document AI)
+                new_text = ""
+                
+                # If we have already triggered fallback (e.g. on Page 1 or previous page), use DocAI directly
+                if fallback_enabled:
+                    log_area.text(f"🤖 [Fallback] Document AI processing Page {page_num}...")
+                    new_text = transcribe_with_document_ai(img)
+                else:
+                    # Try Gemini Normal Flow
+                    log_area.text(f"✨ Gemini is proofreading Page {page_num}...")
+                    new_text = proofread_with_formatting(img)
                 
                 # --- HANDLING ERRORS & SKIPS ---
-                if "GEMINI_ERROR" in new_text:
-                    # If it's the Copyright error, we SKIP this page but keep the script running
+                if "GEMINI_ERROR" in new_text or "DOCAI_ERROR" in new_text:
+                    
+                    # Specific Logic: Gemini Copyright/Recitation Block
                     if "Recitation" in new_text or "Copyright" in new_text:
-                        st.warning(f"⚠️ Skipped Page {page_num} due to Copyright/Recitation block (after retries).")
+                        st.warning(f"⚠️ Copyright block detected on Page {page_num}. Switching to Document AI fallback.")
                         
-                        # Save state for the NEXT page so we don't get stuck here if we restart later
-                        save_state(i, page_num + 1, "running", last_file_path=short_name)
+                        # 1. Enable Fallback for future pages in this file
+                        fallback_enabled = True
                         
-                        page_num += 1
-                        continue # Skip to next iteration of the while loop (next page)
-                    else:
-                        # For other errors (API down, auth issues), we typically want to stop
+                        # 2. Re-process THIS page immediately using Document AI
+                        log_area.text(f"🔄 Retrying Page {page_num} with Document AI...")
+                        new_text = transcribe_with_document_ai(img)
+                        
+                        # Check if DocAI also failed
+                        if "DOCAI_ERROR" in new_text:
+                             raise Exception(f"Fallback Failed: {new_text}")
+
+                    # Handle other errors (API down, etc)
+                    elif "GEMINI_ERROR" in new_text or "DOCAI_ERROR" in new_text:
                         raise Exception(new_text)
 
                 # --- NOTOC INJECTION (Last Page Only) ---
-                # We need to know if this is the last page. 
-                # fitz (PyMuPDF) lets us check page count.
+                # ... [Rest of the loop logic remains exactly the same] ...
                 doc = fitz.open(pdf_path)
                 is_last_page = (page_num == len(doc))
                 doc.close()
