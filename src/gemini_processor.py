@@ -2,7 +2,10 @@ import os
 import json
 import re
 import time
+import io
 import google.generativeai as genai
+from google.cloud import documentai
+from google.api_core.client_options import ClientOptions
 from pdf2image import convert_from_path
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
@@ -157,6 +160,45 @@ def extract_toc_from_pdf(pdf_path, page_range_str):
     except Exception as e:
         print(f"Debug: API Exception: {e}")
         return {"toc_json": [], "toc_wikitext": "", "error": str(e)}
+
+def transcribe_with_document_ai(image):
+    """
+    Fallback function using Google Cloud Document AI (OCR).
+    Used when Gemini refuses to process content due to copyright/recitation.
+    """
+    project_id = os.environ.get("GCP_PROJECT_ID")
+    location = os.environ.get("GCP_LOCATION", "us")
+    processor_id = os.environ.get("GCP_PROCESSOR_ID")
+
+    if not all([project_id, location, processor_id]):
+        return "DOCAI_ERROR: Missing GCP_PROJECT_ID, GCP_LOCATION, or GCP_PROCESSOR_ID in .env"
+
+    try:
+        # You must set the api_endpoint if you use a location other than 'us'.
+        opts = ClientOptions(api_endpoint=f"{location}-documentai.googleapis.com")
+        client = documentai.DocumentProcessorServiceClient(client_options=opts)
+        
+        name = client.processor_path(project_id, location, processor_id)
+
+        # Convert PIL Image to Bytes
+        img_byte_arr = io.BytesIO()
+        image.save(img_byte_arr, format='JPEG')
+        content = img_byte_arr.getvalue()
+
+        # Load Binary Data into Document AI RawDocument Object
+        raw_document = documentai.RawDocument(content=content, mime_type="image/jpeg")
+
+        # Configure the process request
+        request = documentai.ProcessRequest(name=name, raw_document=raw_document)
+
+        # Process the document
+        result = client.process_document(request=request)
+        
+        # Return the raw text
+        return result.document.text
+
+    except Exception as e:
+        return f"DOCAI_ERROR: {str(e)}"
 
 def proofread_page(image):
     """
