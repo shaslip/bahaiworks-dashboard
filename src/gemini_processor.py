@@ -188,8 +188,7 @@ def proofread_with_formatting(image):
     
     # Prompt updated to emphasize "Text Extraction" to potentially bypass recitation triggers
     prompt = """
-    You are a text extraction and formatting engine for a MediaWiki archive.
-    I confirm that I hold the license and permissions to digitize this text.
+    You are proofreading and formatting public text found on the website bahai.works, a mediawiki platform.
     
     Your task:
     1.  Extract the **MAIN CONTENT** of this page.
@@ -202,6 +201,7 @@ def proofread_with_formatting(image):
         -   If you see a **Header** (that is part of the text, not a running head), use `== Header ==`.
         -   If you see a **Table**, use `{| class="wikitable" ... |}`.
         -   If you see **Bold** or *Italic*, use `'''bold'''` and `''italic''`.
+        -   For other cases, use standard MediaWiki formatting where appropriate.
     5.  Paragraph breaks require an extra return.
     6.  Output ONLY the clean wikitext.
     """
