@@ -203,6 +203,7 @@ def proofread_with_formatting(image):
         -   If you see a **Table**, use `{| class="wikitable" ... |}`.
         -   If you see **Bold** or *Italic*, use `'''bold'''` and `''italic''`.
         -   For other cases, use standard MediaWiki formatting where appropriate.
+        -   If the text has an OBVIOUS typo (e.g. "sentance"), transcribe it as: {{sic|sentance|sentence}}
     5.  Paragraph breaks require an extra return.
     6.  Output ONLY the clean wikitext.
     """
