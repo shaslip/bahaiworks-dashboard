@@ -16,7 +16,7 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 # --- Imports ---
-from src.gemini_processor import proofread_with_formatting, transcribe_with_document_ai
+from src.gemini_processor import proofread_with_formatting, transcribe_with_document_ai, reformat_raw_text
 from src.mediawiki_uploader import upload_to_bahaiworks, API_URL
 
 # --- Configuration ---
@@ -330,6 +330,8 @@ if start_btn:
         
         # 4c. Iterate Pages in PDF
         page_num = start_page
+
+        fallback_enabled = False
         
         while True:
             # A. Get Image
@@ -342,47 +344,58 @@ if start_btn:
             
             try:
                 # B. Processing (Gemini vs Document AI)
-                new_text = ""
+                final_text = ""
                 
                 # If we have already triggered fallback (e.g. on Page 1 or previous page), use DocAI directly
                 if fallback_enabled:
-                    log_area.text(f"🤖 [Fallback] Document AI processing Page {page_num}...")
-                    new_text = transcribe_with_document_ai(img)
-                else:
-                    # Try Gemini Normal Flow
-                    log_area.text(f"✨ Gemini is proofreading Page {page_num}...")
-                    new_text = proofread_with_formatting(img)
+                # --- FALLBACK ROUTINE ---
+                log_area.text(f"🤖 [Fallback] Document AI OCR Page {page_num}...")
+                raw_ocr = transcribe_with_document_ai(img)
                 
-                # --- HANDLING ERRORS & SKIPS ---
-                if "GEMINI_ERROR" in new_text or "DOCAI_ERROR" in new_text:
+                if "DOCAI_ERROR" in raw_ocr:
+                    st.error(f"Fallback Failed: {raw_ocr}")
+                    st.stop()
+                
+                log_area.text(f"🎨 [Fallback] Gemini Formatting Page {page_num}...")
+                final_text = reformat_raw_text(raw_ocr)
+                
+            else:
+                # --- STANDARD ROUTINE ---
+                log_area.text(f"✨ Gemini processing Page {page_num}...")
+                final_text = proofread_with_formatting(img)
+
+            # 2. Check for Copyright Block in Standard Routine
+            if "GEMINI_ERROR" in final_text:
+                if "Recitation" in final_text or "Copyright" in final_text:
+                    st.warning(f"⚠️ Copyright block on Page {page_num}. Engaging Fallback.")
                     
-                    # Specific Logic: Gemini Copyright/Recitation Block
-                    if "Recitation" in new_text or "Copyright" in new_text:
-                        st.warning(f"⚠️ Copyright block detected on Page {page_num}. Switching to Document AI fallback.")
+                    # Activate Fallback
+                    fallback_enabled = True
+                    
+                    # RETRY immediately with Fallback Routine
+                    log_area.text(f"🔄 Retrying Page {page_num} with DocAI + Reformatter...")
+                    
+                    # Step 1: DocAI
+                    raw_ocr = transcribe_with_document_ai(img)
+                    if "DOCAI_ERROR" in raw_ocr:
+                        st.error("Fallback OCR failed.")
+                        st.stop()
                         
-                        # 1. Enable Fallback for future pages in this file
-                        fallback_enabled = True
-                        
-                        # 2. Re-process THIS page immediately using Document AI
-                        log_area.text(f"🔄 Retrying Page {page_num} with Document AI...")
-                        new_text = transcribe_with_document_ai(img)
-                        
-                        # Check if DocAI also failed
-                        if "DOCAI_ERROR" in new_text:
-                             raise Exception(f"Fallback Failed: {new_text}")
+                    # Step 2: Gemini Text-to-Text Formatting
+                    final_text = reformat_raw_text(raw_ocr)
+                    
+                else:
+                    # Generic API error
+                    st.error(f"API Error: {final_text}")
+                    st.stop()
 
-                    # Handle other errors (API down, etc)
-                    elif "GEMINI_ERROR" in new_text or "DOCAI_ERROR" in new_text:
-                        raise Exception(new_text)
-
-                # --- NOTOC INJECTION (Last Page Only) ---
-                # ... [Rest of the loop logic remains exactly the same] ...
-                doc = fitz.open(pdf_path)
-                is_last_page = (page_num == len(doc))
-                doc.close()
-
-                if is_last_page:
-                    new_text = new_text + "\n__NOTOC__"
+            # 3. Last Page Check (Add NOTOC)
+            doc = fitz.open(pdf_path)
+            is_last_page = (page_num == len(doc))
+            doc.close()
+            
+            if is_last_page:
+                final_text += "\n__NOTOC__"
 
                 # C. Fetch Live Wiki Text
                 log_area.text(f"🌐 Fetching live text from {wiki_title}...")
