@@ -306,6 +306,10 @@ if start_btn:
     # If "Test Mode" is on, we only loop ONCE.
     end_idx = current_idx + 1 if run_mode.startswith("Test") else total_files
 
+    # --- Failure Tracking ---
+    consecutive_page1_failures = 0
+    global_fallback_active = False
+
     for i in range(current_idx, end_idx):
         pdf_path = pdf_files[i]
         
@@ -322,12 +326,13 @@ if start_btn:
         else:
             start_page = 1
             
-        # --- NEW: Fallback Flag Reset ---
-        # We reset this for every new file. If we resume a file in the middle, 
-        # it defaults to False (try Gemini first), but will quickly switch back 
-        # if it hits a copyright block again.
-        fallback_enabled = False 
-        
+        # --- Fallback Flag Logic ---
+        # If we hit 5 successive Page 1 failures, we force fallback for everything.
+        if global_fallback_active:
+             fallback_enabled = True
+        else:
+             fallback_enabled = False
+
         # 4c. Iterate Pages in PDF
         page_num = start_page
 
@@ -369,6 +374,13 @@ if start_btn:
                     if "Recitation" in final_text or "Copyright" in final_text:
                         st.warning(f"⚠️ Copyright block on Page {page_num}. Engaging Fallback.")
                         
+                        # --- NEW: Track Consecutive Page 1 Failures ---
+                        if page_num == 1:
+                            consecutive_page1_failures += 1
+                            if consecutive_page1_failures >= 5:
+                                global_fallback_active = True
+                                st.error("🚨 5 successive Page 1 failures detected. Switching to Document AI for all remaining files.")
+                        
                         # Activate Fallback
                         fallback_enabled = True
                         
@@ -388,6 +400,11 @@ if start_btn:
                         # Generic API error
                         st.error(f"API Error: {final_text}")
                         st.stop()
+                else:
+                    # --- NEW: Success Case ---
+                    # If Page 1 succeeded with Gemini, reset the failure counter
+                    if page_num == 1:
+                        consecutive_page1_failures = 0
 
                 # 3. Last Page Check (Add NOTOC)
                 doc = fitz.open(pdf_path)
