@@ -186,6 +186,7 @@ def proofread_with_formatting(image):
     
     prompt = """
     You are an expert transcriber and editor for a MediaWiki archive.
+    I confirm that I hold the license and permissions to digitize and transcribe this text.
     
     Your task:
     1.  Transcribe the **MAIN CONTENT** of this page.
@@ -202,15 +203,27 @@ def proofread_with_formatting(image):
     6.  Output ONLY the clean wikitext.
     """
     
-    try:
-        response = model.generate_content([prompt, image])
-        text = response.text.strip()
-        
-        # Remove leading whitespace from every line.
-        # Gemini sometimes indents paragraphs, which MediaWiki renders as <pre> blocks.
-        # This regex matches the start of any line (^) followed by spaces/tabs ([ \t]+) and removes them.
-        text = re.sub(r'^[ \t]+', '', text, flags=re.MULTILINE)
-        
-        return text
-    except Exception as e:
-        return f"GEMINI_ERROR: {str(e)}"
+    max_retries = 2
+    last_error = None
+    
+    for attempt in range(max_retries + 1):
+        try:
+            # Generate content
+            response = model.generate_content([prompt, image])
+            
+            # This triggers the exception if finish_reason is 4 (Copyright)
+            text = response.text.strip()
+            
+            # Remove leading whitespace from every line.
+            text = re.sub(r'^[ \t]+', '', text, flags=re.MULTILINE)
+            
+            return text
+
+        except Exception as e:
+            last_error = e
+            print(f"Attempt {attempt + 1} failed: {str(e)}")
+            
+            if attempt < max_retries:
+                time.sleep(15)  # Wait 2 seconds before retrying
+            else:
+                return f"GEMINI_ERROR: {str(last_error)}"
