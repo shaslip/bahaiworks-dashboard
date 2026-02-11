@@ -336,8 +336,6 @@ if start_btn:
         # 4c. Iterate Pages in PDF
         page_num = start_page
 
-        fallback_enabled = False
-        
         while True:
             # A. Get Image
             with st.spinner(f"📄 Reading Page {page_num}..."):
