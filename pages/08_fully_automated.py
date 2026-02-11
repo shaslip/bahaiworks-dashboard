@@ -348,54 +348,54 @@ if start_btn:
                 
                 # If we have already triggered fallback (e.g. on Page 1 or previous page), use DocAI directly
                 if fallback_enabled:
-                # --- FALLBACK ROUTINE ---
-                log_area.text(f"🤖 [Fallback] Document AI OCR Page {page_num}...")
-                raw_ocr = transcribe_with_document_ai(img)
-                
-                if "DOCAI_ERROR" in raw_ocr:
-                    st.error(f"Fallback Failed: {raw_ocr}")
-                    st.stop()
-                
-                log_area.text(f"🎨 [Fallback] Gemini Formatting Page {page_num}...")
-                final_text = reformat_raw_text(raw_ocr)
-                
-            else:
-                # --- STANDARD ROUTINE ---
-                log_area.text(f"✨ Gemini processing Page {page_num}...")
-                final_text = proofread_with_formatting(img)
-
-            # 2. Check for Copyright Block in Standard Routine
-            if "GEMINI_ERROR" in final_text:
-                if "Recitation" in final_text or "Copyright" in final_text:
-                    st.warning(f"⚠️ Copyright block on Page {page_num}. Engaging Fallback.")
-                    
-                    # Activate Fallback
-                    fallback_enabled = True
-                    
-                    # RETRY immediately with Fallback Routine
-                    log_area.text(f"🔄 Retrying Page {page_num} with DocAI + Reformatter...")
-                    
-                    # Step 1: DocAI
+                    # --- FALLBACK ROUTINE ---
+                    log_area.text(f"🤖 [Fallback] Document AI OCR Page {page_num}...")
                     raw_ocr = transcribe_with_document_ai(img)
-                    if "DOCAI_ERROR" in raw_ocr:
-                        st.error("Fallback OCR failed.")
-                        st.stop()
-                        
-                    # Step 2: Gemini Text-to-Text Formatting
-                    final_text = reformat_raw_text(raw_ocr)
                     
+                    if "DOCAI_ERROR" in raw_ocr:
+                        st.error(f"Fallback Failed: {raw_ocr}")
+                        st.stop()
+                    
+                    log_area.text(f"🎨 [Fallback] Gemini Formatting Page {page_num}...")
+                    final_text = reformat_raw_text(raw_ocr)
+                
                 else:
-                    # Generic API error
-                    st.error(f"API Error: {final_text}")
-                    st.stop()
+                    # --- STANDARD ROUTINE ---
+                    log_area.text(f"✨ Gemini processing Page {page_num}...")
+                    final_text = proofread_with_formatting(img)
 
-            # 3. Last Page Check (Add NOTOC)
-            doc = fitz.open(pdf_path)
-            is_last_page = (page_num == len(doc))
-            doc.close()
-            
-            if is_last_page:
-                final_text += "\n__NOTOC__"
+                # 2. Check for Copyright Block in Standard Routine
+                if "GEMINI_ERROR" in final_text:
+                    if "Recitation" in final_text or "Copyright" in final_text:
+                        st.warning(f"⚠️ Copyright block on Page {page_num}. Engaging Fallback.")
+                        
+                        # Activate Fallback
+                        fallback_enabled = True
+                        
+                        # RETRY immediately with Fallback Routine
+                        log_area.text(f"🔄 Retrying Page {page_num} with DocAI + Reformatter...")
+                        
+                        # Step 1: DocAI
+                        raw_ocr = transcribe_with_document_ai(img)
+                        if "DOCAI_ERROR" in raw_ocr:
+                            st.error("Fallback OCR failed.")
+                            st.stop()
+                            
+                        # Step 2: Gemini Text-to-Text Formatting
+                        final_text = reformat_raw_text(raw_ocr)
+                        
+                    else:
+                        # Generic API error
+                        st.error(f"API Error: {final_text}")
+                        st.stop()
+
+                # 3. Last Page Check (Add NOTOC)
+                doc = fitz.open(pdf_path)
+                is_last_page = (page_num == len(doc))
+                doc.close()
+                
+                if is_last_page:
+                    final_text += "\n__NOTOC__"
 
                 # C. Fetch Live Wiki Text
                 log_area.text(f"🌐 Fetching live text from {wiki_title}...")
@@ -411,8 +411,6 @@ if start_btn:
                     current_wikitext = re.sub(r'\{\{ocr.*?\}\}\n?', '', current_wikitext, flags=re.IGNORECASE)
 
                     # 2. Extract Year from [[Category:YYYY]] (Read-only)
-                    # We grab it now so we can put it in the header. 
-                    # We rely on the Last Page overwrite to actually delete the tag from the footer later.
                     found_year = None
                     cat_match = re.search(r'\[\[Category:\s*(\d{4})\s*\]\]', current_wikitext, re.IGNORECASE)
                     
@@ -433,7 +431,8 @@ if start_btn:
                 
                 # D. Inject Content
                 log_area.text(f"💉 Injecting content into {{page|{page_num}}}...")
-                final_wikitext, inject_error = inject_text_into_page(current_wikitext, page_num, new_text, short_name)
+                # FIXED: Changed 'new_text' to 'final_text'
+                final_wikitext, inject_error = inject_text_into_page(current_wikitext, page_num, final_text, short_name)
                 
                 if inject_error:
                     st.error(f"CRITICAL ERROR on {short_name} Page {page_num}: {inject_error}")
@@ -469,7 +468,6 @@ if start_btn:
                 # ----------------------------------------------------
 
                 # F. Update State (Success)
-                # We save the NEXT page number as the resume point
                 save_state(i, page_num + 1, "running", last_file_path=short_name)
                 
                 with status_container:
