@@ -200,6 +200,45 @@ def transcribe_with_document_ai(image):
     except Exception as e:
         return f"DOCAI_ERROR: {str(e)}"
 
+def reformat_raw_text(raw_text):
+    """
+    Step 2 of Fallback: Use Gemini to format the raw OCR text.
+    This bypasses the image-based copyright filter by processing text-to-text.
+    """
+    model = genai.GenerativeModel(MODEL_NAME)
+    
+    prompt = """
+    You are a MediaWiki formatting engine. 
+    I will provide raw OCR text. Your job is to format it for a Baha'i archive.
+    
+    RULES:
+    1.  **Do NOT rewrite content.** Only format it.
+    2.  **Remove** page headers, running heads, and page numbers.
+    3.  **ORTHOGRAPHY:** You MUST match the curly apostrophe (’) for Baha'i terms:
+        - "Bahá’í", "Bahá’u’lláh", "‘Abdu’l-Bahá"
+    4.  **FORMATTING:**
+        - Use `== Header ==` for section headers.
+        - Use `'''bold'''` and `''italic''` if implied by the text structure (e.g. all caps often implies headers).
+    5.  Preserve paragraph breaks.
+    
+    RAW TEXT START:
+    """
+    
+    try:
+        # We append the text to the prompt
+        full_prompt = prompt + f"\n{raw_text}\nRAW TEXT END"
+        
+        response = model.generate_content(full_prompt)
+        
+        # If Gemini *still* refuses (unlikely but possible on text), return raw text as fail-safe
+        if response.prompt_feedback.block_reason:
+             return f"FORMATTING_ERROR: {raw_text}" # Return raw so we at least save something
+             
+        return response.text.strip()
+        
+    except Exception as e:
+        return f"FORMATTING_ERROR: {raw_text}"
+
 def proofread_page(image):
     """
     Strict archival transcription (Original Logic).
