@@ -182,16 +182,18 @@ def proofread_with_formatting(image):
     Transcription WITH MediaWiki formatting.
     - Enforces specific Baha'i orthography (curly apostrophes).
     - Removes page headers/footers/page numbers.
+    - Includes RETRY logic for Copyright/Recitation errors.
     """
     model = genai.GenerativeModel(MODEL_NAME)
     
+    # Prompt updated to emphasize "Text Extraction" to potentially bypass recitation triggers
     prompt = """
-    You are an expert transcriber and editor for a MediaWiki archive.
-    I confirm that I hold the license and permissions to digitize and transcribe this text.
+    You are a text extraction and formatting engine for a MediaWiki archive.
+    I confirm that I hold the license and permissions to digitize this text.
     
     Your task:
-    1.  Transcribe the **MAIN CONTENT** of this page.
-    2.  From the second page on, **EXCLUDE** all page headers, running heads, and page numbers at the top or bottom of the page.
+    1.  Extract the **MAIN CONTENT** of this page.
+    2.  From the second page on, **EXCLUDE** all page headers, running heads, and page numbers.
     3.  **ORTHOGRAPHY:** You MUST match the curly apostrophe (’) if used in the document, eg:
         -   Write "Bahá’í" (Not Bahá'í)
         -   Write "Bahá’u’lláh" (Not Bahá'u'lláh)
@@ -205,14 +207,24 @@ def proofread_with_formatting(image):
     """
     
     max_retries = 2
-    last_error = None
     
     for attempt in range(max_retries + 1):
         try:
             # Generate content
             response = model.generate_content([prompt, image])
             
-            # This triggers the exception if finish_reason is 4 (Copyright)
+            # Check for Recitation/Copyright block (finish_reason 4)
+            # We check this BEFORE accessing .text to avoid the crash
+            if response.candidates and response.candidates[0].finish_reason == 4:
+                print(f"Attempt {attempt + 1}: Blocked by Copyright/Recitation filters.")
+                
+                if attempt < max_retries:
+                    time.sleep(2) # Brief pause before retry
+                    continue
+                else:
+                    return "GEMINI_ERROR: Recitation/Copyright Block"
+
+            # If we get here, it should be safe to access .text
             text = response.text.strip()
             
             # Remove leading whitespace from every line.
@@ -221,10 +233,8 @@ def proofread_with_formatting(image):
             return text
 
         except Exception as e:
-            last_error = e
-            print(f"Attempt {attempt + 1} failed: {str(e)}")
-            
+            print(f"Attempt {attempt + 1} Error: {str(e)}")
             if attempt < max_retries:
-                time.sleep(15)  # Wait 2 seconds before retrying
+                time.sleep(15)
             else:
-                return f"GEMINI_ERROR: {str(last_error)}"
+                return f"GEMINI_ERROR: {str(e)}"
