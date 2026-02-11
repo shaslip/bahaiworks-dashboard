@@ -340,8 +340,20 @@ if start_btn:
                 log_area.text(f"✨ Gemini is proofreading Page {page_num}...")
                 new_text = proofread_with_formatting(img)
                 
+                # --- HANDLING ERRORS & SKIPS ---
                 if "GEMINI_ERROR" in new_text:
-                    raise Exception(new_text)
+                    # If it's the Copyright error, we SKIP this page but keep the script running
+                    if "Recitation" in new_text or "Copyright" in new_text:
+                        st.warning(f"⚠️ Skipped Page {page_num} due to Copyright/Recitation block (after retries).")
+                        
+                        # Save state for the NEXT page so we don't get stuck here if we restart later
+                        save_state(i, page_num + 1, "running", last_file_path=short_name)
+                        
+                        page_num += 1
+                        continue # Skip to next iteration of the while loop (next page)
+                    else:
+                        # For other errors (API down, auth issues), we typically want to stop
+                        raise Exception(new_text)
 
                 # --- NOTOC INJECTION (Last Page Only) ---
                 # We need to know if this is the last page. 
