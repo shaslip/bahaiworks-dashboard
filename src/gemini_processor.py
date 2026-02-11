@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import time
 import google.generativeai as genai
 from pdf2image import convert_from_path
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
