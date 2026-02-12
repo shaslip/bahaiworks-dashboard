@@ -215,7 +215,7 @@ def reformat_raw_text(raw_text):
     1.  **Do NOT rewrite content.** Only format it.
     2.  **Remove** page headers, running heads, and page numbers.
     3.  **ORTHOGRAPHY:** You MUST match the curly apostrophe (’) for Baha'i terms:
-        - "Bahá’í", "Bahá’u’lláh", "‘Abdu’l-Bahá"
+        - "Bahá’í", "Bahá’u’lláh", "‘Abdu’l-Bahá" (match case of origional document)
     4.  **FORMATTING:**
         - Use `== Header ==` for section headers.
         - Use `'''bold'''` and `''italic''` if implied by the text structure (e.g. all caps often implies headers).
