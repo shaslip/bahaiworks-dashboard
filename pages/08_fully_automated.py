@@ -405,15 +405,25 @@ if start_btn:
                     final_text = reformat_raw_text(raw_ocr)
 
                     if "FORMATTING_ERROR" in final_text:
-                        # Log warning instead of Error/Stop
-                        st.warning(f"⚠️ DocAI Reformatter Failed on Page {page_num}. Skipping page. (Error: {final_text[:200]}...)")
+                        # --- Last Resort Fallback ---
+                        log_area.text(f"⚠️ DocAI Formatting failed. Attempting Gemini fallback...")
                         
-                        # Save state so we can resume from the NEXT page if the script stops later
-                        save_state(i, page_num + 1, "running", last_file_path=short_name)
+                        # Try Gemini directly as a Hail Mary
+                        gemini_rescue_text = proofread_with_formatting(img)
                         
-                        # Increment and skip to next iteration
-                        page_num += 1
-                        continue
+                        if "GEMINI_ERROR" not in gemini_rescue_text:
+                            final_text = gemini_rescue_text
+                            st.success(f"✨ Gemini successfully rescued Page {page_num}!")
+                        else:
+                            # Log warning instead of Error/Stop
+                            st.warning(f"⚠️ DocAI Reformatter Failed AND Gemini Fallback Failed on Page {page_num}. Skipping page.")
+                            
+                            # Save state so we can resume from the NEXT page if the script stops later
+                            save_state(i, page_num + 1, "running", last_file_path=short_name)
+                            
+                            # Increment and skip to next iteration
+                            page_num += 1
+                            continue
                 
                 else:
                     # Standard Gemini Routine
