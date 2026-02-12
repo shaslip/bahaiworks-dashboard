@@ -115,7 +115,7 @@ def inject_text_into_page(wikitext, page_num, new_content, pdf_filename):
     """
     Surgically replaces content FOLLOWING {{page|X...}} tag.
     
-    NEW: If the tag does NOT exist, it appends the new page to the end of the file.
+    NEW: Preserves {{BN_header...}} templates if found immediately after the page tag.
     """
     # 1. Try to find the existing tag
     pattern_tag_start = re.compile(r'\{\{page\s*\|\s*' + str(page_num) + r'(?:\||\}\})', re.IGNORECASE)
@@ -130,9 +130,21 @@ def inject_text_into_page(wikitext, page_num, new_content, pdf_filename):
         if tag_end_index == -1:
              return None, f"Malformed tag: {{page|{page_num}}} has no closing '}}'."
              
-        # Content starts after closing }}
+        # Content normally starts after closing }}
         content_start_pos = tag_end_index + 2
         
+        # --- PRESERVATION LOGIC (New) ---
+        # Check if a header template (like {{BN_header_...}}) follows immediately
+        # We look for {{BN_header...}} starting right after the page tag (ignoring whitespace)
+        # re.DOTALL ensures we capture multiline templates
+        # We assume the template ends with the first }}
+        remaining_text = wikitext[content_start_pos:]
+        header_match = re.match(r'^\s*\{\{BN_header_.*?\}\}', remaining_text, re.DOTALL | re.IGNORECASE)
+        
+        if header_match:
+            # Advance start position to AFTER this header template
+            content_start_pos += header_match.end()
+
         # Find start of NEXT tag to define end of content
         pattern_next = re.compile(r'\{\{page\s*\|')
         match_next = pattern_next.search(wikitext, content_start_pos)
