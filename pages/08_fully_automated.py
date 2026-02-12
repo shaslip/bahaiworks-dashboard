@@ -289,6 +289,19 @@ if st.sidebar.button("🗑️ Reset State (Start Over)"):
 
 st.sidebar.markdown(f"**Current State:**\n- File Index: `{state['current_file_index']}`\n- Page: `{state['current_page_num']}`")
 
+# --- Manual State Modification ---
+with st.sidebar.expander("🔧 Modify Position"):
+    # Input fields initialized with current state values
+    new_file_index = st.number_input("File Index (0-based)", min_value=0, value=state['current_file_index'])
+    new_page_num = st.number_input("Page Number", min_value=1, value=state['current_page_num'])
+    
+    if st.button("Update State"):
+        # Update the JSON file with your manual values
+        save_state(new_file_index, new_page_num, "manual_override", last_file_path=state.get('last_processed'))
+        st.sidebar.success("State updated!")
+        time.sleep(0.5) 
+        st.rerun()
+
 # --- Main Area ---
 
 if not input_folder or not os.path.exists(input_folder):
