@@ -192,12 +192,12 @@ def get_all_pdf_files(root_folder):
 def get_wiki_title(local_path, root_folder, base_wiki_title):
     """
     Extracts the issue number from the filename to match Wiki format.
-    Ex: 'US_Supplement_1.pdf' -> 'U.S._Supplement/Issue_1/Text'
+    Now supports ranges like '64-65'.
     """
     filename = os.path.basename(local_path)
     
-    # Extract the number from the filename (e.g., "1" from "US_Supplement_1")
-    match = re.search(r'(\d+)', filename)
+    # UPDATED: Capture digits, optionally followed by hyphen and more digits
+    match = re.search(r'(\d+(?:-\d+)?)', filename)
     
     if match:
         issue_num = match.group(1)
