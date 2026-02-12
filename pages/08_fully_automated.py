@@ -393,8 +393,15 @@ if start_btn:
                     final_text = reformat_raw_text(raw_ocr)
 
                     if "FORMATTING_ERROR" in final_text:
-                        st.error(f"DocAI Reformatter Failed: {final_text}")
-                        st.stop()
+                        # Log warning instead of Error/Stop
+                        st.warning(f"⚠️ DocAI Reformatter Failed on Page {page_num}. Skipping page. (Error: {final_text[:200]}...)")
+                        
+                        # Save state so we can resume from the NEXT page if the script stops later
+                        save_state(i, page_num + 1, "running", last_file_path=short_name)
+                        
+                        # Increment and skip to next iteration
+                        page_num += 1
+                        continue
                 
                 else:
                     # Standard Gemini Routine
