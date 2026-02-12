@@ -218,7 +218,6 @@ def reformat_raw_text(raw_text):
         - "Bahá’í", "Bahá’u’lláh", "‘Abdu’l-Bahá" (match case of origional document)
     4.  **FORMATTING:**
         - Use `== Header ==` for section headers.
-        - Use `'''bold'''` and `''italic''` if implied by the text structure (e.g. all caps often implies headers).
     5.  Preserve paragraph breaks.
     
     RAW TEXT START:
