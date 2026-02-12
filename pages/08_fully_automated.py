@@ -271,6 +271,12 @@ base_title = st.sidebar.text_input("Base Wiki Title", value="U.S._Supplement")
 
 run_mode = st.sidebar.radio("Run Mode", ["Test (1 PDF Only)", "Production (All PDFs)"])
 
+ocr_strategy = st.sidebar.radio(
+    "OCR Strategy", 
+    ["Gemini (Default)", "DocAI Only"], 
+    help="DocAI Only skips Gemini and goes straight to Google Cloud Vision OCR."
+)
+
 st.sidebar.divider()
 
 # Load State
@@ -358,28 +364,31 @@ if start_btn:
                 break
             
             try:
-                # B. Processing (Gemini vs Document AI)
+                # --- CHANGED: Strategy Logic ---
                 final_text = ""
-                
-                # If we have already triggered fallback (e.g. on Page 1 or previous page), use DocAI directly
-                if fallback_enabled:
-                    # --- FALLBACK ROUTINE ---
-                    log_area.text(f"🤖 [Fallback] Document AI OCR Page {page_num}...")
+                use_docai_now = (ocr_strategy == "DocAI Only") or fallback_enabled
+
+                if use_docai_now:
+                    log_area.text(f"🤖 [DocAI Mode] OCR Page {page_num}...")
                     raw_ocr = transcribe_with_document_ai(img)
                     
                     if "DOCAI_ERROR" in raw_ocr:
-                        st.error(f"Fallback Failed: {raw_ocr}")
+                        st.error(f"DocAI Failed: {raw_ocr}")
                         st.stop()
                     
-                    log_area.text(f"🎨 [Fallback] Gemini Formatting Page {page_num}...")
+                    log_area.text(f"🎨 [DocAI Mode] Formatting Page {page_num}...")
                     final_text = reformat_raw_text(raw_ocr)
+
+                    if "FORMATTING_ERROR" in final_text:
+                        st.error(f"DocAI Reformatter Failed: {final_text}")
+                        st.stop()
                 
                 else:
-                    # --- STANDARD ROUTINE ---
+                    # Standard Gemini Routine
                     log_area.text(f"✨ Gemini processing Page {page_num}...")
                     final_text = proofread_with_formatting(img)
 
-                # 2. Check for Copyright Block in Standard Routine
+                # --- CHANGED: Error Handling (Don't swallow errors) ---
                 if "GEMINI_ERROR" in final_text:
                     if "Recitation" in final_text or "Copyright" in final_text:
                         st.warning(f"⚠️ Copyright block on Page {page_num}. Engaging Fallback.")
@@ -407,8 +416,7 @@ if start_btn:
                         final_text = reformat_raw_text(raw_ocr)
                         
                     else:
-                        # Generic API error
-                        st.error(f"API Error: {final_text}")
+                        st.error(f"🛑 CRITICAL API ERROR on Page {page_num}: {final_text}")
                         st.stop()
                 else:
                     # --- NEW: Success Case ---
