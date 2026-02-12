@@ -35,12 +35,24 @@ st.set_page_config(page_title="Fully Automated Proofreader", page_icon="🤖", l
 def generate_header(current_issue_num, year=None):
     """
     Generates the MediaWiki {{header}} template.
-    Now supports an optional 'year' for the categories parameter.
+    Supports single issues (64) and ranges (64-65).
     """
     try:
-        curr = int(current_issue_num)
-        prev_num = curr - 1
-        next_num = curr + 1
+        # Check for range (e.g., "64-65")
+        if '-' in str(current_issue_num):
+            parts = str(current_issue_num).split('-')
+            start_num = int(parts[0])
+            end_num = int(parts[-1])
+            curr_display = current_issue_num
+            
+            # Logic: Prev is start-1, Next is end+1
+            prev_num = start_num - 1
+            next_num = end_num + 1
+        else:
+            curr = int(current_issue_num)
+            curr_display = str(curr)
+            prev_num = curr - 1
+            next_num = curr + 1
         
         prev_link = f"[[../../Issue {prev_num}/Text|Previous]]" if prev_num > 0 else ""
         next_link = f"[[../../Issue {next_num}/Text|Next]]"
@@ -52,7 +64,7 @@ def generate_header(current_issue_num, year=None):
  | title      = [[../../]]
  | author     = 
  | translator = 
- | section    = Issue {curr}
+ | section    = Issue {curr_display}
  | previous   = {prev_link}
  | next       = {next_link}
  | notes      = {{{{bnreturn}}}}{{{{ps|1}}}}
