@@ -469,18 +469,11 @@ if start_btn:
                     match = re.search(r'(\d+(?:-\d+)?)', short_name)
                     if match:
                         issue_num = match.group(1)
+                        # Pass the found year to the header generator
                         header = generate_header(issue_num, year=found_year)
                         
-                        # FORCE UPDATE: Regex to find existing header
-                        # Matches from {{header ... down to ... categories = ... }}
-                        header_pattern = re.compile(r'\{\{header\s*\|.*?\n\|\s*categories\s*=.*?\n\}\}', re.DOTALL | re.IGNORECASE)
-
-                        if header_pattern.search(current_wikitext):
-                            # Replace the existing header with the new one
-                            log_area.text(f"🔄 Updating existing header on Page {page_num}...")
-                            current_wikitext = header_pattern.sub(header.strip(), current_wikitext)
-                        else:
-                            # Prepend if no header exists
+                        # Prepend if missing
+                        if "{{header" not in current_wikitext:
                             current_wikitext = header + "\n" + current_wikitext.lstrip()
                 
                 # D. Inject Content
