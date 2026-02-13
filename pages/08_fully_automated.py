@@ -215,6 +215,14 @@ if total_files == 0:
     st.error("No PDF files found in the directory.")
     st.stop()
 
+# --- GUARD CLAUSE ---
+if state['current_file_index'] >= total_files:
+    st.warning(f"⚠️ Saved index ({state['current_file_index']}) is larger than total files ({total_files}). Resetting start position to 0.")
+    state['current_file_index'] = 0
+    state['current_page_num'] = 1
+    # Save the corrected state immediately
+    save_state(0, 1, "auto_reset")
+
 st.info(f"📂 Found {total_files} PDF files in `{input_folder}`")
 
 # 2. Status Display
