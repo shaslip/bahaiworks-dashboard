@@ -610,18 +610,17 @@ if start_btn:
                     # --- Gemini Path ---
                     final_text = proofread_with_formatting(img)
                     
-                    # Added 'final_text and' check to prevent TypeError if None is returned
                     if final_text and "GEMINI_ERROR" in final_text:
                         gemini_consecutive_failures += 1
                         
                         # Handle Failure Logic
                         if gemini_consecutive_failures == 2:
                             docai_cooldown_pages = 5
-                            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ 2 Consecutive Failures. Switching to DocAI for 5 pages.", color="#d97706")
+                            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ 2 Consecutive Failures on {correct_label}. Switching to DocAI for 5 pages.", color="#d97706")
                         
                         elif gemini_consecutive_failures >= 3:
                             permanent_docai = True
-                            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⛔ 3rd Strike (Retry Failed). Switching to DocAI for remainder of book.", color="red")
+                            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⛔ 3rd Strike (Retry Failed) on {correct_label}. Switching to DocAI for remainder of book.", color="red")
                         
                         else:
                             log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ Gemini Error ({gemini_consecutive_failures}/2) on {correct_label}. Fallback to DocAI.", color="#d97706")
@@ -632,8 +631,6 @@ if start_btn:
                     
                     else:
                         # Success! Reset consecutive counter.
-                        # Note: We do NOT reset if we are currently in a cooldown, 
-                        # but we are in the 'else' block which means we aren't in a cooldown.
                         gemini_consecutive_failures = 0
 
                 if not final_text or "ERROR" in final_text:
