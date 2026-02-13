@@ -88,6 +88,35 @@ def find_anchor_offset(wikitext):
                 return pdf_page - book_page + 1
     return None
 
+def get_processing_bounds(wikitext, total_pdf_pages, is_text_subpage):
+    """
+    Returns (start_page, end_page) for PDF processing.
+    If /Text, returns (1, total_pdf_pages).
+    Otherwise, scans for the first {{page|...|page=X}} to start,
+    and counts total {{page}} tags to determine the end.
+    """
+    if is_text_subpage:
+        return 1, total_pdf_pages
+
+    tags = list(re.finditer(r'\{\{page\|(.*?)\}\}', wikitext, re.IGNORECASE | re.DOTALL))
+    
+    if not tags:
+        # Fallback: If no tags found, process whole PDF
+        return 1, total_pdf_pages
+        
+    # Parse the first tag to find the starting PDF page
+    first_params = tags[0].group(1)
+    page_match = re.search(r'page\s*=\s*(\d+)', first_params, re.IGNORECASE)
+    
+    if page_match:
+        start_page = int(page_match.group(1))
+        # End page is start + count - 1
+        end_page = start_page + len(tags) - 1
+        # Clamp to physical PDF limit just in case
+        return start_page, min(end_page, total_pdf_pages)
+        
+    return 1, total_pdf_pages
+
 def process_header(wikitext, wiki_title):
     """
     Updates existing header OR creates a new one.
@@ -411,12 +440,6 @@ if start_btn:
             log_area.text(f"⚠️ No Anchor found. Assuming PDF Page 1 = Book Page 1.")
             
         # F. Determine Start Page for PDF Loop
-        if i == state['member_index']:
-            start_pdf_page = state['pdf_page_num']
-        else:
-            start_pdf_page = 1
-
-        # --- INNER LOOP: PDF Pages ---
         try:
             doc = fitz.open(local_path)
             total_pdf_pages = len(doc)
@@ -425,10 +448,23 @@ if start_btn:
             st.error(f"Failed to open PDF: {e}")
             continue
 
+        # F. Determine Start & End Pages based on /Text status
+        is_text_subpage = wiki_title.endswith("/Text")
+        scope_start, scope_end = get_processing_bounds(current_text, total_pdf_pages, is_text_subpage)
+
+        if i == state['member_index']:
+            # Resume: Start at saved state, but ensure it's at least the scope start
+            start_pdf_page = max(state['pdf_page_num'], scope_start)
+        else:
+            start_pdf_page = scope_start
+            
+        log_area.text(f"📖 Processing Range: PDF Pages {start_pdf_page} to {scope_end}")
+
         # Reset Gemini failure counter for this book
         gemini_failures = 0
 
-        for pdf_page in range(start_pdf_page, total_pdf_pages + 1):
+        # Loop runs until the determined scope_end
+        for pdf_page in range(start_pdf_page, scope_end + 1):
             
             # Stop Check
             if stop_btn:
@@ -495,7 +531,7 @@ if start_btn:
                     continue
                 
                 # 6. Check for __NOTOC__ (Last Page Only)
-                if pdf_page == total_pdf_pages:
+                if pdf_page == scope_end:
                     if "__NOTOC__" not in new_wikitext:
                         new_wikitext += "\n__NOTOC__"
                 
@@ -522,7 +558,7 @@ if start_btn:
             break 
 
         # Book Completed
-        if pdf_page == total_pdf_pages:
+        if pdf_page == scope_end:
             st.success(f"✅ Completed Book: {wiki_title}")
             save_state(i + 1, 1, wiki_title) 
 
