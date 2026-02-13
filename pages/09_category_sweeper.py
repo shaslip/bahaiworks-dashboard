@@ -405,6 +405,9 @@ if start_btn:
             st.error(f"Failed to open PDF: {e}")
             continue
 
+        # Reset Gemini failure counter for this book
+        gemini_failures = 0
+
         for pdf_page in range(start_pdf_page, total_pdf_pages + 1):
             
             # Stop Check
@@ -434,18 +437,35 @@ if start_btn:
             # Find {{page|...|page=1}} and force label to 'i' (or whatever correct_label is)
             current_text = find_and_fix_tag_by_page_num(current_text, pdf_filename, pdf_page, correct_label)
 
-            # 4. AI Processing (Gemini -> DocAI Fallback)
+            # 4. AI Processing (Gemini -> DocAI Fallback Logic)
             final_text = ""
             try:
-                if ocr_strategy == "Gemini (Default)":
+                # Decide Strategy
+                use_docai = False
+                
+                # Check Global or Local Overrides
+                if ocr_strategy == "DocAI Only":
+                    use_docai = True
+                elif gemini_failures >= 3:
+                    use_docai = True
+                    # Only log this once per page loop to avoid spamming
+                    if gemini_failures == 3: 
+                        log_area.text("🚨 3+ Gemini Failures detected. Switching to DocAI for remainder of book.")
+
+                if not use_docai:
+                    # Try Gemini
                     log_area.text("✨ Asking Gemini to proofread...")
                     final_text = proofread_with_formatting(img)
                     
                     if "GEMINI_ERROR" in final_text:
-                        log_area.text("⚠️ Gemini Error/Copyright. Falling back to DocAI...")
+                        log_area.text(f"⚠️ Gemini Failed. Switching to DocAI for this page.")
+                        gemini_failures += 1
+                        
+                        # Fallback Immediately
                         raw_ocr = transcribe_with_document_ai(img)
                         final_text = reformat_raw_text(raw_ocr)
                 else:
+                    # Use DocAI
                     log_area.text("🤖 DocAI Direct Mode...")
                     raw_ocr = transcribe_with_document_ai(img)
                     final_text = reformat_raw_text(raw_ocr)
