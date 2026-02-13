@@ -620,7 +620,7 @@ if start_btn:
                         
                         elif gemini_consecutive_failures >= 3:
                             permanent_docai = True
-                            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⛔ 3rd Strike (Retry Failed) on {correct_label}. Switching to DocAI for remainder of book.", color="red")
+                            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⛔ 3rd Strike (Retry Failed) on page {correct_label}. Switching to DocAI for remainder of book.", color="red")
                         
                         else:
                             log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ Gemini Error on page {correct_label} ({gemini_consecutive_failures}/2). Fallback to DocAI.", color="#d97706")
