@@ -56,68 +56,70 @@ def get_all_pdf_files(root_folder):
 def get_wiki_title(local_path, root_folder, base_wiki_title):
     """
     Determines the Wiki Page Title based on filename and folder structure.
-    Prioritizes explicit Volume/Issue markers.
+    Handles explicit Vol/Issue markers, Folder nesting, and implicit "Vol-Issue" patterns.
     """
     filename = os.path.basename(local_path)
-    # Get path relative to the input folder to avoid scanning unrelated system paths
+    
+    # 1. Clean filename of extension for easier regex
+    name_no_ext = os.path.splitext(filename)[0]
+
     try:
         rel_path = os.path.relpath(local_path, root_folder)
     except ValueError:
-        # Fallback if paths are on different drives
         rel_path = local_path
 
     # --- STRATEGY 1: Explicit Filename Regex (e.g. "World_Unity_Vol1_Issue1.pdf") ---
     # Matches: "Vol 1 No 1", "Vol.1.Issue.1", "Volume1_Issue1"
-    # Case insensitive, handles various separators
     vol_issue_match = re.search(r'(?:Vol|Volume)[\W_]*(\d+)[\W_]*(?:No|Issue|Number)[\W_]*(\d+)', filename, re.IGNORECASE)
-    
     if vol_issue_match:
-        vol = vol_issue_match.group(1)
-        issue = vol_issue_match.group(2)
+        vol = int(vol_issue_match.group(1)) # int() strips leading zeros
+        issue = int(vol_issue_match.group(2))
         return f"{base_wiki_title}/Volume_{vol}/Issue_{issue}/Text"
 
     # --- STRATEGY 2: Folder Structure Inspection (e.g. ".../Volume 1/No 1/...") ---
-    # Split path and look for explicit folder names
     parts = rel_path.split(os.sep)
     path_vol = None
     path_issue = None
     
     for part in parts:
-        # Check for Volume folder
         if not path_vol:
             v_match = re.search(r'^(?:Vol|Volume)[\W_]*(\d+)$', part, re.IGNORECASE)
-            if v_match:
-                path_vol = v_match.group(1)
+            if v_match: path_vol = int(v_match.group(1))
         
-        # Check for Issue folder
         if not path_issue:
             i_match = re.search(r'^(?:No|Issue)[\W_]*(\d+)$', part, re.IGNORECASE)
-            if i_match:
-                path_issue = i_match.group(1)
+            if i_match: path_issue = int(i_match.group(1))
 
-    # If we found explicit Volume in folder, we try to find Issue in filename if not in folder
     if path_vol:
         final_issue = path_issue
+        # If folder has Volume but filename has issue number (e.g. "01.pdf")
         if not final_issue:
-            # If we have a Volume folder but just a number in the file (e.g. "01.pdf")
             num_match = re.search(r'(\d+)', filename)
-            if num_match:
-                final_issue = num_match.group(1)
+            if num_match: final_issue = int(num_match.group(1))
         
         if final_issue:
             return f"{base_wiki_title}/Volume_{path_vol}/Issue_{final_issue}/Text"
 
-    # --- STRATEGY 3: Standard Issue/Range Fallback (e.g. "ABR 04-01.pdf") ---
-    # This preserves your existing logic for simple issues or ranges (64-65)
-    match = re.search(r'(\d+(?:-\d+)?)', filename)
+    # --- STRATEGY 3: Implicit Hyphenated Volume-Issue (e.g. "ABR 04-01.pdf") ---
+    # Looks for pattern: [Any Text] [Digits] [Hyphen] [Digits]
+    # We treat the first group as Volume and second as Issue.
+    hyphen_match = re.search(r'(\d+)-(\d+)', name_no_ext)
     
+    if hyphen_match:
+        # Check context: usually "Issue 64-65" is a range, but "04-01" is Vol/Issue.
+        # If the file caused a 404 as "Issue_04-01", we assume user wants Vol/Issue logic.
+        vol_num = int(hyphen_match.group(1))
+        issue_num = int(hyphen_match.group(2))
+        return f"{base_wiki_title}/Volume_{vol_num}/Issue_{issue_num}/Text"
+
+    # --- STRATEGY 4: Standard Issue Fallback (e.g. "Issue 10.pdf") ---
+    match = re.search(r'(\d+)', name_no_ext)
     if match:
-        issue_num = match.group(1)
+        issue_num = match.group(1) # Keep string to preserve exact formatting if needed, or int() if you prefer standardizing
         return f"{base_wiki_title}/Issue_{issue_num}/Text"
     
-    # Fallback: Use full filename if no number is found
-    clean_name = os.path.splitext(filename)[0]
-    return f"{base_wiki_title}/{clean_name}/Text"
+    # Fallback: Use full filename
+    return f"{base_wiki_title}/{name_no_ext}/Text"
 
 def get_page_image_data(pdf_path, page_num_1_based):
     doc = fitz.open(pdf_path)
