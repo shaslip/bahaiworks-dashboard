@@ -26,6 +26,42 @@ if 'GEMINI_API_KEY' not in os.environ:
 
 STATE_FILE = os.path.join(project_root, "category_sweeper_state.json")
 
+# Titles (Periodicals/Reports) to skip automatically
+EXCLUDED_TITLES = [
+    "The American Bahá’í",
+    "Annual Reports",
+    "Australian Baha’i Report",
+    "Bahai Bulletin",
+    "Bahai News India",
+    "Bahá’í Canada",
+    "Bahá’í Journal",
+    "Bahá’í News",
+    "Bahá’í News Bulletin",
+    "Bahá’í World",
+    "Bahá’í Youth Bulletin",
+    "Brilliant Star",
+    "Bulletin",
+    "Canadian Bahá’í News",
+    "Child's Way",
+    "Dialogue",
+    "Herald of the South",
+    "Light of the Pacific",
+    "Living Nation",
+    "Malaysian Bahá’í News",
+    "Najm-i-Bák̲h̲tar",
+    "National Bahá’í Review",
+    "National Teaching Committee Bulletins",
+    "One Country",
+    "Pulse of the Pioneer",
+    "Star of the West",
+    "Teach! Canada",
+    "Teaching Bulletin of the Nine Year Plan",
+    "U.S. Supplement",
+    "UK Bahá’í Review",
+    "World Order",
+    "World Unity"
+]
+
 st.set_page_config(page_title="Category Sweeper", page_icon="🧹", layout="wide")
 
 # ==============================================================================
@@ -401,7 +437,17 @@ if start_btn:
         page_obj = members[i]
         wiki_title = page_obj['title']
         
+        # Checks if the current title starts with any string in the exclusion list
+        if any(wiki_title.startswith(exclude) for exclude in EXCLUDED_TITLES):
+            status_container.warning(f"🚫 Skipping Excluded Title: {wiki_title}")
+            # Update state to skip this index in the future
+            save_state(i + 1, 1, wiki_title)
+            continue
+
         status_container.markdown(f"### 📚 Processing Book ({i+1}/{len(members)}): `{wiki_title}`")
+        
+        # A. Fetch Wikitext
+        log_area.text(f"Fetching source for {wiki_title}...")
         
         # A. Fetch Wikitext
         log_area.text(f"Fetching source for {wiki_title}...")
