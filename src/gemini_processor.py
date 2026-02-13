@@ -297,13 +297,8 @@ def proofread_with_formatting(image):
             # Check for Recitation/Copyright block (finish_reason 4)
             # We check this BEFORE accessing .text to avoid the crash
             if response.candidates and response.candidates[0].finish_reason == 4:
-                print(f"Attempt {attempt + 1}: Blocked by Copyright/Recitation filters.")
-                
-                if attempt < max_retries:
-                    time.sleep(2) # Brief pause before retry
-                    continue
-                else:
-                    return "GEMINI_ERROR: Recitation/Copyright Block"
+                print(f"Blocked by Copyright/Recitation filters.")
+                return "GEMINI_ERROR: Recitation/Copyright Block"
 
             # If we get here, it should be safe to access .text
             text = response.text.strip()
