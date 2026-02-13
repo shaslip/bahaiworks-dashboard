@@ -439,7 +439,7 @@ if start_btn:
         
         # Checks if the current title starts with any string in the exclusion list
         if any(wiki_title.startswith(exclude) for exclude in EXCLUDED_TITLES):
-            status_container.warning(f"🚫 Skipping Excluded Title: {wiki_title}")
+            log_area.text(f"🚫 Skipping Excluded Title: {wiki_title}")
             # Update state to skip this index in the future
             save_state(i + 1, 1, wiki_title)
             continue
