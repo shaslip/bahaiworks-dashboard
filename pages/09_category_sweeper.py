@@ -440,40 +440,36 @@ if start_btn:
             # 4. AI Processing (Gemini -> DocAI Fallback Logic)
             final_text = ""
             try:
-                # Decide Strategy
-                use_docai = False
-                
-                # Check Global or Local Overrides
-                if ocr_strategy == "DocAI Only":
-                    use_docai = True
-                elif gemini_failures >= 3:
-                    use_docai = True
-                    # Only log this once per page loop to avoid spamming
-                    if gemini_failures == 3: 
-                        log_area.text("🚨 3+ Gemini Failures detected. Switching to DocAI for remainder of book.")
+                # Determine Strategy
+                force_docai = (ocr_strategy == "DocAI Only") or (gemini_failures >= 3)
 
-                if not use_docai:
+                if force_docai:
+                    if gemini_failures == 3 and not (ocr_strategy == "DocAI Only"):
+                        log_area.text("🚨 3rd Gemini Failure. Switching to DocAI for remainder of book.")
+                        # Increment once more so we don't spam the log every page
+                        gemini_failures += 1 
+                    
+                    log_area.text("🤖 DocAI Direct Mode...")
+                    raw_ocr = transcribe_with_document_ai(img)
+                    final_text = reformat_raw_text(raw_ocr)
+
+                else:
                     # Try Gemini
                     log_area.text("✨ Asking Gemini to proofread...")
                     final_text = proofread_with_formatting(img)
                     
                     if "GEMINI_ERROR" in final_text:
-                        log_area.text(f"⚠️ Gemini Failed. Switching to DocAI for this page.")
                         gemini_failures += 1
+                        log_area.text(f"⚠️ Gemini Failed ({gemini_failures}/3). Switching to DocAI for this page.")
                         
-                        # Fallback Immediately
+                        # Immediate Fallback to DocAI (No Gemini Retry)
                         raw_ocr = transcribe_with_document_ai(img)
                         final_text = reformat_raw_text(raw_ocr)
-                else:
-                    # Use DocAI
-                    log_area.text("🤖 DocAI Direct Mode...")
-                    raw_ocr = transcribe_with_document_ai(img)
-                    final_text = reformat_raw_text(raw_ocr)
-                    
+
                 if not final_text or "ERROR" in final_text:
                     st.error(f"Processing failed for PDF {pdf_page}: {final_text}")
                     continue
-                    
+
                 # 5. Inject & Upload
                 log_area.text("💾 Uploading to Wiki...")
                 
