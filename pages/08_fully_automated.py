@@ -392,15 +392,35 @@ if start_btn:
                         found_year = cat_match.group(1)
 
                     # 3. Generate and Prepend Header
-                    match = re.search(r'(\d+(?:-\d+)?)', short_name)
-                    if match:
-                        issue_num = match.group(1)
-                        # Pass the found year to the header generator
-                        header = generate_header(issue_num, year=found_year)
+                    # We derive the header info from the wiki_title structure we identified earlier
+                    
+                    # --- Logic to Determine Header Content ---
+                    if "/Volume_" in wiki_title and "/Issue_" in wiki_title:
+                        # Case: Deep nesting (Base / Volume X / Issue Y / Text)
+                        # We need to extract the raw numbers to make a pretty label
+                        vol_match = re.search(r'Volume_(\d+)', wiki_title)
+                        iss_match = re.search(r'Issue_(\d+)', wiki_title)
                         
-                        # Prepend if missing
-                        if "{{header" not in current_wikitext:
-                            current_wikitext = header + "\n" + current_wikitext.lstrip()
+                        vol_str = vol_match.group(1) if vol_match else "?"
+                        iss_str = iss_match.group(1) if iss_match else "?"
+                        
+                        section_label = f"Volume {vol_str}, Issue {iss_str}"
+                        link_depth = "../../../" # Go up 3 levels: Text -> Issue -> Volume -> Base
+                        
+                    else:
+                        # Case: Standard (Base / Issue X / Text)
+                        # We fallback to the filename regex for the issue number
+                        match = re.search(r'(\d+(?:-\d+)?)', short_name)
+                        issue_num = match.group(1) if match else "Unknown"
+                        
+                        section_label = f"Issue {issue_num}"
+                        link_depth = "../../" # Go up 2 levels: Text -> Issue -> Base
+
+                    # Generate
+                    if "{{header" not in current_wikitext:
+                        # Call the updated function with our specific labels and depth
+                        header = generate_header(section_label, year=found_year, root_depth=link_depth)
+                        current_wikitext = header + "\n" + current_wikitext.lstrip()
                 
                 # D. Inject Content
                 log_area.text(f"💉 Injecting content into {{page|{page_num}}}...")
