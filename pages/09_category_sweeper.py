@@ -51,7 +51,6 @@ def int_to_roman(num):
 def calculate_page_label(pdf_page_num, anchor_pdf_page):
     """
     Determines if a page should be Roman (i, ii) or Arabic (1, 2).
-    anchor_pdf_page: The PDF page number that corresponds to Book Page 1.
     """
     if anchor_pdf_page is None:
         return str(pdf_page_num)
@@ -129,12 +128,7 @@ def get_page_image_data(pdf_path, page_num_1_based):
         return None
 
 def process_header(wikitext, wiki_title):
-    """
-    Updates existing header OR creates a new one.
-    - Enforces {{ps|1}} in 'notes'.
-    - Adds {{bnreturn}} ONLY if title ends in /Text.
-    - Adds 'categories = YYYY' if creating new header and Year category found.
-    """
+    """Updates existing header OR creates a new one with correct categories/notes."""
     is_text_page = wiki_title.endswith("/Text")
     
     # 1. Check for Existing Header
@@ -145,48 +139,28 @@ def process_header(wikitext, wiki_title):
         new_header = old_header
         
         # --- Update Notes Section ---
-        # We need to find the 'notes = ...' line and manipulate it.
-        # This is tricky with regex, so we'll do a robust line-by-line check inside the header block.
-        
-        # Check if notes param exists
         if re.search(r'\|\s*notes\s*=', new_header):
-            # Enforce ps|1
             if "{{ps|" in new_header:
                 new_header = re.sub(r'\{\{ps\|\d+\}\}', '{{ps|1}}', new_header)
             else:
-                # Append ps|1 to existing notes
                 new_header = re.sub(r'(\|\s*notes\s*=\s*)(.*)', r'\1{{ps|1}}\2', new_header)
             
-            # Enforce bnreturn (Add if missing and needed)
             if is_text_page and "{{bnreturn}}" not in new_header:
                 new_header = re.sub(r'(\|\s*notes\s*=\s*)(.*)', r'\1\2{{bnreturn}}', new_header)
-            
-            # Remove bnreturn if NOT needed
             if not is_text_page and "{{bnreturn}}" in new_header:
                 new_header = new_header.replace("{{bnreturn}}", "")
-                
         else:
-            # Create notes param
             notes_val = "{{ps|1}}"
             if is_text_page: notes_val += "{{bnreturn}}"
-            # Insert before the closing brackets
             new_header = new_header.rstrip("}") + f"\n | notes      = {notes_val}\n}}"
 
-        # Replace in text
         if new_header != old_header:
             return wikitext.replace(old_header, new_header)
         return wikitext
 
     else:
         # 2. Create New Header
-        # Find Year for Category
         cat_match = re.search(r'\[\[Category:\s*(\d{4})', wikitext)
-        year_cat = cat_match.group(1) + "/Text of works by..." if cat_match else "" 
-        # Actually usually it's just the year "1945" or "1945/Text..." 
-        # User example just showed "1945/Text of works..." so let's just grab the year if found
-        # User said: "categories = 1945/Text of works by Marguerite True"
-        # We can't guess the author, so we'll just put the Year if found, user can edit later.
-        
         cat_str = cat_match.group(1) if cat_match else ""
 
         notes_str = "{{ps|1}}"
@@ -203,8 +177,34 @@ def process_header(wikitext, wiki_title):
  | notes      = {notes_str}
  | categories = {cat_str}
 }}}}"""
-        
         return new_header + "\n" + wikitext.lstrip()
+
+def normalize_tag_label(wikitext, pdf_filename, pdf_page_num, correct_label):
+    """
+    Finds the existing tag for a specific PDF page (even if labeled '-2') 
+    and renames the label to the correct one (e.g., 'i').
+    Returns the updated wikitext.
+    """
+    # Regex to find: {{page| <ANY_LABEL> | file=FILENAME | page=PDF_NUM }}
+    # We use re.escape for filename to handle dots/spaces safe
+    pattern = re.compile(
+        r'(\{\{page\s*\|\s*)([^|]+?)(\s*\|\s*file\s*=\s*' + re.escape(pdf_filename) + 
+        r'\s*\|\s*page\s*=\s*' + str(pdf_page_num) + r'\s*(?:\||\}\}))', 
+        re.IGNORECASE
+    )
+    
+    match = pattern.search(wikitext)
+    
+    if match:
+        current_label = match.group(2).strip()
+        if current_label != correct_label:
+            st.toast(f"Normalizing Label: {current_label} -> {correct_label}", icon="🔧")
+            # Reconstruct the start of the tag with the CORRECT label
+            new_start = match.group(1) + correct_label + match.group(3)
+            # Replace only this specific occurrence
+            wikitext = wikitext.replace(match.group(0), new_start)
+            
+    return wikitext
 
 # ==============================================================================
 # 2. STATE MANAGEMENT
@@ -240,7 +240,7 @@ def reset_state():
 # ==============================================================================
 
 st.title("🧹 Category Sweeper: Full PDF Processing")
-st.markdown("Iterates category members, updates headers, proofreads **every page**, and adds `__NOTOC__`.")
+st.markdown("Iterates category members, normalizes tags, updates headers, proofreads **every page**, and adds `__NOTOC__`.")
 
 # --- Sidebar ---
 st.sidebar.header("Configuration")
@@ -302,13 +302,8 @@ if start_btn:
             st.error(f"❌ Error fetching {wiki_title}: {err}")
             continue
 
-        # B. Header Processing (Fix/Create Header immediately)
-        # We process header before loop to ensure it's correct even if we crash later
-        updated_text = process_header(current_text, wiki_title)
-        
-        # If header changed, save it immediately? 
-        # Or just carry 'updated_text' into the loop. Let's carry it.
-        current_text = updated_text
+        # B. Header Processing
+        current_text = process_header(current_text, wiki_title)
 
         # C. Identify PDF Filename
         file_match = re.search(r'file\s*=\s*([^|}\n]+)', current_text, re.IGNORECASE)
@@ -333,7 +328,7 @@ if start_btn:
         else:
             log_area.text(f"⚠️ No Anchor found. Assuming PDF Page 1 = Book Page 1.")
 
-        # F. Determine Start Page for PDF Loop
+        # F. Determine Start Page
         if i == state['member_index']:
             start_pdf_page = state['pdf_page_num']
         else:
@@ -365,7 +360,21 @@ if start_btn:
                 st.error("Image extraction failed.")
                 continue
 
-            # 3. OCR / Proofread
+            # 3. NORMALIZE TAG IN MEMORY
+            # This is crucial: Convert {{page|-2...}} to {{page|i...}} so injection works
+            # We must do this BEFORE fetching fresh text or injecting
+            
+            # Fetch fresh text for pages 2+ to catch up with server state
+            if pdf_page > start_pdf_page:
+                current_text, _ = fetch_wikitext(wiki_title)
+                # Re-apply header fix if it wasn't saved yet? 
+                # Actually, if page 1 saved, header is saved. 
+                # If page 1 failed, we are retrying page 1, so header logic at step B covers it.
+            
+            # Normalize the specific tag we are about to fill
+            current_text = normalize_tag_label(current_text, pdf_filename, pdf_page, correct_label)
+
+            # 4. OCR / Proofread
             try:
                 final_text = ""
                 if ocr_strategy == "Gemini (Default)":
@@ -382,38 +391,26 @@ if start_btn:
                     st.error(f"Processing failed: {final_text}")
                     continue
 
-                # 4. Inject Text
-                # Fetch fresh text to include any manual edits or header updates from previous loop
-                # NOTE: If we updated the header in memory at step B but didn't save it, 
-                # we must use 'current_text' (which contains the header fix) for the FIRST iteration.
-                # However, for subsequent iterations, we should fetch from server.
-                # Simplest Logic: We will push the header update along with the first page edit.
-                
-                if pdf_page > start_pdf_page:
-                    # Fetch fresh from server for pages 2+ to ensure we have latest state
-                    current_text, _ = fetch_wikitext(wiki_title)
-                
+                # 5. Inject Text
                 new_wikitext, inject_err = inject_text_into_page(current_text, correct_label, final_text, pdf_filename)
                 
                 if inject_err:
                     st.error(f"Injection Error: {inject_err}")
                     continue
                 
-                # 5. Check for __NOTOC__ (Last Page Only)
+                # 6. Check for __NOTOC__ (Last Page Only)
                 if pdf_page == total_pdf_pages:
                     if "__NOTOC__" not in new_wikitext:
                         new_wikitext += "\n__NOTOC__"
-                        log_area.text("📝 Appending __NOTOC__ to end of file.")
+                        log_area.text("📝 Appending __NOTOC__.")
 
-                # 6. Upload
+                # 7. Upload
                 res = upload_to_bahaiworks(wiki_title, new_wikitext, f"Bot: Proofread {correct_label} (PDF {pdf_page})")
                 
                 if res.get('edit', {}).get('result') == 'Success':
                     st.toast(f"Saved {correct_label}", icon="✅")
                     save_state(i, pdf_page + 1, wiki_title)
-                    
-                    # Update current_text in memory for next loop (so we don't revert header/previous pages if we skip fetch)
-                    current_text = new_wikitext 
+                    current_text = new_wikitext # Sync memory
                 else:
                     st.error(f"Upload Failed: {res}")
                     break 
