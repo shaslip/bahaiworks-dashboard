@@ -56,7 +56,6 @@ def get_all_pdf_files(root_folder):
 def get_wiki_title(local_path, root_folder, base_wiki_title):
     """
     Determines the Wiki Page Title based on filename and folder structure.
-    Handles explicit Vol/Issue markers, Folder nesting, and implicit "Vol-Issue" patterns.
     """
     filename = os.path.basename(local_path)
     name_no_ext = os.path.splitext(filename)[0]
@@ -65,6 +64,17 @@ def get_wiki_title(local_path, root_folder, base_wiki_title):
         rel_path = os.path.relpath(local_path, root_folder)
     except ValueError:
         rel_path = local_path
+
+    # --- STRATEGY 0: Canadian Baha'i News Specific (Canadian_Bahai_News_24.pdf) ---
+    # Matches "Canadian_Bahai_News_" followed by digits or digits-digits (24 or 24-25)
+    cbn_match = re.search(r'Canadian_Bahai_News_(\d+(?:-\d+)?)', filename, re.IGNORECASE)
+    if cbn_match:
+        issue_identifier = cbn_match.group(1)
+        # Note: Input filename is "Bahai", target wiki is "Bahá’í"
+        # We assume base_wiki_title is passed correctly as "Canadian_Bahá’í_News"
+        # or we force it if the file matches this specific pattern.
+        target_base = "Canadian_Bahá’í_News" if "Canadian" in base_wiki_title else base_wiki_title
+        return f"{target_base}/Issue_{issue_identifier}/Text"
 
     # --- STRATEGY 1: Explicit Filename (Vol 1 No 1) ---
     vol_issue_match = re.search(r'(?:Vol|Volume)[\W_]*(\d+)[\W_]*(?:No|Issue|Number)[\W_]*(\d+)', filename, re.IGNORECASE)
@@ -97,8 +107,7 @@ def get_wiki_title(local_path, root_folder, base_wiki_title):
             return f"{base_wiki_title}/Volume_{path_vol}/Issue_{final_issue}/Text"
 
     # --- STRATEGY 3: Implicit "04-01" (Volume-Issue) ---
-    # MODIFIED: Trigger if first number starts with '0' (09-02) OR second number starts with '0' (10-01).
-    # This captures "10-01" as Vol 10 Iss 1, while still preventing "10-11" (Range) from becoming Vol 10 Iss 11.
+    # Only triggers if leading zeros are present to avoid confusing "24-25" with "Vol 24 Issue 25"
     hyphen_vol_match = re.search(r'(\d+)-(\d+)', name_no_ext)
     
     if hyphen_vol_match:
@@ -110,6 +119,15 @@ def get_wiki_title(local_path, root_folder, base_wiki_title):
             vol_num = int(v_str)
             issue_num = int(i_str)
             return f"{base_wiki_title}/Volume_{vol_num}/Issue_{issue_num}/Text"
+
+    # --- STRATEGY 4: Fallback "Name_24" or "Name_24-25" (No Volume) ---
+    # If no other strategy hit, looks for the last number block in the filename
+    # This catches "Some_Publication_24-25.pdf" as Issue 24-25
+    simple_issue_match = re.search(r'(\d+(?:-\d+)?)', name_no_ext)
+    if simple_issue_match:
+        return f"{base_wiki_title}/Issue_{simple_issue_match.group(1)}/Text"
+
+    return None
 
 def get_page_image_data(pdf_path, page_num_1_based):
     doc = fitz.open(pdf_path)
@@ -157,8 +175,8 @@ st.title("🤖 Fully Automated Periodical Processor")
 
 # --- Sidebar Controls ---
 st.sidebar.header("Configuration")
-input_folder = st.sidebar.text_input("Local PDF Folder", value="/media/sarah/4TB/Projects/Bahai.works/English/U.S._Supplement")
-base_title = st.sidebar.text_input("Base Wiki Title", value="U.S._Supplement")
+input_folder = st.sidebar.text_input("Local PDF Folder", value="/media/sarah/4TB/Projects/Bahai.works/English/Canada/1948-1975_CBN/")
+base_title = st.sidebar.text_input("Base Wiki Title", value="Canadian_Bahá’í_News")
 
 run_mode = st.sidebar.radio("Run Mode", ["Test (1 PDF Only)", "Production (All PDFs)"])
 
@@ -245,6 +263,12 @@ if start_btn:
         
         # 4a. Resolve Titles
         wiki_title = get_wiki_title(pdf_path, input_folder, base_title)
+        
+        # Safety check if title resolution failed
+        if not wiki_title:
+            st.error(f"Could not determine Wiki Title for {pdf_path}. Skipping.")
+            continue
+
         short_name = os.path.basename(pdf_path)
         
         status_container.markdown(f"### 🔨 Processing File {i+1}/{total_files}: `{short_name}`")
@@ -382,37 +406,50 @@ if start_btn:
                         found_year = cat_match.group(1)
 
                     # 3. Generate and Prepend Header
-                if "{{header" not in current_wikitext:
-                    
-                    # Initialize variables
-                    volume_found = None
-                    issue_identifier = None # Can be "1" or "10-11"
-
-                    # Check for Volume/Issue format in the Title we just generated
-                    if "/Volume_" in wiki_title and "/Issue_" in wiki_title:
-                        # Extract from the clean Wiki path (Safer than filename)
-                        v_match = re.search(r'Volume_(\d+)', wiki_title)
-                        i_match = re.search(r'Issue_(\d+)', wiki_title)
+                    if "{{header" not in current_wikitext:
                         
-                        if v_match and i_match:
-                            volume_found = v_match.group(1)
-                            issue_identifier = i_match.group(1)
-                    
-                    else:
-                        # Standard Issue or Range (Extract from Wiki Title is safest)
-                        # wiki_title looks like ".../Issue_10-11/Text"
-                        i_match = re.search(r'Issue_([\d-]+)', wiki_title)
-                        if i_match:
-                            issue_identifier = i_match.group(1)
-                        else:
-                            # Fallback to filename if Wiki Title is weird
-                            fn_match = re.search(r'(\d+(?:-\d+)?)', short_name)
-                            if fn_match: issue_identifier = fn_match.group(1)
+                        # Initialize variables
+                        volume_found = None
+                        issue_identifier = None # Can be "1" or "24-25"
 
-                    # Only generate if we found an issue identifier
-                    if issue_identifier:
-                        header = generate_header(issue_identifier, year=found_year, volume=volume_found)
-                        current_wikitext = header + "\n" + current_wikitext.lstrip()
+                        # Check for Volume/Issue format in the Title we just generated
+                        if "/Volume_" in wiki_title and "/Issue_" in wiki_title:
+                            # Extract from the clean Wiki path (Safer than filename)
+                            v_match = re.search(r'Volume_(\d+)', wiki_title)
+                            i_match = re.search(r'Issue_(\d+)', wiki_title)
+                            
+                            if v_match and i_match:
+                                volume_found = v_match.group(1)
+                                issue_identifier = i_match.group(1)
+                        
+                        else:
+                            # Standard Issue or Range (Extract from Wiki Title is safest)
+                            # wiki_title looks like ".../Issue_24-25/Text"
+                            i_match = re.search(r'Issue_([\d-]+)', wiki_title)
+                            if i_match:
+                                issue_identifier = i_match.group(1)
+                            else:
+                                # Fallback to filename if Wiki Title is weird
+                                fn_match = re.search(r'(\d+(?:-\d+)?)', short_name)
+                                if fn_match: issue_identifier = fn_match.group(1)
+
+                        # Only generate if we found an issue identifier
+                        if issue_identifier:
+                            header = generate_header(issue_identifier, year=found_year, volume=volume_found)
+                            
+                            # --- ACCESS CONTROL HANDLING ---
+                            # Check for <accesscontrol> tag at start of file
+                            access_match = re.match(r'^\s*<accesscontrol>.*?</accesscontrol>\s*', current_wikitext, re.DOTALL | re.IGNORECASE)
+                            
+                            if access_match:
+                                access_tag = access_match.group(0).strip()
+                                # Content AFTER the tag
+                                remaining_body = current_wikitext[access_match.end():].lstrip()
+                                # Reconstruction: Access Tag -> Header -> Body
+                                current_wikitext = access_tag + "\n" + header + "\n" + remaining_body
+                            else:
+                                # Standard prepend
+                                current_wikitext = header + "\n" + current_wikitext.lstrip()
                 
                 # D. Inject Content
                 log_area.text(f"💉 Injecting content into {{page|{page_num}}}...")
@@ -469,6 +506,4 @@ if start_btn:
     st.success("🎉 Batch Processing Complete!")
     
     # FIX: Save the index of the NEXT file so we can resume later
-    # If we just finished file 'i', we want to start at 'i + 1' next time
-    # 'end_idx' holds the value of the next file index in the logic
     save_state(end_idx, 1, "done", last_file_path=short_name)
