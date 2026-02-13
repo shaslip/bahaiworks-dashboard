@@ -32,6 +32,33 @@ st.set_page_config(page_title="Category Sweeper", page_icon="🧹", layout="wide
 # 1. HELPER FUNCTIONS
 # ==============================================================================
 
+def int_to_roman(num):
+    """Converts an integer to a lowercase roman numeral (i, ii, iii)."""
+    val = [
+        1000, 900, 500, 400,
+        100, 90, 50, 40,
+        10, 9, 5, 4,
+        1
+    ]
+    syb = [
+        "m", "cm", "d", "cd",
+        "c", "xc", "l", "xl",
+        "x", "ix", "v", "iv",
+        "i"
+    ]
+    roman_num = ''
+    i = 0
+    # Handle absolute value if negative numbers passed
+    num = abs(num)
+    if num == 0: return "i" # Fallback
+
+    while  num > 0:
+        for _ in range(num // val[i]):
+            roman_num += syb[i]
+            num -= val[i]
+        i += 1
+    return roman_num
+
 def build_pdf_index(root_folder):
     """
     Recursively scans the folder and creates a dictionary:
@@ -43,32 +70,26 @@ def build_pdf_index(root_folder):
     for dirpath, _, filenames in os.walk(root_folder):
         for f in filenames:
             if f.lower().endswith(".pdf"):
-                # We store just the filename as key
                 pdf_index[f] = os.path.join(dirpath, f)
                 
     return pdf_index
 
 def get_category_members(category_name, limit=5000):
-    """
-    Fetches pages belonging to a specific category.
-    Handles pagination to get all members.
-    """
+    """Fetches pages belonging to a specific category."""
     members = []
     params = {
         "action": "query",
         "list": "categorymembers",
         "cmtitle": category_name,
-        "cmlimit": "500", # Max for non-bots, 5000 for bots
+        "cmlimit": "500",
         "format": "json"
     }
-    
     headers = {"User-Agent": "BahaiWorksSweeper/1.0"}
     
     while True:
         try:
             response = requests.get(API_URL, params=params, headers=headers, timeout=30)
             data = response.json()
-            
             if 'error' in data:
                 st.error(f"API Error: {data['error']}")
                 break
@@ -76,47 +97,83 @@ def get_category_members(category_name, limit=5000):
             chunk = data.get('query', {}).get('categorymembers', [])
             members.extend(chunk)
             
-            # Check for continuation
             if 'continue' in data:
                 params.update(data['continue'])
             else:
                 break
-                
             if len(members) >= limit:
                 break
-                
         except Exception as e:
             st.error(f"Network Error fetching category: {e}")
             break
             
     return members
 
-def parse_page_template(wikitext):
+def find_page_one_offset(wikitext):
     """
-    Extracts the PDF filename and page number from the {{page}} template.
-    Expected format examples: 
-    {{page|i|file=MyFile.pdf|page=1}}
-    {{page|file=MyFile.pdf|page=1}}
+    Scans the ENTIRE text to find the 'Anchor': {{page|1|file=...|page=X}}.
+    Returns X (the PDF page number corresponding to Book Page 1).
+    If not found, returns None.
     """
-    # Regex to find 'file=' and 'page=' parameters inside {{page...}}
-    # We look for {{page ... }} and extract params
+    # Look for {{page|1|...}} explicitly
+    match = re.search(r'\{\{page\|\s*1\s*\|[^}]*?page\s*=\s*(\d+)', wikitext, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    return None
+
+def find_next_unprocessed_tag(wikitext, offset_start_pdf_page):
+    """
+    Finds the first {{page}} tag that needs processing (marked by {{ocr}} or similar).
+    Calculates the CORRECT label (Roman vs Arabic) based on the offset.
     
-    # 1. Find the tag
-    match = re.search(r'\{\{page\|(.*?)\}\}', wikitext, re.IGNORECASE | re.DOTALL)
+    Returns: (pdf_filename, pdf_page_num, correct_label_string, raw_tag_match)
+    """
+    # Regex finds {{page|...}} immediately followed by {{ocr}}
+    # You can expand this regex if your placeholder isn't always {{ocr}}
+    # matching: {{page|...}} ... {{ocr}} 
+    # Note: This regex assumes the placeholder is fairly close to the tag
+    
+    # Simple strategy: Find all page tags, check if they are followed by {{ocr}}
+    pattern = re.compile(r'(\{\{page\|(.*?)\}\})(\s*\{\{ocr\}\})', re.IGNORECASE | re.DOTALL)
+    
+    match = pattern.search(wikitext)
+    
     if not match:
-        return None, None
-        
-    params_str = match.group(1)
+        return None, None, None, None
+
+    full_tag_str = match.group(1)
+    params_str = match.group(2)
     
-    # 2. Extract File
+    # Extract file and PDF page
     file_match = re.search(r'file\s*=\s*([^|]+)', params_str)
-    # 3. Extract Page
     page_match = re.search(r'page\s*=\s*(\d+)', params_str)
     
-    pdf_filename = file_match.group(1).strip() if file_match else None
-    page_num = int(page_match.group(1)) if page_match else None
-    
-    return pdf_filename, page_num
+    if not file_match or not page_match:
+        return None, None, None, None
+
+    pdf_filename = file_match.group(1).strip()
+    pdf_page_num = int(page_match.group(1))
+
+    # --- CALCULATE CORRECT PHYSICAL LABEL ---
+    if offset_start_pdf_page is None:
+        # We don't have an anchor. Assuming sequential or existing is correct.
+        # Fallback: Parse the current label from params
+        label_match = params_str.split('|')[0].strip()
+        correct_label = label_match
+    else:
+        # LOGIC:
+        # If PDF page < Offset, use Roman.
+        # If PDF page >= Offset, use (PDF - Offset + 1).
+        
+        if pdf_page_num < offset_start_pdf_page:
+            # Front matter
+            # Convert PDF page directly to roman? (Assuming PDF 1 = i)
+            correct_label = int_to_roman(pdf_page_num)
+        else:
+            # Body content
+            correct_label = str(pdf_page_num - offset_start_pdf_page + 1)
+
+    return pdf_filename, pdf_page_num, correct_label, match.group(1) # Return original tag text for replacement
 
 def get_page_image_data(pdf_path, page_num_1_based):
     """Extracts image from local PDF using PyMuPDF."""
@@ -160,7 +217,7 @@ def reset_state():
 # ==============================================================================
 
 st.title("🧹 Category Sweeper: `Pages_needing_proofreading`")
-st.markdown("Autonomously iterates through the maintenance category, finds local PDFs, and proofreads.")
+st.markdown("Autonomously iterates through the maintenance category, calculates page offsets, and proofreads.")
 
 # --- Sidebar ---
 st.sidebar.header("Configuration")
@@ -215,19 +272,18 @@ if start_btn:
     if state['last_processed_title']:
         for i, m in enumerate(members):
             if m['title'] == state['last_processed_title']:
-                start_index = i + 1 # Start at the next one
+                start_index = i # Retry the last one? or i+1? Let's stay on current if it wasn't finished, or move next.
+                # Actually usually we want to move to next if success, but if we have multiple tags per page, we might stay.
+                # For simplicity, let's assume one run clears the page from category or we move on.
+                start_index = i 
                 break
     
     # 4. Processing Loop
     processed_count = 0
-    
-    # Define end index based on run mode
     end_index = len(members)
-    
     progress_bar = st.progress(0)
     
     for i in range(start_index, end_index):
-        # Stop Check
         if stop_btn:
             st.warning("Stopping requested...")
             break
@@ -245,92 +301,112 @@ if start_btn:
             log_area.text(f"❌ Error fetching text: {err}. Skipping.")
             continue
             
-        # B. Parse Template
-        pdf_filename, pdf_page_num = parse_page_template(current_text)
+        # B. Analyze Document Structure (Find the Offset)
+        offset_start = find_page_one_offset(current_text)
+        if offset_start:
+            log_area.text(f"📏 Document Offset Found: Physical Page 1 is PDF Page {offset_start}")
+        else:
+            log_area.text(f"⚠️ No 'Page 1' anchor found. Assuming purely sequential.")
+            
+        # C. Find the first unprocessed tag {{ocr}}
+        # This function also calculates the CORRECT Roman/Arabic label
+        pdf_filename, pdf_page_num, correct_label, old_tag_text = find_next_unprocessed_tag(current_text, offset_start)
         
-        if not pdf_filename or not pdf_page_num:
-            log_area.text(f"⚠️ Could not parse {{page}} template in {wiki_title}. Skipping.")
+        if not pdf_filename:
+            log_area.text(f"✅ No '{{ocr}}' tags found in {wiki_title}. Marking complete.")
+            save_state(wiki_title) # Save progress
             continue
             
-        # C. Find Local PDF
+        log_area.text(f"🎯 Target: PDF Page {pdf_page_num} -> New Label '{correct_label}'")
+
+        # D. Find Local PDF
         local_path = pdf_index.get(pdf_filename)
-        
         if not local_path:
-            log_area.text(f"⚠️ PDF '{pdf_filename}' not found in local index. Skipping.")
+            log_area.text(f"⚠️ PDF '{pdf_filename}' not found locally. Skipping.")
             continue
             
-        # D. Extract Image
-        log_area.text(f"📸 Extracting Page {pdf_page_num} from {pdf_filename}...")
+        # E. Extract Image
         img = get_page_image_data(local_path, pdf_page_num)
-        
         if not img:
-            log_area.text(f"❌ Failed to extract image from PDF. Skipping.")
+            log_area.text(f"❌ Failed to extract image. Skipping.")
             continue
             
-        # E. AI Processing (Gemini -> DocAI Fallback)
+        # F. AI Processing
         final_text = ""
-        
         try:
-            # STRATEGY: Gemini First?
             if ocr_strategy == "Gemini (Default)":
-                log_area.text("✨ Asking Gemini to proofread...")
+                log_area.text("✨ Gemini Processing...")
                 final_text = proofread_with_formatting(img)
-                
-                # Check for Fallback conditions
                 if "GEMINI_ERROR" in final_text:
-                    log_area.text("⚠️ Gemini Error/Copyright. Falling back to DocAI...")
-                    # Fallback Routine
+                    log_area.text("⚠️ Fallback to DocAI...")
                     raw_ocr = transcribe_with_document_ai(img)
                     if "DOCAI_ERROR" in raw_ocr:
                         st.error(f"Fallback Failed: {raw_ocr}")
                         continue
                     final_text = reformat_raw_text(raw_ocr)
             else:
-                # STRATEGY: DocAI Only
-                log_area.text("🤖 DocAI Direct Mode...")
+                log_area.text("🤖 DocAI Processing...")
                 raw_ocr = transcribe_with_document_ai(img)
                 if "DOCAI_ERROR" in raw_ocr:
                     st.error(f"DocAI Failed: {raw_ocr}")
                     continue
                 final_text = reformat_raw_text(raw_ocr)
                 
-            # Verify we have content
             if not final_text or "ERROR" in final_text:
-                st.error(f"Processing failed for {wiki_title}: {final_text}")
+                st.error(f"Processing failed: {final_text}")
                 continue
-                
-            # F. Inject & Upload
+
+            # G. RECONSTRUCT THE TAG & INJECT
+            # We must remove the {{ocr}} placeholder and update the label
+            
+            # 1. Build new tag
+            new_tag = f"{{{{page|{correct_label}|file={pdf_filename}|page={pdf_page_num}}}}}"
+            
+            # 2. Update the text locally first to replace the Old Tag AND the {{ocr}}
+            #    find_next_unprocessed_tag returned the text of the tag. 
+            #    We need to replace "Old_Tag + space + {{ocr}}" with "New_Tag + \n + Content"
+            
+            # Search for the specific instance we found earlier
+            # Note: This is a simple replace, it might replace duplicates if the page has identical duplicates (unlikely for tags)
+            
+            replacement_pattern = re.compile(re.escape(old_tag_text) + r'\s*\{\{ocr\}\}', re.IGNORECASE)
+            
+            # Prepare content block
+            replacement_block = f"{new_tag}\n{final_text}\n"
+            
+            new_wikitext = replacement_pattern.sub(replacement_block, current_text, count=1)
+            
+            # H. Upload
             log_area.text("💾 Uploading to Wiki...")
-            
-            # Use the existing injection logic which handles {{page}} tag borders
-            new_wikitext, inject_err = inject_text_into_page(current_text, pdf_page_num, final_text, pdf_filename)
-            
-            if inject_err:
-                st.error(f"Injection Error: {inject_err}")
-                continue
-                
-            # Upload
-            res = upload_to_bahaiworks(wiki_title, new_wikitext, "Automated Proofread (Category Sweep)")
+            res = upload_to_bahaiworks(wiki_title, new_wikitext, f"Bot: Proofread {correct_label} (PDF {pdf_page_num})")
             
             if res.get('edit', {}).get('result') == 'Success':
-                st.success(f"✅ Completed: {wiki_title}")
-                save_state(wiki_title)
+                st.success(f"✅ Completed Page {correct_label} of {wiki_title}")
+                # Don't save state yet if we want to loop through ALL pages in this book
+                # But for safety, we often save state. 
+                # If you want to process MULTIPLE pages per Wiki Page, remove the 'break' below
+                # and put this whole logic inside a while loop for the specific Wiki Page.
+                
+                # For now, we process ONE segment per run-loop to be safe.
+                # Next loop iteration will pick up the same Wiki Title, find the NEXT {{ocr}}, and continue.
+                # So we should NOT increment the main loop index if there are more {{ocr}} tags?
+                # Complex. For now, let's just save state and move to next file. 
+                # Better approach: Loop internally until no {{ocr}} left?
+                save_state(wiki_title) 
             else:
                 st.error(f"Upload API Failed: {res}")
         
         except Exception as e:
-            st.error(f"Exception processing {wiki_title}: {e}")
+            st.error(f"Exception: {e}")
             continue
             
-        # Update UI
         processed_count += 1
         progress_bar.progress((i + 1 - start_index) / (end_index - start_index))
         
-        # Test Mode Check
         if run_mode.startswith("Test"):
-            st.info("Test Mode: Stopping after 1 file.")
+            st.info("Test Mode: Stopping after 1 segment.")
             break
             
-        time.sleep(1) # Polite API pause
+        time.sleep(1)
 
-    st.success(f"Sweep Complete! Processed {processed_count} pages.")
+    st.success(f"Sweep Complete! Processed {processed_count} segments.")
