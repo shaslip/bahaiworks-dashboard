@@ -17,7 +17,14 @@ if project_root not in sys.path:
 
 # --- Imports ---
 from src.gemini_processor import proofread_with_formatting, transcribe_with_document_ai, reformat_raw_text
-from src.mediawiki_uploader import upload_to_bahaiworks, API_URL
+from src.mediawiki_uploader import (
+    upload_to_bahaiworks, 
+    API_URL, 
+    fetch_wikitext, 
+    inject_text_into_page, 
+    generate_header, 
+    cleanup_page_seams
+)
 
 # --- Configuration ---
 if 'GEMINI_API_KEY' not in os.environ:
@@ -31,173 +38,6 @@ st.set_page_config(page_title="Fully Automated Proofreader", page_icon="🤖", l
 # ==============================================================================
 # 1. HELPER FUNCTIONS
 # ==============================================================================
-
-def generate_header(current_issue_num, year=None):
-    """
-    Generates the MediaWiki {{header}} template.
-    Supports single issues (64) and ranges (64-65).
-    """
-    try:
-        # Check for range (e.g., "64-65")
-        if '-' in str(current_issue_num):
-            parts = str(current_issue_num).split('-')
-            start_num = int(parts[0])
-            end_num = int(parts[-1])
-            curr_display = current_issue_num
-            
-            # Logic: Prev is start-1, Next is end+1
-            prev_num = start_num - 1
-            next_num = end_num + 1
-        else:
-            curr = int(current_issue_num)
-            curr_display = str(curr)
-            prev_num = curr - 1
-            next_num = curr + 1
-        
-        prev_link = f"[[../../Issue {prev_num}/Text|Previous]]" if prev_num > 0 else ""
-        next_link = f"[[../../Issue {next_num}/Text|Next]]"
-        
-        # Format categories
-        cat_str = str(year) if year else ""
-
-        header = f"""{{{{header
- | title      = [[../../]]
- | author     = 
- | translator = 
- | section    = Issue {curr_display}
- | previous   = {prev_link}
- | next       = {next_link}
- | notes      = {{{{bnreturn}}}}{{{{ps|1}}}}
- | categories = {cat_str}
-}}}}
-"""
-        return header
-    except ValueError:
-        return ""
-
-def fetch_wikitext(title):
-    """
-    Fetches the absolute latest revision of a page from the live Wiki.
-    
-    Returns: 
-        (content, error_message)
-    """
-    try:
-        # User-Agent header is often required to avoid 403 blocks from Wiki APIs
-        headers = {"User-Agent": "BahaiWorksDashboard/1.0 (internal tool)"}
-        params = {
-            "action": "query",
-            "prop": "revisions",
-            "titles": title,
-            "rvprop": "content",
-            "format": "json",
-            "rvslots": "main"
-        }
-        
-        response = requests.get(API_URL, params=params, headers=headers, timeout=10)
-        data = response.json()
-        
-        pages = data.get('query', {}).get('pages', {})
-        for pid in pages:
-            # MediaWiki returns "-1" if the page is missing
-            if pid == "-1":
-                return None, f"Page '{title}' does not exist (ID -1)."
-            
-            # Extract the raw wikitext from the main slot
-            return pages[pid]['revisions'][0]['slots']['main']['*'], None
-            
-    except Exception as e:
-        return None, str(e)
-    
-    return None, "Unknown Error"
-
-def inject_text_into_page(wikitext, page_num, new_content, pdf_filename):
-    """
-    Surgically replaces content FOLLOWING {{page|X...}} tag.
-    
-    NEW: Preserves {{BN_header...}} templates if found immediately after the page tag.
-    """
-    # 1. Try to find the existing tag
-    pattern_tag_start = re.compile(r'\{\{page\s*\|\s*' + str(page_num) + r'(?:\||\}\})', re.IGNORECASE)
-    match = pattern_tag_start.search(wikitext)
-    
-    if match:
-        # --- EXISTING PAGE LOGIC ---
-        # Find closing }}
-        tag_start_index = match.start()
-        tag_end_index = wikitext.find("}}", tag_start_index)
-        
-        if tag_end_index == -1:
-             return None, f"Malformed tag: {{page|{page_num}}} has no closing '}}'."
-             
-        # Content normally starts after closing }}
-        content_start_pos = tag_end_index + 2
-        
-        # --- PRESERVATION LOGIC (New) ---
-        # Check if a header template (like {{BN_header_...}}) follows immediately
-        # We look for {{BN_header...}} starting right after the page tag (ignoring whitespace)
-        # re.DOTALL ensures we capture multiline templates
-        # We assume the template ends with the first }}
-        remaining_text = wikitext[content_start_pos:]
-        header_match = re.match(r'^\s*\{\{BN_header_.*?\}\}', remaining_text, re.DOTALL | re.IGNORECASE)
-        
-        if header_match:
-            # Advance start position to AFTER this header template
-            content_start_pos += header_match.end()
-
-        # Find start of NEXT tag to define end of content
-        pattern_next = re.compile(r'\{\{page\s*\|')
-        match_next = pattern_next.search(wikitext, content_start_pos)
-        
-        content_end_pos = match_next.start() if match_next else len(wikitext)
-        
-        # Splice
-        new_wikitext = wikitext[:content_start_pos] + "\n" + new_content.strip() + "\n" + wikitext[content_end_pos:]
-        return new_wikitext, None
-
-    else:
-        # --- NEW PAGE APPEND LOGIC ---
-        # The tag doesn't exist. We assume this is a new page at the end of the document.
-        # Check if we should append. Usually, if page_num is > 1, it's safe to append.
-        
-        # Construct the new tag
-        # We use the filename from the script state to build {{page|X|file=...|page=X}}
-        new_tag = f"{{{{page|{page_num}|file={pdf_filename}|page={page_num}}}}}"
-        
-        # Append to the end
-        # Ensure there is a newline before the new page
-        if not wikitext.endswith("\n"):
-            wikitext += "\n"
-            
-        new_wikitext = wikitext + "\n" + new_tag + "\n" + new_content.strip()
-        
-        return new_wikitext, None
-
-def cleanup_page_seams(wikitext):
-    """
-    Fixes text artifacts at page boundaries safely.
-    """
-    
-    # 1. Fix Hyphenated Words (Specific Case: word- \n {{page}} \n suffix)
-    # Move {{page}} before the word, remove hyphen, join suffix.
-    # Ex: participat- \n {{page}} \n ing  ->  {{page}}participating
-    wikitext = re.sub(
-        r'([a-zA-Z]+)-\s*\n\s*(\{\{page\|[^}]+\}\})\s*\n\s*([a-z]+)',
-        r'\2\1\3',
-        wikitext
-    )
-
-    # 2. Fix Sentence Flow (General Case: {{page}} \n Word)
-    # Remove the newline after {{page}} ONLY if the next line is text.
-    # SAFETY: We uses (?!...) to ensure we do NOT match if the next char is 
-    # '{|' (table), '!' (table header), '|' (table row), '=' (header), or '*'/'#' (lists).
-    wikitext = re.sub(
-        r'(\{\{page\|[^}]+\}\})\n(?![{|!=*#])',
-        r'\1',
-        wikitext
-    )
-    
-    return wikitext
 
 def get_all_pdf_files(root_folder):
     """Recursively finds all PDF files, ignoring those marked as '-old', and sorts them naturally."""
