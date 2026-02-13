@@ -253,7 +253,6 @@ if start_btn:
     session = requests.Session()
     try:
         with st.spinner("🔐 Authenticating with MediaWiki..."):
-            # This primes the session with cookies/login token
             get_csrf_token(session)
             st.success("Authenticated successfully!")
     except Exception as e:
@@ -266,17 +265,12 @@ if start_btn:
     # If "Test Mode" is on, we only loop ONCE.
     end_idx = current_idx + 1 if run_mode.startswith("Test") else total_files
 
-    # --- Failure Tracking ---
-    consecutive_page1_failures = 0
-    global_fallback_active = False
-
     for i in range(current_idx, end_idx):
         pdf_path = pdf_files[i]
         
         # 4a. Resolve Titles
         wiki_title = get_wiki_title(pdf_path, input_folder, base_title)
         
-        # Safety check if title resolution failed
         if not wiki_title:
             st.error(f"Could not determine Wiki Title for {pdf_path}. Skipping.")
             continue
@@ -292,17 +286,20 @@ if start_btn:
         else:
             start_page = 1
             
-        # --- Fallback Flag Logic ---
-        # If we hit 5 successive Page 1 failures, we force fallback for everything.
-        if global_fallback_active:
-             fallback_enabled = True
-        else:
-             fallback_enabled = False
+        # --- NEW: Per-Book Failure State ---
+        gemini_consecutive_failures = 0
+        docai_cooldown_pages = 0
+        permanent_docai = False
 
         # 4c. Iterate Pages in PDF
         page_num = start_page
 
         while True:
+            # Stop Check
+            if stop_info:
+                st.warning("Stopping requested... finishing current page first.")
+                break 
+
             # A. Get Image
             with st.spinner(f"📄 Reading Page {page_num}..."):
                 img = get_page_image_data(pdf_path, page_num)
@@ -314,80 +311,69 @@ if start_btn:
             try:
                 # --- CHANGED: Strategy Logic ---
                 final_text = ""
-                use_docai_now = (ocr_strategy == "DocAI Only") or fallback_enabled
-
-                if use_docai_now:
-                    log_area.text(f"🤖 [DocAI Mode] OCR Page {page_num}...")
-                    raw_ocr = transcribe_with_document_ai(img)
-                    
-                    if "DOCAI_ERROR" in raw_ocr:
-                        st.error(f"DocAI Failed: {raw_ocr}")
-                        st.stop()
-                    
-                    log_area.text(f"🎨 [DocAI Mode] Formatting Page {page_num}...")
-                    final_text = reformat_raw_text(raw_ocr)
-
-                    if "FORMATTING_ERROR" in final_text:
-                        # --- Last Resort Fallback ---
-                        log_area.text(f"⚠️ DocAI Formatting failed. Attempting Gemini fallback...")
-                        
-                        # Try Gemini directly as a Hail Mary
-                        gemini_rescue_text = proofread_with_formatting(img)
-                        
-                        if "GEMINI_ERROR" not in gemini_rescue_text:
-                            final_text = gemini_rescue_text
-                            st.success(f"✨ Gemini successfully rescued Page {page_num}!")
-                        else:
-                            # Log warning instead of Error/Stop
-                            st.warning(f"⚠️ DocAI Reformatter Failed AND Gemini Fallback Failed on Page {page_num}. Skipping page.")
-                            
-                            # Save state so we can resume from the NEXT page if the script stops later
-                            save_state(i, page_num + 1, "running", last_file_path=short_name)
-                            
-                            # Increment and skip to next iteration
-                            page_num += 1
-                            continue
                 
+                # Determine Strategy: Force DocAI if user selected it OR we are in fallback mode
+                force_docai = (ocr_strategy == "DocAI Only") or permanent_docai or (docai_cooldown_pages > 0)
+
+                if force_docai:
+                    # --- Path A: DocAI (Forced) ---
+                    mode_label = "Permanent DocAI" if permanent_docai else f"Cooldown DocAI ({docai_cooldown_pages} left)"
+                    log_area.text(f"🤖 [{mode_label}] Processing Page {page_num}...")
+
+                    raw_ocr = transcribe_with_document_ai(img)
+                    if "DOCAI_ERROR" in raw_ocr:
+                        # Rare DocAI failure -> Try Gemini Rescue
+                        log_area.text(f"⚠️ DocAI Failed. Attempting Gemini Rescue...")
+                        final_text = proofread_with_formatting(img)
+                    else:
+                        final_text = reformat_raw_text(raw_ocr)
+                        # Formatting failure check
+                        if "FORMATTING_ERROR" in final_text:
+                            log_area.text(f"⚠️ DocAI Formatting Failed. Attempting Gemini Rescue...")
+                            final_text = proofread_with_formatting(img)
+
+                    # Decrement Cooldown if active
+                    if docai_cooldown_pages > 0:
+                        docai_cooldown_pages -= 1
+                        if docai_cooldown_pages == 0:
+                            log_area.text(f"🟢 Cooldown complete. Re-enabling Gemini next page.")
+
                 else:
-                    # Standard Gemini Routine
+                    # --- Path B: Gemini (Standard) ---
                     log_area.text(f"✨ Gemini processing Page {page_num}...")
                     final_text = proofread_with_formatting(img)
 
-                # --- CHANGED: Error Handling (Don't swallow errors) ---
-                if "GEMINI_ERROR" in final_text:
-                    if "Recitation" in final_text or "Copyright" in final_text:
-                        st.warning(f"⚠️ Copyright block on Page {page_num}. Engaging Fallback.")
+                    # Check for Errors (API Error or Content Refusal)
+                    is_gemini_error = "GEMINI_ERROR" in final_text or "Recitation" in final_text or "Copyright" in final_text
+
+                    if is_gemini_error:
+                        gemini_consecutive_failures += 1
                         
-                        # --- NEW: Track Consecutive Page 1 Failures ---
-                        if page_num == 1:
-                            consecutive_page1_failures += 1
-                            if consecutive_page1_failures >= 5:
-                                global_fallback_active = True
-                                st.error("🚨 5 successive Page 1 failures detected. Switching to Document AI for all remaining files.")
+                        # --- Logic: Handle Failures ---
+                        if gemini_consecutive_failures == 2:
+                            docai_cooldown_pages = 5
+                            log_area.text(f"⚠️ 2 Consecutive Failures. Switching to DocAI for next 5 pages.")
                         
-                        # Activate Fallback
-                        fallback_enabled = True
+                        elif gemini_consecutive_failures >= 3:
+                            permanent_docai = True
+                            log_area.text(f"⛔ 3rd Strike. Switching to DocAI for remainder of this book.")
                         
-                        # RETRY immediately with Fallback Routine
-                        log_area.text(f"🔄 Retrying Page {page_num} with DocAI + Reformatter...")
-                        
-                        # Step 1: DocAI
+                        else:
+                            log_area.text(f"⚠️ Gemini Error ({gemini_consecutive_failures}/2). Retrying with DocAI...")
+
+                        # --- Immediate Fallback for THIS Page ---
+                        # We don't want to skip this page, so we process it with DocAI right now
                         raw_ocr = transcribe_with_document_ai(img)
-                        if "DOCAI_ERROR" in raw_ocr:
-                            st.error("Fallback OCR failed.")
-                            st.stop()
-                            
-                        # Step 2: Gemini Text-to-Text Formatting
                         final_text = reformat_raw_text(raw_ocr)
-                        
+
                     else:
-                        st.error(f"🛑 CRITICAL API ERROR on Page {page_num}: {final_text}")
-                        st.stop()
-                else:
-                    # --- NEW: Success Case ---
-                    # If Page 1 succeeded with Gemini, reset the failure counter
-                    if page_num == 1:
-                        consecutive_page1_failures = 0
+                        # Success! Reset consecutive counter.
+                        gemini_consecutive_failures = 0
+
+                # Safety Check: If fallback also failed
+                if not final_text or "ERROR" in final_text:
+                    st.error(f"🛑 CRITICAL ERROR on Page {page_num}: {final_text}")
+                    st.stop()
 
                 # 3. Last Page Check (Add NOTOC)
                 doc = fitz.open(pdf_path)
@@ -410,62 +396,44 @@ if start_btn:
                     # 1. Remove {{ocr}} tags
                     current_wikitext = re.sub(r'\{\{ocr.*?\}\}\n?', '', current_wikitext, flags=re.IGNORECASE)
 
-                    # 2. Extract Year from [[Category:YYYY]] (Read-only)
+                    # 2. Extract Year from [[Category:YYYY]]
                     found_year = None
                     cat_match = re.search(r'\[\[Category:\s*(\d{4})\s*\]\]', current_wikitext, re.IGNORECASE)
-                    
-                    if cat_match:
-                        found_year = cat_match.group(1)
+                    if cat_match: found_year = cat_match.group(1)
 
                     # 3. Generate and Prepend Header
                     if "{{header" not in current_wikitext:
-                        
-                        # Initialize variables
                         volume_found = None
-                        issue_identifier = None # Can be "1" or "24-25"
+                        issue_identifier = None 
 
-                        # Check for Volume/Issue format in the Title we just generated
                         if "/Volume_" in wiki_title and "/Issue_" in wiki_title:
-                            # Extract from the clean Wiki path (Safer than filename)
                             v_match = re.search(r'Volume_(\d+)', wiki_title)
                             i_match = re.search(r'Issue_(\d+)', wiki_title)
-                            
                             if v_match and i_match:
                                 volume_found = v_match.group(1)
                                 issue_identifier = i_match.group(1)
-                        
                         else:
-                            # Standard Issue or Range (Extract from Wiki Title is safest)
-                            # wiki_title looks like ".../Issue_24-25/Text"
                             i_match = re.search(r'Issue_([\d-]+)', wiki_title)
                             if i_match:
                                 issue_identifier = i_match.group(1)
                             else:
-                                # Fallback to filename if Wiki Title is weird
                                 fn_match = re.search(r'(\d+(?:-\d+)?)', short_name)
                                 if fn_match: issue_identifier = fn_match.group(1)
 
-                        # Only generate if we found an issue identifier
                         if issue_identifier:
                             header = generate_header(issue_identifier, year=found_year, volume=volume_found)
                             
-                            # --- ACCESS CONTROL HANDLING ---
-                            # Check for <accesscontrol> tag at start of file
+                            # Access Control Handling
                             access_match = re.match(r'^\s*<accesscontrol>.*?</accesscontrol>\s*', current_wikitext, re.DOTALL | re.IGNORECASE)
-                            
                             if access_match:
                                 access_tag = access_match.group(0).strip()
-                                # Content AFTER the tag
                                 remaining_body = current_wikitext[access_match.end():].lstrip()
-                                # Reconstruction: Access Tag -> Header -> Body
                                 current_wikitext = access_tag + "\n" + header + "\n" + remaining_body
                             else:
-                                # Standard prepend
                                 current_wikitext = header + "\n" + current_wikitext.lstrip()
                 
                 # D. Inject Content
                 log_area.text(f"💉 Injecting content into {{page|{page_num}}}...")
-                # FIXED: Changed 'new_text' to 'final_text'
                 final_wikitext, inject_error = inject_text_into_page(current_wikitext, page_num, final_text, short_name)
                 
                 if inject_error:
@@ -484,21 +452,11 @@ if start_btn:
                 # --- SAFE FINAL CLEANUP (Run only on the last page) ---
                 if is_last_page:
                     log_area.text(f"🧹 Running final seam cleanup on {short_name}...")
-                    
-                    # 1. Fetch the FRESH full document text (Avoids NameError)
                     full_text, fetch_err = fetch_wikitext(wiki_title, session=session)
-                    
                     if not fetch_err and full_text:
-                        # 2. Run the SAFE regex fixes
                         cleaned_text = cleanup_page_seams(full_text)
-                        
-                        # 3. Save again ONLY if changes were made
                         if cleaned_text != full_text:
-                            cleanup_res = upload_to_bahaiworks(wiki_title, cleaned_text, "Automated Cleanup: Seams & Hyphens", session=session)
-                            if cleanup_res.get('edit', {}).get('result') == 'Success':
-                                log_area.text(f"✨ Cleanup saved successfully!")
-                            else:
-                                st.error(f"Cleanup Save Failed: {cleanup_res}")
+                            upload_to_bahaiworks(wiki_title, cleaned_text, "Automated Cleanup: Seams & Hyphens", session=session)
 
                 # F. Update State (Success)
                 save_state(i, page_num + 1, "running", last_file_path=short_name)
@@ -507,14 +465,16 @@ if start_btn:
                     st.success(f"✅ Saved Page {page_num}")
                 
                 page_num += 1
-                time.sleep(1) # Polite API delay
+                time.sleep(1) 
 
             except Exception as e:
                 st.error(f"🚨 EXCEPTION OCCURRED: {str(e)}")
                 st.stop()
+        
+        # Stop check outside inner loop
+        if stop_info:
+            break
 
     # End of Loop
     st.success("🎉 Batch Processing Complete!")
-    
-    # FIX: Save the index of the NEXT file so we can resume later
     save_state(end_idx, 1, "done", last_file_path=short_name)
