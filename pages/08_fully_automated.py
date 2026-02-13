@@ -23,7 +23,8 @@ from src.mediawiki_uploader import (
     fetch_wikitext, 
     inject_text_into_page, 
     generate_header, 
-    cleanup_page_seams
+    cleanup_page_seams,
+    get_csrf_token
 )
 
 # --- Configuration ---
@@ -248,6 +249,17 @@ with col2:
 
 # 4. Automation Loop
 if start_btn:
+    # 1. SETUP SHARED SESSION
+    session = requests.Session()
+    try:
+        with st.spinner("🔐 Authenticating with MediaWiki..."):
+            # This primes the session with cookies/login token
+            get_csrf_token(session)
+            st.success("Authenticated successfully!")
+    except Exception as e:
+        st.error(f"Authentication Failed: {e}")
+        st.stop()
+
     current_idx = state['current_file_index']
     
     # If resuming, we start from the file index in state
@@ -387,7 +399,7 @@ if start_btn:
 
                 # C. Fetch Live Wiki Text
                 log_area.text(f"🌐 Fetching live text from {wiki_title}...")
-                current_wikitext, error = fetch_wikitext(wiki_title)
+                current_wikitext, error = fetch_wikitext(wiki_title, session=session)
                 
                 if error:
                     st.error(f"CRITICAL ERROR: Could not fetch '{wiki_title}'. Does the page exist?")
@@ -463,7 +475,7 @@ if start_btn:
                 # E. Upload
                 log_area.text(f"💾 Saving to Bahai.works...")
                 summary = f"Automated Proofread: {short_name} Pg {page_num}"
-                res = upload_to_bahaiworks(wiki_title, final_wikitext, summary)
+                res = upload_to_bahaiworks(wiki_title, final_wikitext, summary, session=session)
                 
                 if res.get('edit', {}).get('result') != 'Success':
                     st.error(f"UPLOAD FAILED: {res}")
@@ -474,7 +486,7 @@ if start_btn:
                     log_area.text(f"🧹 Running final seam cleanup on {short_name}...")
                     
                     # 1. Fetch the FRESH full document text (Avoids NameError)
-                    full_text, fetch_err = fetch_wikitext(wiki_title)
+                    full_text, fetch_err = fetch_wikitext(wiki_title, session=session)
                     
                     if not fetch_err and full_text:
                         # 2. Run the SAFE regex fixes
@@ -482,12 +494,11 @@ if start_btn:
                         
                         # 3. Save again ONLY if changes were made
                         if cleaned_text != full_text:
-                            cleanup_res = upload_to_bahaiworks(wiki_title, cleaned_text, "Automated Cleanup: Seams & Hyphens")
+                            cleanup_res = upload_to_bahaiworks(wiki_title, cleaned_text, "Automated Cleanup: Seams & Hyphens", session=session)
                             if cleanup_res.get('edit', {}).get('result') == 'Success':
                                 log_area.text(f"✨ Cleanup saved successfully!")
                             else:
                                 st.error(f"Cleanup Save Failed: {cleanup_res}")
-                # ----------------------------------------------------
 
                 # F. Update State (Success)
                 save_state(i, page_num + 1, "running", last_file_path=short_name)
