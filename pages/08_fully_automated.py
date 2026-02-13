@@ -55,17 +55,64 @@ def get_all_pdf_files(root_folder):
 
 def get_wiki_title(local_path, root_folder, base_wiki_title):
     """
-    Extracts the issue number from the filename to match Wiki format.
-    Now supports ranges like '64-65'.
+    Determines the Wiki Page Title based on filename and folder structure.
+    Prioritizes explicit Volume/Issue markers.
     """
     filename = os.path.basename(local_path)
+    # Get path relative to the input folder to avoid scanning unrelated system paths
+    try:
+        rel_path = os.path.relpath(local_path, root_folder)
+    except ValueError:
+        # Fallback if paths are on different drives
+        rel_path = local_path
+
+    # --- STRATEGY 1: Explicit Filename Regex (e.g. "World_Unity_Vol1_Issue1.pdf") ---
+    # Matches: "Vol 1 No 1", "Vol.1.Issue.1", "Volume1_Issue1"
+    # Case insensitive, handles various separators
+    vol_issue_match = re.search(r'(?:Vol|Volume)[\W_]*(\d+)[\W_]*(?:No|Issue|Number)[\W_]*(\d+)', filename, re.IGNORECASE)
     
-    # UPDATED: Capture digits, optionally followed by hyphen and more digits
+    if vol_issue_match:
+        vol = vol_issue_match.group(1)
+        issue = vol_issue_match.group(2)
+        return f"{base_wiki_title}/Volume_{vol}/Issue_{issue}/Text"
+
+    # --- STRATEGY 2: Folder Structure Inspection (e.g. ".../Volume 1/No 1/...") ---
+    # Split path and look for explicit folder names
+    parts = rel_path.split(os.sep)
+    path_vol = None
+    path_issue = None
+    
+    for part in parts:
+        # Check for Volume folder
+        if not path_vol:
+            v_match = re.search(r'^(?:Vol|Volume)[\W_]*(\d+)$', part, re.IGNORECASE)
+            if v_match:
+                path_vol = v_match.group(1)
+        
+        # Check for Issue folder
+        if not path_issue:
+            i_match = re.search(r'^(?:No|Issue)[\W_]*(\d+)$', part, re.IGNORECASE)
+            if i_match:
+                path_issue = i_match.group(1)
+
+    # If we found explicit Volume in folder, we try to find Issue in filename if not in folder
+    if path_vol:
+        final_issue = path_issue
+        if not final_issue:
+            # If we have a Volume folder but just a number in the file (e.g. "01.pdf")
+            num_match = re.search(r'(\d+)', filename)
+            if num_match:
+                final_issue = num_match.group(1)
+        
+        if final_issue:
+            return f"{base_wiki_title}/Volume_{path_vol}/Issue_{final_issue}/Text"
+
+    # --- STRATEGY 3: Standard Issue/Range Fallback (e.g. "ABR 04-01.pdf") ---
+    # This preserves your existing logic for simple issues or ranges (64-65)
     match = re.search(r'(\d+(?:-\d+)?)', filename)
     
     if match:
         issue_num = match.group(1)
-        # Construct standard Wiki format: Base / Issue_X / Text
         return f"{base_wiki_title}/Issue_{issue_num}/Text"
     
     # Fallback: Use full filename if no number is found
