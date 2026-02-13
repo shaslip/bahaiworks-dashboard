@@ -66,10 +66,13 @@ def page_exists(session, title):
             return False
     return True
 
-def fetch_wikitext(title):
+def fetch_wikitext(title, session=None):
     """
-    Fetches the absolute latest revision of a page from the live Wiki.
-    Returns: (content, error_message)
+    Fetches the absolute latest revision.
+    Args:
+        title (str): Page title
+        session (requests.Session, optional): Authenticated session. 
+                                              If None, uses anonymous requests.
     """
     try:
         headers = {"User-Agent": "BahaiWorksBot/1.0"}
@@ -82,15 +85,24 @@ def fetch_wikitext(title):
             "rvslots": "main"
         }
         
-        response = requests.get(API_URL, params=params, headers=headers, timeout=10)
+        # Use provided session (authenticated) or fallback to generic requests
+        requester = session if session else requests
+        response = requester.get(API_URL, params=params, headers=headers, timeout=10)
         data = response.json()
         
         pages = data.get('query', {}).get('pages', {})
         for pid in pages:
             if pid == "-1":
+                # Special handling for restricted pages if we are anonymous
+                if "badrevids" in data.get("query", {}):
+                     return None, f"Page '{title}' exists but content is hidden (Auth required)."
                 return None, f"Page '{title}' does not exist (ID -1)."
             
-            return pages[pid]['revisions'][0]['slots']['main']['*'], None
+            # Check if content is actually returned (it won't be if restricted and anonymous)
+            try:
+                return pages[pid]['revisions'][0]['slots']['main']['*'], None
+            except KeyError:
+                return None, f"Content hidden or permission denied for '{title}'"
             
     except Exception as e:
         return None, str(e)
@@ -243,10 +255,15 @@ def upload_to_bahaiworks(title, content, summary="Bot upload via Dashboard", che
         summary (str): Edit summary
         check_exists (bool): If True, raises FileExistsError if page already exists.
     """
-    session = requests.Session()
+    local_session = False
+    if session is None:
+        session = requests.Session()
+        local_session = True
     
     try:
-        # Authenticate
+        # Authenticate if we are using a local/new session
+        # OR if the passed session doesn't have a token yet? 
+        # Actually, get_csrf_token handles the login flow if needed.
         csrf_token = get_csrf_token(session)
         
         # Safety Check: Page Existence
@@ -273,3 +290,7 @@ def upload_to_bahaiworks(title, content, summary="Bot upload via Dashboard", che
         
     except Exception as e:
         raise e
+    finally:
+        # Only close if we created it here
+        if local_session:
+            session.close()
