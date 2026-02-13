@@ -147,11 +147,12 @@ def process_header(wikitext, wiki_title):
 def find_and_fix_tag_by_page_num(wikitext, pdf_filename, pdf_page_num, correct_label):
     """
     Robustly finds {{page|...|file=...|page=X}} regardless of the existing label.
-    Replaces the ENTIRE tag with {{page|CORRECT_LABEL|file=...|page=X}}.
-    Also nukes {{ocr}} if it hangs off the end.
+    Replaces the ENTIRE tag block (including any trailing {{ocr}}) with the correct clean tag.
     """
     # 1. Find all {{page}} tags in the text
-    # We iterate to find the specific one matching our PDF page number
+    # Group 1: The full {{page}} tag
+    # Group 2: The inner content of {{page}}
+    # Group 3: The optional {{ocr}} tag following it
     tags = list(re.finditer(r'(\{\{page\|(.*?)\}\})(\s*\{\{ocr\}\})?', wikitext, re.IGNORECASE | re.DOTALL))
     
     for match in tags:
@@ -163,18 +164,18 @@ def find_and_fix_tag_by_page_num(wikitext, pdf_filename, pdf_page_num, correct_l
         page_check = re.search(r'page\s*=\s*(\d+)', params, re.IGNORECASE)
         
         if file_check and page_check:
-            found_file = file_check.group(1).strip()
-            found_page = int(page_check.group(1))
+            found_filename = file_check.group(1).strip()
             
             # Simple filename match (ignore case/paths)
-            if found_page == pdf_page_num and os.path.basename(found_file).lower() == os.path.basename(pdf_filename).lower():
+            if int(page_check.group(1)) == pdf_page_num and \
+               os.path.basename(found_filename).lower() == os.path.basename(pdf_filename).lower():
                 
-                # FOUND IT!
-                # Construct clean new tag
+                # Found it. Create clean new tag with correct label.
+                # Note: We do NOT append {{ocr}}. 
+                # This effectively deletes {{ocr}} from the page if it was in 'full_tag_block'.
                 new_tag = f"{{{{page|{correct_label}|file={pdf_filename}|page={pdf_page_num}}}}}"
                 
-                # Replace the entire old block (including {{ocr}}) with the new tag
-                # Note: We replace only this specific instance string
+                # Replace the entire old block with the new tag
                 wikitext = wikitext.replace(full_tag_block, new_tag)
                 
                 st.toast(f"Fixed Tag: PDF {pdf_page_num} -> {correct_label}", icon="🔧")
@@ -427,14 +428,11 @@ if start_btn:
                 continue
 
             # 3. TAG FIXING (The Critical Fix)
-            # We fix the tag in memory BEFORE proofreading. 
-            # This ensures inject_text_into_page finds a tag labeled 'i' instead of '-2'.
-            
             # Fetch fresh text for pages 2+ to catch up with server state
             if pdf_page > start_pdf_page:
                 current_text, _ = fetch_wikitext(wiki_title)
             
-            # Find {{page|...|page=1}} and force label to 'i' (or whatever correct_label is)
+            # Fix tag if needed (updates -2 -> i, etc.)
             current_text = find_and_fix_tag_by_page_num(current_text, pdf_filename, pdf_page, correct_label)
 
             # 4. AI Processing (Gemini -> DocAI Fallback Logic)
@@ -473,8 +471,8 @@ if start_btn:
                 # 5. Inject & Upload
                 log_area.text("💾 Uploading to Wiki...")
                 
-                # inject_text_into_page will replace content if tag exists, or append if it doesn't.
-                # Since we normalized the tag in step 3, it should find it correctly now.
+                # inject_text_into_page will replace content if tag exists
+                # It will also strip any {{ocr}} tags it finds globally
                 new_wikitext, inject_err = inject_text_into_page(current_text, correct_label, final_text, pdf_filename)
                 
                 if inject_err:
