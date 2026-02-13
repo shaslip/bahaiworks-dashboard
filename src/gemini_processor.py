@@ -283,6 +283,7 @@ def proofread_with_formatting(image):
         -   If you see **Bold** or *Italic*, use `'''bold'''` and `''italic''`.
         -   For other cases, use standard MediaWiki formatting where appropriate.
         -   If the text has an OBVIOUS typo (e.g. "sentance"), transcribe it as: {{sic|sentance|sentence}}
+        -   Note: <poem> tags are not supported.
     5.  Paragraph breaks require an extra return.
     6.  Output ONLY the clean wikitext.
     """
