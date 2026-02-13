@@ -610,7 +610,8 @@ if start_btn:
                     # --- Gemini Path ---
                     final_text = proofread_with_formatting(img)
                     
-                    if "GEMINI_ERROR" in final_text:
+                    # Added 'final_text and' check to prevent TypeError if None is returned
+                    if final_text and "GEMINI_ERROR" in final_text:
                         gemini_consecutive_failures += 1
                         
                         # Handle Failure Logic
