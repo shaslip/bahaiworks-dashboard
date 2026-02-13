@@ -151,11 +151,14 @@ def inject_text_into_page(wikitext, page_num, new_content, pdf_filename="File.pd
         
         return new_wikitext, None
 
-def generate_header(current_issue_num, year=None):
+def generate_header(current_issue_num, year=None, volume=None):
     """
     Generates the MediaWiki {{header}} template.
+    Handles both Standard Issues (Issue 01) and Volume/Issue structures.
     """
     try:
+        # --- 1. Calculate Prev/Next Math ---
+        # (This preserves your original logic for ranges like "04-01")
         if '-' in str(current_issue_num):
             parts = str(current_issue_num).split('-')
             start_num = int(parts[0])
@@ -169,22 +172,43 @@ def generate_header(current_issue_num, year=None):
             prev_num = curr - 1
             next_num = curr + 1
         
-        prev_link = f"[[../../Issue {prev_num}/Text|Previous]]" if prev_num > 0 else ""
-        next_link = f"[[../../Issue {next_num}/Text|Next]]"
+        # --- 2. Determine Depth & Section Title ---
+        if volume:
+            # VOLUME MODE: Deep linking
+            title_link = "[[../../../]]"  # Go up 3 levels (Text -> Issue -> Vol -> Base)
+            section_display = f"Volume {volume}, Issue {curr_display}"
+            
+            # For Volume/Issue, siblings are still usually ../../Issue_X if inside the Volume folder
+            # Adjust this prefix if your folders are named "No 1" instead of "Issue 1"
+            link_prefix = "../../Issue_" 
+        else:
+            # STANDARD MODE
+            title_link = "[[../../]]"     # Go up 2 levels (Text -> Issue -> Base)
+            section_display = f"Issue {curr_display}"
+            link_prefix = "../../Issue "
+
+        # --- 3. Construct Links ---
+        # Note: We use the calculated numbers. 
+        # For Volumes, this works for issues within the same volume (1 -> 2).
+        # It does NOT automatically handle Volume rollover (Vol 1 Issue 12 -> Vol 2 Issue 1).
+        prev_link = f"[[{link_prefix}{prev_num}/Text|Previous]]" if prev_num > 0 else ""
+        next_link = f"[[{link_prefix}{next_num}/Text|Next]]"
+        
         cat_str = str(year) if year else ""
 
+        # --- 4. Build Template ---
         header = f"""{{{{header
- | title      = [[../../]]
+ | title      = {title_link}
  | author     = 
  | translator = 
- | section    = Issue {curr_display}
+ | section    = {section_display}
  | previous   = {prev_link}
  | next       = {next_link}
  | notes      = {{{{bnreturn}}}}{{{{ps|1}}}}
  | categories = {cat_str}
-}}}}
-"""
+}}}}"""
         return header
+
     except ValueError:
         return ""
 
