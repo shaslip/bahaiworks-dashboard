@@ -54,6 +54,7 @@ def calculate_page_label(pdf_page_num, anchor_pdf_page):
     anchor_pdf_page: The PDF page number that corresponds to Book Page 1.
     """
     if anchor_pdf_page is None:
+        # No anchor found, assume PDF page 1 = Book page 1
         return str(pdf_page_num)
         
     if pdf_page_num < anchor_pdf_page:
@@ -61,6 +62,7 @@ def calculate_page_label(pdf_page_num, anchor_pdf_page):
         return int_to_roman(pdf_page_num)
     else:
         # Main content -> Offset Calculation
+        # Ex: PDF 10 is Page 1. So PDF 10 - 10 + 1 = 1.
         return str(pdf_page_num - anchor_pdf_page + 1)
 
 def find_page_one_anchor(wikitext):
@@ -90,6 +92,7 @@ def process_header(wikitext, wiki_title):
         new_header = old_header
         
         # --- Update Notes Section ---
+        # Check if notes param exists
         if re.search(r'\|\s*notes\s*=', new_header):
             # Enforce ps|1
             if "{{ps|" in new_header:
@@ -107,17 +110,20 @@ def process_header(wikitext, wiki_title):
                 new_header = new_header.replace("{{bnreturn}}", "")
                 
         else:
-            # Create notes param if missing
+            # Create notes param
             notes_val = "{{ps|1}}"
             if is_text_page: notes_val += "{{bnreturn}}"
+            # Insert before the closing brackets
             new_header = new_header.rstrip("}") + f"\n | notes      = {notes_val}\n}}"
 
+        # Replace in text
         if new_header != old_header:
             return wikitext.replace(old_header, new_header)
         return wikitext
 
     else:
         # 2. Create New Header
+        # Find Year for Category
         cat_match = re.search(r'\[\[Category:\s*(\d{4})', wikitext)
         cat_str = cat_match.group(1) if cat_match else ""
 
@@ -135,33 +141,45 @@ def process_header(wikitext, wiki_title):
  | notes      = {notes_str}
  | categories = {cat_str}
 }}}}"""
+        
         return new_header + "\n" + wikitext.lstrip()
 
-def normalize_tag_label(wikitext, pdf_filename, pdf_page_num, correct_label):
+def find_and_fix_tag_by_page_num(wikitext, pdf_filename, pdf_page_num, correct_label):
     """
-    Finds the existing tag for a specific PDF page (even if labeled '-2') 
-    and renames the label to the correct one (e.g., 'i').
-    Returns the updated wikitext.
+    Robustly finds {{page|...|file=...|page=X}} regardless of the existing label.
+    Replaces the ENTIRE tag with {{page|CORRECT_LABEL|file=...|page=X}}.
+    Also nukes {{ocr}} if it hangs off the end.
     """
-    # Regex to find: {{page| <ANY_LABEL> | file=FILENAME | page=PDF_NUM }}
-    # We use re.escape for filename to handle dots/spaces safe
-    pattern = re.compile(
-        r'(\{\{page\s*\|\s*)([^|]+?)(\s*\|\s*file\s*=\s*' + re.escape(pdf_filename) + 
-        r'\s*\|\s*page\s*=\s*' + str(pdf_page_num) + r'\s*(?:\||\}\}))', 
-        re.IGNORECASE
-    )
+    # 1. Find all {{page}} tags in the text
+    # We iterate to find the specific one matching our PDF page number
+    tags = list(re.finditer(r'(\{\{page\|(.*?)\}\})(\s*\{\{ocr\}\})?', wikitext, re.IGNORECASE | re.DOTALL))
     
-    match = pattern.search(wikitext)
-    
-    if match:
-        current_label = match.group(2).strip()
-        if current_label != correct_label:
-            st.toast(f"Normalizing Label: {current_label} -> {correct_label}", icon="🔧")
-            # Reconstruct the start of the tag with the CORRECT label
-            new_start = match.group(1) + correct_label + match.group(3)
-            # Replace only this specific occurrence
-            wikitext = wikitext.replace(match.group(0), new_start)
+    for match in tags:
+        full_tag_block = match.group(0) # Includes {{ocr}} if present
+        params = match.group(2)         # Content inside {{page|...}}
+        
+        # Check if this tag belongs to our file and page
+        file_check = re.search(r'file\s*=\s*([^|}\n]+)', params, re.IGNORECASE)
+        page_check = re.search(r'page\s*=\s*(\d+)', params, re.IGNORECASE)
+        
+        if file_check and page_check:
+            found_file = file_check.group(1).strip()
+            found_page = int(page_check.group(1))
             
+            # Simple filename match (ignore case/paths)
+            if found_page == pdf_page_num and os.path.basename(found_file).lower() == os.path.basename(pdf_filename).lower():
+                
+                # FOUND IT!
+                # Construct clean new tag
+                new_tag = f"{{{{page|{correct_label}|file={pdf_filename}|page={pdf_page_num}}}}}"
+                
+                # Replace the entire old block (including {{ocr}}) with the new tag
+                # Note: We replace only this specific instance string
+                wikitext = wikitext.replace(full_tag_block, new_tag)
+                
+                st.toast(f"Fixed Tag: PDF {pdf_page_num} -> {correct_label}", icon="🔧")
+                return wikitext
+                
     return wikitext
 
 def build_pdf_index(root_folder):
@@ -175,6 +193,7 @@ def build_pdf_index(root_folder):
     for dirpath, _, filenames in os.walk(root_folder):
         for f in filenames:
             if f.lower().endswith(".pdf"):
+                # We store just the filename as key
                 pdf_index[f] = os.path.join(dirpath, f)
                 
     return pdf_index
@@ -272,8 +291,8 @@ def reset_state():
 # 3. UI & LOGIC
 # ==============================================================================
 
-st.title("🧹 Category Sweeper: `Pages_needing_proofreading`")
-st.markdown("Autonomously iterates through the maintenance category, finds local PDFs, updates headers, and proofreads.")
+st.title("🧹 Category Sweeper: Full PDF Processing")
+st.markdown("Autonomously iterates through the maintenance category, finds local PDFs, updates headers, fixes tags, and proofreads.")
 
 # --- Sidebar ---
 st.sidebar.header("Configuration")
@@ -333,7 +352,7 @@ if start_btn:
         page_obj = members[i]
         wiki_title = page_obj['title']
         
-        status_container.markdown(f"### 🔨 Processing ({i+1}/{len(members)}): `{wiki_title}`")
+        status_container.markdown(f"### 📚 Processing Book ({i+1}/{len(members)}): `{wiki_title}`")
         
         # A. Fetch Wikitext
         log_area.text(f"Fetching source for {wiki_title}...")
@@ -404,15 +423,16 @@ if start_btn:
                 log_area.text(f"❌ Failed to extract image from PDF. Skipping page.")
                 continue
 
-            # 3. NORMALIZE TAG IN MEMORY
-            # This fixes the negative number issue (e.g., changes {{page|-2...}} to {{page|i...}})
-            # We must do this BEFORE fetching fresh text or injecting.
+            # 3. TAG FIXING (The Critical Fix)
+            # We fix the tag in memory BEFORE proofreading. 
+            # This ensures inject_text_into_page finds a tag labeled 'i' instead of '-2'.
             
-            # Note: For pages > start, we re-fetch to catch up with server state if script ran long
+            # Fetch fresh text for pages 2+ to catch up with server state
             if pdf_page > start_pdf_page:
                 current_text, _ = fetch_wikitext(wiki_title)
             
-            current_text = normalize_tag_label(current_text, pdf_filename, pdf_page, correct_label)
+            # Find {{page|...|page=1}} and force label to 'i' (or whatever correct_label is)
+            current_text = find_and_fix_tag_by_page_num(current_text, pdf_filename, pdf_page, correct_label)
 
             # 4. AI Processing (Gemini -> DocAI Fallback)
             final_text = ""
