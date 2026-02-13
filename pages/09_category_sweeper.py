@@ -35,7 +35,6 @@ EXCLUDED_TITLES = [
     "Bahai News India",
     "Bahá’í Canada",
     "Bahá’í Journal",
-    "Bahá’í News",
     "Bahá’í News Bulletin",
     "Bahá’í World",
     "Bahá’í Youth Bulletin",
