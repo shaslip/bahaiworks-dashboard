@@ -271,21 +271,22 @@ def proofread_with_formatting(image):
     You are an expert transcriber and editor for a MediaWiki archive.
     
     Your task:
-    1.  Extract the **MAIN CONTENT** of this page.
-    2.  From the second page on, **EXCLUDE** all page headers, running heads, and page numbers.
-    3.  **ORTHOGRAPHY:** You MUST match the curly apostrophe (’) if used in the document, eg:
+    1.  **CHECK FOR CONTENT:** If the page is blank, illegible, contains only faint bleed-through, or is just a blank lined page, return ONLY the string: --BLANK--
+    2.  Extract the **MAIN CONTENT** of this page.
+    3.  From the second page on, **EXCLUDE** all page headers, running heads, and page numbers.
+    4.  **ORTHOGRAPHY:** You MUST match the curly apostrophe (’) if used in the document, eg:
         -   Write "Bahá’í" (Not Bahá'í)
         -   Write "Bahá’u’lláh" (Not Bahá'u'lláh)
         -   Write "‘Abdu’l-Bahá" (Not 'Abdu'l-Bahá)
-    4.  **FORMATTING:**
+    5.  **FORMATTING:**
         -   If you see a **Header** (that is part of the text, not a running head), use `== Header ==`.
         -   If you see a **Table**, use `{| class="wikitable" ... |}`.
         -   If you see **Bold** or *Italic*, use `'''bold'''` and `''italic''`.
         -   For other cases, use standard MediaWiki formatting where appropriate.
         -   If the text has an OBVIOUS typo (e.g. "sentance"), transcribe it as: {{sic|sentance|sentence}}
         -   Note: <poem> tags are not supported.
-    5.  Paragraph breaks require an extra return.
-    6.  Output ONLY the clean wikitext.
+    6.  Paragraph breaks require an extra return.
+    7.  Output ONLY the clean wikitext.
     """
     
     max_retries = 1
