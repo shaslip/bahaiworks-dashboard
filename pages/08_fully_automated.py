@@ -97,23 +97,19 @@ def get_wiki_title(local_path, root_folder, base_wiki_title):
             return f"{base_wiki_title}/Volume_{path_vol}/Issue_{final_issue}/Text"
 
     # --- STRATEGY 3: Implicit "04-01" (Volume-Issue) ---
-    # CRITICAL FIX: Only trigger if first number starts with '0' (e.g. 04).
-    # This prevents "10-11" (Range) from becoming "Vol 10 Issue 11".
-    hyphen_vol_match = re.search(r'(0\d+)-(\d+)', name_no_ext)
+    # MODIFIED: Trigger if first number starts with '0' (09-02) OR second number starts with '0' (10-01).
+    # This captures "10-01" as Vol 10 Iss 1, while still preventing "10-11" (Range) from becoming Vol 10 Iss 11.
+    hyphen_vol_match = re.search(r'(\d+)-(\d+)', name_no_ext)
     
     if hyphen_vol_match:
-        vol_num = int(hyphen_vol_match.group(1))
-        issue_num = int(hyphen_vol_match.group(2))
-        return f"{base_wiki_title}/Volume_{vol_num}/Issue_{issue_num}/Text"
+        v_str = hyphen_vol_match.group(1)
+        i_str = hyphen_vol_match.group(2)
 
-    # --- STRATEGY 4: Standard Issue / Range (Issue 10, Issue 10-11) ---
-    # Matches "10" or "10-11"
-    match = re.search(r'(\d+(?:-\d+)?)', name_no_ext)
-    if match:
-        issue_num = match.group(1)
-        return f"{base_wiki_title}/Issue_{issue_num}/Text"
-    
-    return f"{base_wiki_title}/{name_no_ext}/Text"
+        # Logic: If either part is clearly zero-padded, assume it is Vol-Issue structure.
+        if v_str.startswith('0') or i_str.startswith('0'):
+            vol_num = int(v_str)
+            issue_num = int(i_str)
+            return f"{base_wiki_title}/Volume_{vol_num}/Issue_{issue_num}/Text"
 
 def get_page_image_data(pdf_path, page_num_1_based):
     doc = fitz.open(pdf_path)
