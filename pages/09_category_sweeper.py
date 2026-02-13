@@ -54,22 +54,15 @@ def calculate_page_label(pdf_page_num, anchor_pdf_page):
     anchor_pdf_page: The PDF page number that corresponds to Book Page 1.
     """
     if anchor_pdf_page is None:
-        # No anchor found, assume PDF page 1 = Book page 1
         return str(pdf_page_num)
         
     if pdf_page_num < anchor_pdf_page:
-        # Front matter (before Page 1) -> Roman Numerals based on PDF page
         return int_to_roman(pdf_page_num)
     else:
-        # Main content -> Offset Calculation
-        # Ex: PDF 10 is Page 1. So PDF 10 - 10 + 1 = 1.
         return str(pdf_page_num - anchor_pdf_page + 1)
 
 def find_page_one_anchor(wikitext):
-    """
-    Scans for {{page|1|file=...|page=X}} to establish the offset.
-    Returns X (the PDF page number) corresponding to Book Page 1.
-    """
+    """Scans for {{page|1|file=...|page=X}} to establish the offset."""
     match = re.search(r'\{\{page\|\s*1\s*\|[^}]*?page\s*=\s*(\d+)', wikitext, re.IGNORECASE)
     if match:
         return int(match.group(1))
@@ -135,6 +128,84 @@ def get_page_image_data(pdf_path, page_num_1_based):
         st.error(f"Error reading PDF {pdf_path}: {e}")
         return None
 
+def process_header(wikitext, wiki_title):
+    """
+    Updates existing header OR creates a new one.
+    - Enforces {{ps|1}} in 'notes'.
+    - Adds {{bnreturn}} ONLY if title ends in /Text.
+    - Adds 'categories = YYYY' if creating new header and Year category found.
+    """
+    is_text_page = wiki_title.endswith("/Text")
+    
+    # 1. Check for Existing Header
+    header_match = re.search(r'(\{\{header\s*\|.*?\n\}\})', wikitext, re.IGNORECASE | re.DOTALL)
+    
+    if header_match:
+        old_header = header_match.group(1)
+        new_header = old_header
+        
+        # --- Update Notes Section ---
+        # We need to find the 'notes = ...' line and manipulate it.
+        # This is tricky with regex, so we'll do a robust line-by-line check inside the header block.
+        
+        # Check if notes param exists
+        if re.search(r'\|\s*notes\s*=', new_header):
+            # Enforce ps|1
+            if "{{ps|" in new_header:
+                new_header = re.sub(r'\{\{ps\|\d+\}\}', '{{ps|1}}', new_header)
+            else:
+                # Append ps|1 to existing notes
+                new_header = re.sub(r'(\|\s*notes\s*=\s*)(.*)', r'\1{{ps|1}}\2', new_header)
+            
+            # Enforce bnreturn (Add if missing and needed)
+            if is_text_page and "{{bnreturn}}" not in new_header:
+                new_header = re.sub(r'(\|\s*notes\s*=\s*)(.*)', r'\1\2{{bnreturn}}', new_header)
+            
+            # Remove bnreturn if NOT needed
+            if not is_text_page and "{{bnreturn}}" in new_header:
+                new_header = new_header.replace("{{bnreturn}}", "")
+                
+        else:
+            # Create notes param
+            notes_val = "{{ps|1}}"
+            if is_text_page: notes_val += "{{bnreturn}}"
+            # Insert before the closing brackets
+            new_header = new_header.rstrip("}") + f"\n | notes      = {notes_val}\n}}"
+
+        # Replace in text
+        if new_header != old_header:
+            return wikitext.replace(old_header, new_header)
+        return wikitext
+
+    else:
+        # 2. Create New Header
+        # Find Year for Category
+        cat_match = re.search(r'\[\[Category:\s*(\d{4})', wikitext)
+        year_cat = cat_match.group(1) + "/Text of works by..." if cat_match else "" 
+        # Actually usually it's just the year "1945" or "1945/Text..." 
+        # User example just showed "1945/Text of works..." so let's just grab the year if found
+        # User said: "categories = 1945/Text of works by Marguerite True"
+        # We can't guess the author, so we'll just put the Year if found, user can edit later.
+        
+        cat_str = cat_match.group(1) if cat_match else ""
+
+        notes_str = "{{ps|1}}"
+        if is_text_page:
+            notes_str += "{{bnreturn}}"
+
+        new_header = f"""{{{{header
+ | title      = [[../]]
+ | author     = 
+ | translator = 
+ | section    = 
+ | previous   = 
+ | next       = 
+ | notes      = {notes_str}
+ | categories = {cat_str}
+}}}}"""
+        
+        return new_header + "\n" + wikitext.lstrip()
+
 # ==============================================================================
 # 2. STATE MANAGEMENT
 # ==============================================================================
@@ -142,7 +213,12 @@ def get_page_image_data(pdf_path, page_num_1_based):
 def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, 'r') as f:
-            return json.load(f)
+            try:
+                data = json.load(f)
+                if "member_index" in data and "pdf_page_num" in data:
+                    return data
+            except json.JSONDecodeError:
+                pass
     return {"member_index": 0, "pdf_page_num": 1, "last_title": None}
 
 def save_state(member_index, pdf_page_num, title):
@@ -164,7 +240,7 @@ def reset_state():
 # ==============================================================================
 
 st.title("🧹 Category Sweeper: Full PDF Processing")
-st.markdown("Iterates category members and proofreads **every page** of the associated PDF.")
+st.markdown("Iterates category members, updates headers, proofreads **every page**, and adds `__NOTOC__`.")
 
 # --- Sidebar ---
 st.sidebar.header("Configuration")
@@ -220,13 +296,21 @@ if start_btn:
         
         status_container.markdown(f"### 📚 Processing Book ({i+1}/{len(members)}): `{wiki_title}`")
 
-        # A. Fetch Text (To find PDF filename & Offset)
+        # A. Fetch Text 
         current_text, err = fetch_wikitext(wiki_title)
         if err:
             st.error(f"❌ Error fetching {wiki_title}: {err}")
             continue
 
-        # B. Identify PDF Filename from Wikitext
+        # B. Header Processing (Fix/Create Header immediately)
+        # We process header before loop to ensure it's correct even if we crash later
+        updated_text = process_header(current_text, wiki_title)
+        
+        # If header changed, save it immediately? 
+        # Or just carry 'updated_text' into the loop. Let's carry it.
+        current_text = updated_text
+
+        # C. Identify PDF Filename
         file_match = re.search(r'file\s*=\s*([^|}\n]+)', current_text, re.IGNORECASE)
         if not file_match:
             st.warning(f"⚠️ Could not find 'file=' in {wiki_title}. Skipping book.")
@@ -235,21 +319,21 @@ if start_btn:
             
         pdf_filename = file_match.group(1).strip()
         
-        # C. Locate Local PDF
+        # D. Locate Local PDF
         local_path = pdf_index.get(pdf_filename)
         if not local_path:
             st.error(f"❌ PDF '{pdf_filename}' not found locally. Skipping book.")
             save_state(i + 1, 1, wiki_title)
             continue
             
-        # D. Determine Offset (Anchor)
+        # E. Determine Offset (Anchor)
         anchor_pdf_page = find_page_one_anchor(current_text)
         if anchor_pdf_page:
             log_area.text(f"⚓ Anchor Found: Physical Page 1 is PDF Page {anchor_pdf_page}")
         else:
             log_area.text(f"⚠️ No Anchor found. Assuming PDF Page 1 = Book Page 1.")
 
-        # E. Determine Start Page for PDF Loop
+        # F. Determine Start Page for PDF Loop
         if i == state['member_index']:
             start_pdf_page = state['pdf_page_num']
         else:
@@ -299,22 +383,37 @@ if start_btn:
                     continue
 
                 # 4. Inject Text
-                # Fetch fresh text to avoid conflicts
-                latest_wikitext, _ = fetch_wikitext(wiki_title)
+                # Fetch fresh text to include any manual edits or header updates from previous loop
+                # NOTE: If we updated the header in memory at step B but didn't save it, 
+                # we must use 'current_text' (which contains the header fix) for the FIRST iteration.
+                # However, for subsequent iterations, we should fetch from server.
+                # Simplest Logic: We will push the header update along with the first page edit.
                 
-                # inject_text_into_page handles replacing existing content OR appending new content
-                new_wikitext, inject_err = inject_text_into_page(latest_wikitext, correct_label, final_text, pdf_filename)
+                if pdf_page > start_pdf_page:
+                    # Fetch fresh from server for pages 2+ to ensure we have latest state
+                    current_text, _ = fetch_wikitext(wiki_title)
+                
+                new_wikitext, inject_err = inject_text_into_page(current_text, correct_label, final_text, pdf_filename)
                 
                 if inject_err:
                     st.error(f"Injection Error: {inject_err}")
                     continue
+                
+                # 5. Check for __NOTOC__ (Last Page Only)
+                if pdf_page == total_pdf_pages:
+                    if "__NOTOC__" not in new_wikitext:
+                        new_wikitext += "\n__NOTOC__"
+                        log_area.text("📝 Appending __NOTOC__ to end of file.")
 
-                # 5. Upload
+                # 6. Upload
                 res = upload_to_bahaiworks(wiki_title, new_wikitext, f"Bot: Proofread {correct_label} (PDF {pdf_page})")
                 
                 if res.get('edit', {}).get('result') == 'Success':
                     st.toast(f"Saved {correct_label}", icon="✅")
                     save_state(i, pdf_page + 1, wiki_title)
+                    
+                    # Update current_text in memory for next loop (so we don't revert header/previous pages if we skip fetch)
+                    current_text = new_wikitext 
                 else:
                     st.error(f"Upload Failed: {res}")
                     break 
@@ -325,11 +424,9 @@ if start_btn:
             
             time.sleep(1)
 
-        # Check breaks
         if stop_btn:
             break 
 
-        # Book Completed
         if pdf_page == total_pdf_pages:
             st.success(f"✅ Completed Book: {wiki_title}")
             save_state(i + 1, 1, wiki_title) 
