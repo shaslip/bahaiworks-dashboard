@@ -386,30 +386,36 @@ if start_btn:
                         found_year = cat_match.group(1)
 
                     # 3. Generate and Prepend Header
-                    # We derive the header info from the wiki_title structure we identified earlier
+                if "{{header" not in current_wikitext:
+                    
+                    # Initialize variables
                     volume_found = None
-                    issue_for_math = None
+                    issue_identifier = None # Can be "1" or "10-11"
 
-                    # Check if we are in a Volume structure
+                    # Check for Volume/Issue format in the Title we just generated
                     if "/Volume_" in wiki_title and "/Issue_" in wiki_title:
-                        # Extract Volume number
-                        vol_match = re.search(r'Volume_(\d+)', wiki_title)
-                        if vol_match:
-                            volume_found = vol_match.group(1)
+                        # Extract from the clean Wiki path (Safer than filename)
+                        v_match = re.search(r'Volume_(\d+)', wiki_title)
+                        i_match = re.search(r'Issue_(\d+)', wiki_title)
                         
-                        # Extract Issue number for math
-                        iss_match = re.search(r'Issue_(\d+)', wiki_title)
-                        if iss_match:
-                            issue_for_math = iss_match.group(1)
+                        if v_match and i_match:
+                            volume_found = v_match.group(1)
+                            issue_identifier = i_match.group(1)
+                    
                     else:
-                        # Standard Case: Extract issue from filename/short_name
-                        match = re.search(r'(\d+(?:-\d+)?)', short_name)
-                        if match:
-                            issue_for_math = match.group(1)
+                        # Standard Issue or Range (Extract from Wiki Title is safest)
+                        # wiki_title looks like ".../Issue_10-11/Text"
+                        i_match = re.search(r'Issue_([\d-]+)', wiki_title)
+                        if i_match:
+                            issue_identifier = i_match.group(1)
+                        else:
+                            # Fallback to filename if Wiki Title is weird
+                            fn_match = re.search(r'(\d+(?:-\d+)?)', short_name)
+                            if fn_match: issue_identifier = fn_match.group(1)
 
-                    # Generate Header if missing
-                    if "{{header" not in current_wikitext and issue_for_math:
-                        header = generate_header(issue_for_math, year=found_year, volume=volume_found)
+                    # Only generate if we found an issue identifier
+                    if issue_identifier:
+                        header = generate_header(issue_identifier, year=found_year, volume=volume_found)
                         current_wikitext = header + "\n" + current_wikitext.lstrip()
                 
                 # D. Inject Content
