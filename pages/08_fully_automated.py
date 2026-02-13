@@ -59,8 +59,6 @@ def get_wiki_title(local_path, root_folder, base_wiki_title):
     Handles explicit Vol/Issue markers, Folder nesting, and implicit "Vol-Issue" patterns.
     """
     filename = os.path.basename(local_path)
-    
-    # 1. Clean filename of extension for easier regex
     name_no_ext = os.path.splitext(filename)[0]
 
     try:
@@ -68,15 +66,14 @@ def get_wiki_title(local_path, root_folder, base_wiki_title):
     except ValueError:
         rel_path = local_path
 
-    # --- STRATEGY 1: Explicit Filename Regex (e.g. "World_Unity_Vol1_Issue1.pdf") ---
-    # Matches: "Vol 1 No 1", "Vol.1.Issue.1", "Volume1_Issue1"
+    # --- STRATEGY 1: Explicit Filename (Vol 1 No 1) ---
     vol_issue_match = re.search(r'(?:Vol|Volume)[\W_]*(\d+)[\W_]*(?:No|Issue|Number)[\W_]*(\d+)', filename, re.IGNORECASE)
     if vol_issue_match:
-        vol = int(vol_issue_match.group(1)) # int() strips leading zeros
+        vol = int(vol_issue_match.group(1))
         issue = int(vol_issue_match.group(2))
         return f"{base_wiki_title}/Volume_{vol}/Issue_{issue}/Text"
 
-    # --- STRATEGY 2: Folder Structure Inspection (e.g. ".../Volume 1/No 1/...") ---
+    # --- STRATEGY 2: Folder Structure (Volume 1/...) ---
     parts = rel_path.split(os.sep)
     path_vol = None
     path_issue = None
@@ -85,40 +82,37 @@ def get_wiki_title(local_path, root_folder, base_wiki_title):
         if not path_vol:
             v_match = re.search(r'^(?:Vol|Volume)[\W_]*(\d+)$', part, re.IGNORECASE)
             if v_match: path_vol = int(v_match.group(1))
-        
         if not path_issue:
             i_match = re.search(r'^(?:No|Issue)[\W_]*(\d+)$', part, re.IGNORECASE)
             if i_match: path_issue = int(i_match.group(1))
 
     if path_vol:
         final_issue = path_issue
-        # If folder has Volume but filename has issue number (e.g. "01.pdf")
         if not final_issue:
+            # Fallback: check filename for issue number
             num_match = re.search(r'(\d+)', filename)
             if num_match: final_issue = int(num_match.group(1))
         
         if final_issue:
             return f"{base_wiki_title}/Volume_{path_vol}/Issue_{final_issue}/Text"
 
-    # --- STRATEGY 3: Implicit Hyphenated Volume-Issue (e.g. "ABR 04-01.pdf") ---
-    # Looks for pattern: [Any Text] [Digits] [Hyphen] [Digits]
-    # We treat the first group as Volume and second as Issue.
-    hyphen_match = re.search(r'(\d+)-(\d+)', name_no_ext)
+    # --- STRATEGY 3: Implicit "04-01" (Volume-Issue) ---
+    # CRITICAL FIX: Only trigger if first number starts with '0' (e.g. 04).
+    # This prevents "10-11" (Range) from becoming "Vol 10 Issue 11".
+    hyphen_vol_match = re.search(r'(0\d+)-(\d+)', name_no_ext)
     
-    if hyphen_match:
-        # Check context: usually "Issue 64-65" is a range, but "04-01" is Vol/Issue.
-        # If the file caused a 404 as "Issue_04-01", we assume user wants Vol/Issue logic.
-        vol_num = int(hyphen_match.group(1))
-        issue_num = int(hyphen_match.group(2))
+    if hyphen_vol_match:
+        vol_num = int(hyphen_vol_match.group(1))
+        issue_num = int(hyphen_vol_match.group(2))
         return f"{base_wiki_title}/Volume_{vol_num}/Issue_{issue_num}/Text"
 
-    # --- STRATEGY 4: Standard Issue Fallback (e.g. "Issue 10.pdf") ---
-    match = re.search(r'(\d+)', name_no_ext)
+    # --- STRATEGY 4: Standard Issue / Range (Issue 10, Issue 10-11) ---
+    # Matches "10" or "10-11"
+    match = re.search(r'(\d+(?:-\d+)?)', name_no_ext)
     if match:
-        issue_num = match.group(1) # Keep string to preserve exact formatting if needed, or int() if you prefer standardizing
+        issue_num = match.group(1)
         return f"{base_wiki_title}/Issue_{issue_num}/Text"
     
-    # Fallback: Use full filename
     return f"{base_wiki_title}/{name_no_ext}/Text"
 
 def get_page_image_data(pdf_path, page_num_1_based):
@@ -393,33 +387,29 @@ if start_btn:
 
                     # 3. Generate and Prepend Header
                     # We derive the header info from the wiki_title structure we identified earlier
-                    
-                    # --- Logic to Determine Header Content ---
-                    if "/Volume_" in wiki_title and "/Issue_" in wiki_title:
-                        # Case: Deep nesting (Base / Volume X / Issue Y / Text)
-                        # We need to extract the raw numbers to make a pretty label
-                        vol_match = re.search(r'Volume_(\d+)', wiki_title)
-                        iss_match = re.search(r'Issue_(\d+)', wiki_title)
-                        
-                        vol_str = vol_match.group(1) if vol_match else "?"
-                        iss_str = iss_match.group(1) if iss_match else "?"
-                        
-                        section_label = f"Volume {vol_str}, Issue {iss_str}"
-                        link_depth = "../../../" # Go up 3 levels: Text -> Issue -> Volume -> Base
-                        
-                    else:
-                        # Case: Standard (Base / Issue X / Text)
-                        # We fallback to the filename regex for the issue number
-                        match = re.search(r'(\d+(?:-\d+)?)', short_name)
-                        issue_num = match.group(1) if match else "Unknown"
-                        
-                        section_label = f"Issue {issue_num}"
-                        link_depth = "../../" # Go up 2 levels: Text -> Issue -> Base
+                    volume_found = None
+                    issue_for_math = None
 
-                    # Generate
-                    if "{{header" not in current_wikitext:
-                        # Call the updated function with our specific labels and depth
-                        header = generate_header(section_label, year=found_year, root_depth=link_depth)
+                    # Check if we are in a Volume structure
+                    if "/Volume_" in wiki_title and "/Issue_" in wiki_title:
+                        # Extract Volume number
+                        vol_match = re.search(r'Volume_(\d+)', wiki_title)
+                        if vol_match:
+                            volume_found = vol_match.group(1)
+                        
+                        # Extract Issue number for math
+                        iss_match = re.search(r'Issue_(\d+)', wiki_title)
+                        if iss_match:
+                            issue_for_math = iss_match.group(1)
+                    else:
+                        # Standard Case: Extract issue from filename/short_name
+                        match = re.search(r'(\d+(?:-\d+)?)', short_name)
+                        if match:
+                            issue_for_math = match.group(1)
+
+                    # Generate Header if missing
+                    if "{{header" not in current_wikitext and issue_for_math:
+                        header = generate_header(issue_for_math, year=found_year, volume=volume_found)
                         current_wikitext = header + "\n" + current_wikitext.lstrip()
                 
                 # D. Inject Content
