@@ -100,6 +100,10 @@ def calculate_page_label(pdf_page_num, anchor_pdf_page):
         # Ex: PDF 10 is Page 1. So PDF 10 - 10 + 1 = 1.
         return str(pdf_page_num - anchor_pdf_page + 1)
 
+def log_small(msg, color="black"):
+    """Prints a compact log line."""
+    st.markdown(f"<span style='font-size:13px; font-family:monospace; color:{color};'>{msg}</span>", unsafe_allow_html=True)
+    
 def find_anchor_offset(wikitext):
     """
     Scans for any {{page|N|...|page=X}} where N is an integer to establish the offset.
@@ -410,12 +414,10 @@ status_container = st.container(border=True)
 log_area = st.empty()
 
 if start_btn:
-    # --- UI Placeholders (Prevents "Green Box" Spam) ---
-    status_header = st.empty()      # Shows current book title
-    progress_bar = st.progress(0)   # Overall progress
-    status_box = st.empty()         # Shows latest success/status (updates in place)
-    error_box = st.container()      # persistent container for errors
-
+    # --- UI Setup ---
+    progress_bar = st.progress(0)
+    current_status_line = st.empty() # For transient updates (like exclusions)
+    
     # 1. Index PDFs
     with st.spinner("Indexing Local PDFs..."):
         pdf_index = build_pdf_index(input_folder)
@@ -428,7 +430,6 @@ if start_btn:
 
     # 3. Resume Logic
     start_idx = state['member_index']
-    progress_bar = st.progress(0)
     
     # --- OUTER LOOP: Wiki Pages ---
     for i in range(start_idx, len(members)):
@@ -436,35 +437,29 @@ if start_btn:
         page_obj = members[i]
         wiki_title = page_obj['title']
         
-        # Checks if the current title starts with any string in the exclusion list
+        # --- Check Exclusions ---
         if any(wiki_title.startswith(exclude) for exclude in EXCLUDED_TITLES):
-            log_area.text(f"🚫 Skipping Excluded Title: {wiki_title}")
-            # Update state to skip this index in the future
+            # Transient update (overwrites itself) to prevent spamming the log
+            current_status_line.text(f"Scanning {i}/{len(members)}: Skipping excluded '{wiki_title}'...")
             save_state(i + 1, 1, wiki_title)
             continue
+        
+        # --- Log Processing Start ---
+        log_small(f"📚 ({i+1}/{len(members)}) Processing: <b>{wiki_title}</b>", color="#444")
 
-        status_container.markdown(f"### 📚 Processing Book ({i+1}/{len(members)}): `{wiki_title}`")
-        
         # A. Fetch Wikitext
-        log_area.text(f"Fetching source for {wiki_title}...")
-        
-        # A. Fetch Wikitext
-        log_area.text(f"Fetching source for {wiki_title}...")
         current_text, err = fetch_wikitext(wiki_title)
-        
         if err:
-            log_area.text(f"❌ Error fetching text: {err}. Skipping.")
+            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Error fetching text: {err}", color="red")
             continue
 
         # B. Header Processing
-        # Ensure header is correct (ps|1, categories, etc.) before we start
         current_text = process_header(current_text, wiki_title)
 
-        # C. Identify PDF Filename from Wikitext
-        # We search for ANY instance of file=... to find the source PDF
+        # C. Identify PDF Filename
         file_match = re.search(r'file\s*=\s*([^|}\n]+)', current_text, re.IGNORECASE)
         if not file_match:
-            st.warning(f"⚠️ Could not find 'file=' in {wiki_title}. Skipping book.")
+            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ 'file=' parameter not found in wikitext. Skipping.", color="#d97706") # Orange
             save_state(i + 1, 1, wiki_title) 
             continue
             
@@ -473,16 +468,12 @@ if start_btn:
         # D. Locate Local PDF
         local_path = pdf_index.get(pdf_filename)
         if not local_path:
-            st.error(f"⚠️ PDF '{pdf_filename}' not found in local index. Skipping.")
+            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ PDF '{pdf_filename}' not found in local index. Skipping.", color="red")
             save_state(i + 1, 1, wiki_title)
             continue
             
         # E. Determine Offset (Anchor)
         anchor_pdf_page = find_anchor_offset(current_text)
-        if anchor_pdf_page:
-            log_area.text(f"⚓ Anchor Found: Physical Page 1 is PDF Page {anchor_pdf_page}")
-        else:
-            log_area.text(f"⚠️ No Anchor found. Assuming PDF Page 1 = Book Page 1.")
             
         # F. Determine Start Page for PDF Loop
         try:
@@ -490,40 +481,37 @@ if start_btn:
             total_pdf_pages = len(doc)
             doc.close()
         except Exception as e:
-            st.error(f"Failed to open PDF: {e}")
+            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Failed to open local PDF: {e}", color="red")
             continue
 
-        # F. Determine Start & End Pages based on /Text status
+        # G. Processing Bounds
         is_text_subpage = wiki_title.endswith("/Text")
         scope_start, scope_end = get_processing_bounds(current_text, total_pdf_pages, is_text_subpage)
 
         if i == state['member_index']:
-            # Resume: Start at saved state, but ensure it's at least the scope start
             start_pdf_page = max(state['pdf_page_num'], scope_start)
         else:
             start_pdf_page = scope_start
             
-        log_area.text(f"📖 Processing Range: PDF Pages {start_pdf_page} to {scope_end}")
-
         # Reset Gemini failure counter for this book
         gemini_failures = 0
 
-        # Loop runs until the determined scope_end
+        # --- INNER LOOP: Pages ---
         for pdf_page in range(start_pdf_page, scope_end + 1):
             
             # Stop Check
             if stop_btn:
-                status_box.warning("Stopping requested...")
+                st.warning("Stopping requested...")
                 break 
             
-            # 1. Calculate Label
             correct_label = calculate_page_label(pdf_page, anchor_pdf_page)
-            status_box.info(f"Processing: {wiki_title} | Page: {correct_label}")
+            # Transient status update only for individual pages (keeps log clean)
+            current_status_line.text(f"Working on: {wiki_title} | Page {correct_label}")
 
             # 2. Get Image
             img = get_page_image_data(local_path, pdf_page)
             if not img:
-                error_box.error(f"❌ Image Error: {wiki_title} (Page {correct_label}) - Failed to extract.")
+                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Image Error (Page {correct_label})", color="red")
                 continue
 
             # 3. TAG FIXING
@@ -539,78 +527,64 @@ if start_btn:
                 force_docai = (ocr_strategy == "DocAI Only") or (gemini_failures >= 3)
 
                 if force_docai:
-                    # --- DocAI Mode (Strict or Fallback) ---
                     raw_ocr = transcribe_with_document_ai(img)
-                    
-                    # Check for DocAI Failure
                     if not raw_ocr or "ERROR" in raw_ocr:
-                        # --- LAST DITCH EFFORT: GEMINI ---
-                        # Even if 3 strikes, we try Gemini once if DocAI fails completely
-                        status_box.warning(f"DocAI failed on {wiki_title} ({correct_label}). Attempting Gemini as last ditch...")
+                        log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ DocAI failed on {correct_label}. Trying Gemini fallback.", color="#d97706")
                         final_text = proofread_with_formatting(img)
                     else:
                         final_text = reformat_raw_text(raw_ocr)
-
                 else:
-                    # --- Gemini Mode ---
                     final_text = proofread_with_formatting(img)
-                    
                     if "GEMINI_ERROR" in final_text:
                         gemini_failures += 1
-                        status_box.warning(f"Gemini Failed ({gemini_failures}/3) on {wiki_title} ({correct_label}). Switching to DocAI.")
-                        
-                        # Fallback to DocAI
+                        log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ Gemini Error ({gemini_failures}/3) on {correct_label}. Switched to DocAI.", color="#d97706")
                         raw_ocr = transcribe_with_document_ai(img)
                         final_text = reformat_raw_text(raw_ocr)
 
-                # Final Validation
                 if not final_text or "ERROR" in final_text:
-                    error_box.error(f"❌ Processing failed for {wiki_title} (Page {correct_label}): {final_text}")
+                    log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Processing failed for Page {correct_label}", color="red")
                     continue
 
                 # 5. Inject & Upload
                 new_wikitext, inject_err = inject_text_into_page(current_text, correct_label, final_text, pdf_filename)
                 
                 if inject_err:
-                    error_box.error(f"❌ Injection Error: {wiki_title} ({correct_label}): {inject_err}")
+                    log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Injection Error ({correct_label}): {inject_err}", color="red")
                     continue
                 
-                # 6. Check for __NOTOC__ (Last Page Only)
-                if pdf_page == scope_end:
-                    if "__NOTOC__" not in new_wikitext:
-                        new_wikitext += "\n__NOTOC__"
+                # 6. Check for __NOTOC__
+                if pdf_page == scope_end and "__NOTOC__" not in new_wikitext:
+                    new_wikitext += "\n__NOTOC__"
                 
                 # Upload
                 res = upload_to_bahaiworks(wiki_title, new_wikitext, f"Bot: Proofread {correct_label} (PDF {pdf_page})")
                 
                 if res.get('edit', {}).get('result') == 'Success':
-                    # Use status_box to update in place (no green box spam)
-                    status_box.success(f"✅ Completed: {wiki_title} | Page {correct_label}")
+                    # Optional: Don't log every single success if you want to save space, 
+                    # but to match your expectation of "Grouping", we can leave it silent 
+                    # or print a tiny dot.
                     save_state(i, pdf_page + 1, wiki_title)
                     current_text = new_wikitext 
                 else:
-                    error_box.error(f"❌ API Error: {wiki_title} ({correct_label}): {res}")
+                    log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Upload API Error ({correct_label}): {res}", color="red")
                     break 
             
             except Exception as e:
-                error_box.error(f"❌ Exception: {wiki_title} ({correct_label}): {e}")
+                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Exception ({correct_label}): {e}", color="red")
                 break 
                 
-            time.sleep(1)  # Polite API pause
+            time.sleep(1)
 
-        # Check breaks
         if stop_btn:
             break 
 
         # Book Completed
         if pdf_page == scope_end:
-            st.success(f"✅ Completed Book: {wiki_title}")
             save_state(i + 1, 1, wiki_title) 
 
         # Update UI
         progress_bar.progress((i + 1 - start_idx) / (len(members) - start_idx))
         
-        # Test Mode Check
         if run_mode.startswith("Test"):
             st.info("Test Mode: Stopping after 1 book.")
             break
