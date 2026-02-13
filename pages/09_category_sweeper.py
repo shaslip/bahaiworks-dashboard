@@ -333,6 +333,12 @@ status_container = st.container(border=True)
 log_area = st.empty()
 
 if start_btn:
+    # --- UI Placeholders (Prevents "Green Box" Spam) ---
+    status_header = st.empty()      # Shows current book title
+    progress_bar = st.progress(0)   # Overall progress
+    status_box = st.empty()         # Shows latest success/status (updates in place)
+    error_box = st.container()      # persistent container for errors
+
     # 1. Index PDFs
     with st.spinner("Indexing Local PDFs..."):
         pdf_index = build_pdf_index(input_folder)
@@ -413,94 +419,90 @@ if start_btn:
             
             # Stop Check
             if stop_btn:
-                st.warning("Stopping requested...")
-                break # Breaks inner loop
+                status_box.warning("Stopping requested...")
+                break 
             
             # 1. Calculate Label
             correct_label = calculate_page_label(pdf_page, anchor_pdf_page)
-            
-            log_area.text(f"📸 Processing PDF Page {pdf_page}/{total_pdf_pages} (Label: {correct_label})...")
+            status_box.info(f"Processing: {wiki_title} | Page: {correct_label}")
 
             # 2. Get Image
             img = get_page_image_data(local_path, pdf_page)
             if not img:
-                log_area.text(f"❌ Failed to extract image from PDF. Skipping page.")
+                error_box.error(f"❌ Image Error: {wiki_title} (Page {correct_label}) - Failed to extract.")
                 continue
 
-            # 3. TAG FIXING (The Critical Fix)
-            # Fetch fresh text for pages 2+ to catch up with server state
+            # 3. TAG FIXING
             if pdf_page > start_pdf_page:
                 current_text, _ = fetch_wikitext(wiki_title)
             
-            # Fix tag if needed (updates -2 -> i, etc.)
             current_text = find_and_fix_tag_by_page_num(current_text, pdf_filename, pdf_page, correct_label)
 
-            # 4. AI Processing (Gemini -> DocAI Fallback Logic)
+            # 4. AI Processing
             final_text = ""
             try:
                 # Determine Strategy
                 force_docai = (ocr_strategy == "DocAI Only") or (gemini_failures >= 3)
 
                 if force_docai:
-                    if gemini_failures == 3 and not (ocr_strategy == "DocAI Only"):
-                        log_area.text("🚨 3rd Gemini Failure. Switching to DocAI for remainder of book.")
-                        # Increment once more so we don't spam the log every page
-                        gemini_failures += 1 
-                    
-                    log_area.text("🤖 DocAI Direct Mode...")
+                    # --- DocAI Mode (Strict or Fallback) ---
                     raw_ocr = transcribe_with_document_ai(img)
-                    final_text = reformat_raw_text(raw_ocr)
+                    
+                    # Check for DocAI Failure
+                    if not raw_ocr or "ERROR" in raw_ocr:
+                        # --- LAST DITCH EFFORT: GEMINI ---
+                        # Even if 3 strikes, we try Gemini once if DocAI fails completely
+                        status_box.warning(f"DocAI failed on {wiki_title} ({correct_label}). Attempting Gemini as last ditch...")
+                        final_text = proofread_with_formatting(img)
+                    else:
+                        final_text = reformat_raw_text(raw_ocr)
 
                 else:
-                    # Try Gemini
-                    log_area.text("✨ Asking Gemini to proofread...")
+                    # --- Gemini Mode ---
                     final_text = proofread_with_formatting(img)
                     
                     if "GEMINI_ERROR" in final_text:
                         gemini_failures += 1
-                        log_area.text(f"⚠️ Gemini Failed ({gemini_failures}/3). Switching to DocAI for this page.")
+                        status_box.warning(f"Gemini Failed ({gemini_failures}/3) on {wiki_title} ({correct_label}). Switching to DocAI.")
                         
-                        # Immediate Fallback to DocAI (No Gemini Retry)
+                        # Fallback to DocAI
                         raw_ocr = transcribe_with_document_ai(img)
                         final_text = reformat_raw_text(raw_ocr)
 
+                # Final Validation
                 if not final_text or "ERROR" in final_text:
-                    st.error(f"Processing failed for PDF {pdf_page}: {final_text}")
+                    error_box.error(f"❌ Processing failed for {wiki_title} (Page {correct_label}): {final_text}")
                     continue
 
                 # 5. Inject & Upload
-                log_area.text("💾 Uploading to Wiki...")
-                
-                # inject_text_into_page will replace content if tag exists
-                # It will also strip any {{ocr}} tags it finds globally
                 new_wikitext, inject_err = inject_text_into_page(current_text, correct_label, final_text, pdf_filename)
                 
                 if inject_err:
-                    st.error(f"Injection Error: {inject_err}")
+                    error_box.error(f"❌ Injection Error: {wiki_title} ({correct_label}): {inject_err}")
                     continue
                 
                 # 6. Check for __NOTOC__ (Last Page Only)
                 if pdf_page == total_pdf_pages:
                     if "__NOTOC__" not in new_wikitext:
                         new_wikitext += "\n__NOTOC__"
-                        log_area.text("📝 Appending __NOTOC__.")
                 
                 # Upload
                 res = upload_to_bahaiworks(wiki_title, new_wikitext, f"Bot: Proofread {correct_label} (PDF {pdf_page})")
                 
                 if res.get('edit', {}).get('result') == 'Success':
-                    st.success(f"✅ Completed: {correct_label}")
+                    # Use status_box to update in place (no green box spam)
+                    status_box.success(f"✅ Completed: {wiki_title} | Page {correct_label}")
                     save_state(i, pdf_page + 1, wiki_title)
-                    current_text = new_wikitext # Sync memory
+                    current_text = new_wikitext 
                 else:
-                    st.error(f"Upload API Failed: {res}")
-                    break # Stop inner loop
+                    error_box.error(f"❌ API Error: {wiki_title} ({correct_label}): {res}")
+                    break 
             
             except Exception as e:
-                st.error(f"Exception processing PDF {pdf_page}: {e}")
-                break # Stop inner loop
+                error_box.error(f"❌ Exception: {wiki_title} ({correct_label}): {e}")
+                break 
                 
-            time.sleep(1) # Polite API pause
+            time.sleep(1)  # Polite API pause
 
         # Check breaks
         if stop_btn:
