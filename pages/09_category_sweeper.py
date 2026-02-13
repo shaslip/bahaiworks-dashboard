@@ -44,6 +44,7 @@ EXCLUDED_TITLES = [
     "Child's Way",
     "Dialogue",
     "Herald of the South",
+    "In Memoriam 1992-1997",
     "Light of the Pacific",
     "Living Nation",
     "Malaysian Bahá’í News",
