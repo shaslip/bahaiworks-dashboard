@@ -127,6 +127,33 @@ def find_anchor_offset(wikitext):
                 return pdf_page - book_page + 1
     return None
 
+def fetch_parent_author(subpage_title):
+    """
+    If title is 'Book/Text', fetches 'Book' and extracts the author from its header.
+    Returns the author string or empty string if not found.
+    """
+    # 1. Determine Parent Title (strip /Text or other subpages)
+    if "/" not in subpage_title:
+        return ""
+    
+    parent_title = subpage_title.rsplit("/", 1)[0]
+    
+    # 2. Fetch Parent Text
+    # We use the existing fetch_wikitext function imported from src.mediawiki_uploader
+    parent_text, err = fetch_wikitext(parent_title)
+    
+    if err or not parent_text:
+        return ""
+
+    # 3. Extract Author
+    # Looks for | author = Name (multiline safe)
+    author_match = re.search(r'\|\s*author\s*=\s*([^\n|]+)', parent_text, re.IGNORECASE)
+    
+    if author_match:
+        return author_match.group(1).strip()
+    
+    return ""
+
 def get_processing_bounds(wikitext, total_pdf_pages, is_text_subpage):
     """
     Returns (start_page, end_page) for PDF processing.
@@ -162,9 +189,20 @@ def process_header(wikitext, wiki_title):
     - Enforces {{ps|1}} in 'notes'.
     - Adds {{bnreturn}} ONLY if title ends in /Text.
     - Adds 'categories = YYYY' if creating new header and Year category found.
+    - Fills 'author' from Parent Page if missing.
     """
     is_text_page = wiki_title.endswith("/Text")
     
+    # --- Parent Author Lookup ---
+    # We only look this up if we need it (lazy loading inside the logic below)
+    parent_author = None 
+
+    def get_author_fill():
+        nonlocal parent_author
+        if parent_author is None:
+            parent_author = fetch_parent_author(wiki_title)
+        return parent_author
+
     # 1. Check for Existing Header
     header_match = re.search(r'(\{\{header\s*\|.*?\n\}\})', wikitext, re.IGNORECASE | re.DOTALL)
     
@@ -173,29 +211,43 @@ def process_header(wikitext, wiki_title):
         new_header = old_header
         
         # --- Update Notes Section ---
-        # Check if notes param exists
+        # (Same logic as before for ps|1 and bnreturn)
         if re.search(r'\|\s*notes\s*=', new_header):
-            # Enforce ps|1
             if "{{ps|" in new_header:
                 new_header = re.sub(r'\{\{ps\|\d+\}\}', '{{ps|1}}', new_header)
             else:
-                # Append ps|1 to existing notes
                 new_header = re.sub(r'(\|\s*notes\s*=\s*)(.*)', r'\1{{ps|1}}\2', new_header)
             
-            # Enforce bnreturn (Add if missing and needed)
             if is_text_page and "{{bnreturn}}" not in new_header:
                 new_header = re.sub(r'(\|\s*notes\s*=\s*)(.*)', r'\1\2{{bnreturn}}', new_header)
-            
-            # Remove bnreturn if NOT needed
             if not is_text_page and "{{bnreturn}}" in new_header:
                 new_header = new_header.replace("{{bnreturn}}", "")
-                
         else:
-            # Create notes param
             notes_val = "{{ps|1}}"
             if is_text_page: notes_val += "{{bnreturn}}"
-            # Insert before the closing brackets
-            new_header = new_header.rstrip("}") + f"\n | notes      = {notes_val}\n}}"
+            new_header = new_header.rstrip("}") + f"\n | notes       = {notes_val}\n}}"
+
+        # --- Update Author Section ---
+        # Check if author param exists but is empty OR doesn't exist
+        author_param_match = re.search(r'\|\s*author\s*=\s*([^\n|]*)', new_header, re.IGNORECASE)
+        
+        if author_param_match:
+            current_val = author_param_match.group(1).strip()
+            if not current_val:
+                # Param exists but is empty -> Fill it
+                found_author = get_author_fill()
+                if found_author:
+                    # Replace "| author = " with "| author = Horace Holley"
+                    new_header = re.sub(r'(\|\s*author\s*=\s*)', f"\\1{found_author}", new_header, count=1)
+        else:
+            # Param missing entirely -> Add it
+            found_author = get_author_fill()
+            if found_author:
+                # Insert author param after title (or at start if title missing)
+                if "| title" in new_header:
+                    new_header = re.sub(r'(\|\s*title\s*=.*?\n)', f"\\1 | author      = {found_author}\n", new_header)
+                else:
+                    new_header = new_header.replace("{{header", f"{{header\n | author      = {found_author}")
 
         # Replace in text
         if new_header != old_header:
@@ -204,7 +256,6 @@ def process_header(wikitext, wiki_title):
 
     else:
         # 2. Create New Header
-        # Find Year for Category
         cat_match = re.search(r'\[\[Category:\s*(\d{4})', wikitext)
         cat_str = cat_match.group(1) if cat_match else ""
 
@@ -212,9 +263,12 @@ def process_header(wikitext, wiki_title):
         if is_text_page:
             notes_str += "{{bnreturn}}"
 
+        # Try to find author for the new header
+        found_author = get_author_fill()
+
         new_header = f"""{{{{header
  | title      = [[../]]
- | author     = 
+ | author     = {found_author}
  | translator = 
  | section    = 
  | previous   = 
