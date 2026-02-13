@@ -623,7 +623,7 @@ if start_btn:
                             log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⛔ 3rd Strike (Retry Failed) on {correct_label}. Switching to DocAI for remainder of book.", color="red")
                         
                         else:
-                            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ Gemini Error ({gemini_consecutive_failures}/2) on {correct_label}. Fallback to DocAI.", color="#d97706")
+                            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ Gemini Error on page {correct_label} ({gemini_consecutive_failures}/2). Fallback to DocAI.", color="#d97706")
 
                         # Immediate Fallback for THIS page
                         raw_ocr = transcribe_with_document_ai(img)
