@@ -65,14 +65,27 @@ def calculate_page_label(pdf_page_num, anchor_pdf_page):
         # Ex: PDF 10 is Page 1. So PDF 10 - 10 + 1 = 1.
         return str(pdf_page_num - anchor_pdf_page + 1)
 
-def find_page_one_anchor(wikitext):
+def find_anchor_offset(wikitext):
     """
-    Scans for {{page|1|file=...|page=X}} to establish the offset.
+    Scans for any {{page|N|...|page=X}} where N is an integer to establish the offset.
     Returns X (the PDF page number) corresponding to Book Page 1.
     """
-    match = re.search(r'\{\{page\|\s*1\s*\|[^}]*?page\s*=\s*(\d+)', wikitext, re.IGNORECASE)
-    if match:
-        return int(match.group(1))
+    tags = re.finditer(r'\{\{page\|(.*?)\}\}', wikitext, re.IGNORECASE | re.DOTALL)
+    
+    for match in tags:
+        params = match.group(1)
+        # The first parameter is the page label (e.g., '42' in {{page|42|...}})
+        label = params.split('|')[0].strip()
+        
+        if label.isdigit():
+            # Find the internal PDF page number
+            page_match = re.search(r'page\s*=\s*(\d+)', params, re.IGNORECASE)
+            if page_match:
+                book_page = int(label)
+                pdf_page = int(page_match.group(1))
+                # Calculate Anchor: PDF Page corresponding to Book Page 1
+                # Formula: Anchor = PDF_Page - Book_Page + 1
+                return pdf_page - book_page + 1
     return None
 
 def process_header(wikitext, wiki_title):
@@ -391,7 +404,7 @@ if start_btn:
             continue
             
         # E. Determine Offset (Anchor)
-        anchor_pdf_page = find_page_one_anchor(current_text)
+        anchor_pdf_page = find_anchor_offset(current_text)
         if anchor_pdf_page:
             log_area.text(f"⚓ Anchor Found: Physical Page 1 is PDF Page {anchor_pdf_page}")
         else:
