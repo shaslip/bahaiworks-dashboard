@@ -551,6 +551,12 @@ if start_btn:
         gemini_failures = 0
 
         # --- INNER LOOP: Pages ---
+        # --- Processing State ---
+        gemini_consecutive_failures = 0
+        docai_cooldown_pages = 0
+        permanent_docai = False
+
+        # --- INNER LOOP: Pages ---
         for pdf_page in range(start_pdf_page, scope_end + 1):
             
             # Stop Check
@@ -559,54 +565,88 @@ if start_btn:
                 break 
             
             correct_label = calculate_page_label(pdf_page, anchor_pdf_page)
-            # Transient status update only for individual pages (keeps log clean)
+            # Transient status update
             current_status_line.text(f"Working on: {wiki_title} | Page {correct_label}")
 
-            # 2. Get Image
+            # 1. Get Image
             img = get_page_image_data(local_path, pdf_page)
             if not img:
                 log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Image Error (Page {correct_label})", color="red")
                 continue
 
-            # 3. TAG FIXING
+            # 2. TAG FIXING
             if pdf_page > start_pdf_page:
                 current_text, _ = fetch_wikitext(wiki_title)
             
             current_text = find_and_fix_tag_by_page_num(current_text, pdf_filename, pdf_page, correct_label)
 
-            # 4. AI Processing
+            # 3. AI Processing
             final_text = ""
             try:
-                # Determine Strategy
-                force_docai = (ocr_strategy == "DocAI Only") or (gemini_failures >= 3)
+                # --- Determine Strategy ---
+                # We force DocAI if:
+                # 1. User selected "DocAI Only"
+                # 2. We are permanently locked out of Gemini (3rd strike)
+                # 3. We are in a "cooldown" period (2 failures triggered 5 pages of DocAI)
+                force_docai = (ocr_strategy == "DocAI Only") or permanent_docai or (docai_cooldown_pages > 0)
 
                 if force_docai:
+                    # --- DocAI Path ---
                     raw_ocr = transcribe_with_document_ai(img)
                     if not raw_ocr or "ERROR" in raw_ocr:
+                        # Fallback for DocAI failure (rare)
                         log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ DocAI failed on {correct_label}. Trying Gemini fallback.", color="#d97706")
                         final_text = proofread_with_formatting(img)
                     else:
                         final_text = reformat_raw_text(raw_ocr)
+                    
+                    # Decrement Cooldown if active
+                    if docai_cooldown_pages > 0:
+                        docai_cooldown_pages -= 1
+                        if docai_cooldown_pages == 0:
+                            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;🟢 Cooldown complete. Re-enabling Gemini next page.", color="green")
+
                 else:
+                    # --- Gemini Path ---
                     final_text = proofread_with_formatting(img)
+                    
                     if "GEMINI_ERROR" in final_text:
-                        gemini_failures += 1
-                        log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ Gemini Error ({gemini_failures}/3) on {correct_label}. Switched to DocAI.", color="#d97706")
+                        gemini_consecutive_failures += 1
+                        
+                        # Handle Failure Logic
+                        if gemini_consecutive_failures == 2:
+                            docai_cooldown_pages = 5
+                            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ 2 Consecutive Failures. Switching to DocAI for 5 pages.", color="#d97706")
+                        
+                        elif gemini_consecutive_failures >= 3:
+                            permanent_docai = True
+                            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⛔ 3rd Strike (Retry Failed). Switching to DocAI for remainder of book.", color="red")
+                        
+                        else:
+                            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ Gemini Error ({gemini_consecutive_failures}/2) on {correct_label}. Fallback to DocAI.", color="#d97706")
+
+                        # Immediate Fallback for THIS page
                         raw_ocr = transcribe_with_document_ai(img)
                         final_text = reformat_raw_text(raw_ocr)
+                    
+                    else:
+                        # Success! Reset consecutive counter.
+                        # Note: We do NOT reset if we are currently in a cooldown, 
+                        # but we are in the 'else' block which means we aren't in a cooldown.
+                        gemini_consecutive_failures = 0
 
                 if not final_text or "ERROR" in final_text:
                     log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Processing failed for Page {correct_label}", color="red")
                     continue
 
-                # 5. Inject & Upload
+                # 4. Inject & Upload
                 new_wikitext, inject_err = inject_text_into_page(current_text, correct_label, final_text, pdf_filename)
                 
                 if inject_err:
                     log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Injection Error ({correct_label}): {inject_err}", color="red")
                     continue
                 
-                # 6. Check for __NOTOC__
+                # 5. Check for __NOTOC__
                 if pdf_page == scope_end and "__NOTOC__" not in new_wikitext:
                     new_wikitext += "\n__NOTOC__"
                 
@@ -614,9 +654,6 @@ if start_btn:
                 res = upload_to_bahaiworks(wiki_title, new_wikitext, f"Bot: Proofread {correct_label} (PDF {pdf_page})")
                 
                 if res.get('edit', {}).get('result') == 'Success':
-                    # Optional: Don't log every single success if you want to save space, 
-                    # but to match your expectation of "Grouping", we can leave it silent 
-                    # or print a tiny dot.
                     save_state(i, pdf_page + 1, wiki_title)
                     current_text = new_wikitext 
                 else:
