@@ -72,7 +72,7 @@ def fetch_wikitext(title, session=None):
     Args:
         title (str): Page title
         session (requests.Session, optional): Authenticated session. 
-                                              If None, uses anonymous requests.
+         If None, uses anonymous requests.
     """
     try:
         headers = {"User-Agent": "BahaiWorksBot/1.0"}
@@ -244,7 +244,7 @@ def cleanup_page_seams(wikitext):
     
     return wikitext
 
-def upload_to_bahaiworks(title, content, summary="Bot upload via Dashboard", check_exists=False):
+def upload_to_bahaiworks(title, content, summary="Bot upload", check_exists=False, session=None):
     """
     Uploads text to a specific page on bahai.works.
     Returns the API response.
