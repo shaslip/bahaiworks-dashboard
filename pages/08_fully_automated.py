@@ -432,8 +432,7 @@ if start_btn:
                                 remaining_body = current_wikitext[access_match.end():].lstrip()
                                 current_wikitext = access_tag + "\n" + header + "\n" + remaining_body
                             else:
-                            current_wikitext = header + "\n" + current_wikitext.lstrip()
-                
+                                current_wikitext = header + "\n" + current_wikitext.lstrip()
                 else:
                     current_wikitext = update_header_ps_tag(current_wikitext)
                 
