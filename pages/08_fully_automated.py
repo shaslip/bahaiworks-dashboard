@@ -371,7 +371,8 @@ if start_btn:
                         gemini_consecutive_failures = 0
 
                 # Safety Check: If fallback also failed
-                if not final_text or "ERROR" in final_text:
+                system_error_flags = ["GEMINI_ERROR", "DOCAI_ERROR", "FORMATTING_ERROR"]
+                if not final_text or any(flag in final_text for flag in system_error_flags):
                     st.error(f"🛑 CRITICAL ERROR on Page {page_num}: {final_text}")
                     st.stop()
 
