@@ -594,7 +594,8 @@ if start_btn:
                 if force_docai:
                     # --- DocAI Path ---
                     raw_ocr = transcribe_with_document_ai(img)
-                    if not raw_ocr or "ERROR" in raw_ocr:
+                    # Check for specific DOCAI_ERROR
+                    if not raw_ocr or "DOCAI_ERROR" in raw_ocr:
                         # Fallback for DocAI failure (rare)
                         log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ DocAI failed on {correct_label}. Trying Gemini fallback.", color="#d97706")
                         final_text = proofread_with_formatting(img)
@@ -634,7 +635,8 @@ if start_btn:
                         # Success! Reset consecutive counter.
                         gemini_consecutive_failures = 0
 
-                if not final_text or "ERROR" in final_text:
+                system_error_flags = ["GEMINI_ERROR", "DOCAI_ERROR", "FORMATTING_ERROR"]
+                if not final_text or any(flag in final_text for flag in system_error_flags):
                     log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Processing failed for Page {correct_label}", color="red")
                     continue
 
