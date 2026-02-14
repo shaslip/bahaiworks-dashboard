@@ -294,3 +294,59 @@ def upload_to_bahaiworks(title, content, summary="Bot upload", check_exists=Fals
         # Only close if we created it here
         if local_session:
             session.close()
+
+def update_header_ps_tag(wikitext):
+    """
+    Updates the {{header}} template to ensure {{ps|1}} is present in the notes parameter.
+    - If {{ps|x}} exists (e.g. 0), updates to {{ps|1}}.
+    - If {{ps|x}} is missing, appends {{ps|1}} to notes.
+    - If | notes = is missing, adds it.
+    """
+    # 1. Find the header block: {{header ... }}
+    # Captures: 1=StartTag, 2=Body, 3=EndTag
+    header_pattern = re.compile(r'(\{\{header\s*\n)(.*?)(\n\}\})', re.DOTALL | re.IGNORECASE)
+    match = header_pattern.search(wikitext)
+    
+    if not match:
+        return wikitext # No header to update
+
+    start_tag, body, end_tag = match.groups()
+
+    def _process_notes(m):
+        prefix = m.group(1) # "| notes = "
+        value = m.group(2)  # Current value
+        
+        # Check for existing ps tag (handles {{ps|0}}, {{ps|1}}, {{ps| 0 }}, etc)
+        if re.search(r'\{\{ps\|\s*\d+\s*\}\}', value, re.IGNORECASE):
+            # Update existing to 1
+            new_value = re.sub(r'\{\{ps\|\s*\d+\s*\}\}', '{{ps|1}}', value, flags=re.IGNORECASE)
+        else:
+            # Append ps|1 (safe append)
+            new_value = value.rstrip() + "{{ps|1}}"
+        
+        return f"{prefix}{new_value}"
+
+    # 2. Find/Update the notes parameter
+    # Matches "| notes =" followed by content until the next pipe or end of string
+    notes_pattern = re.compile(r'(\|\s*notes\s*=\s*)(.*?)(?=\n\s*\||$)', re.DOTALL | re.IGNORECASE)
+    
+    if notes_pattern.search(body):
+        # Modify existing notes param
+        new_body = notes_pattern.sub(_process_notes, body)
+    else:
+        # Notes param missing. Insert it.
+        # Try to insert before | categories for cleanliness
+        if re.search(r'\|\s*categories', body, re.IGNORECASE):
+             new_body = re.sub(
+                 r'(\|\s*categories)', 
+                 r'| notes      = {{ps|1}}\n\1', 
+                 body, 
+                 flags=re.IGNORECASE
+             )
+        else:
+             # Fallback: Append to the end of the body
+             new_body = body.rstrip() + "\n | notes      = {{ps|1}}"
+
+    # 3. Reconstruct
+    new_wikitext = wikitext.replace(match.group(0), f"{start_tag}{new_body}{end_tag}")
+    return new_wikitext
