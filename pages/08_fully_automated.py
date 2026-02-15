@@ -374,8 +374,17 @@ if start_btn:
                 # Safety Check: If fallback also failed
                 system_error_flags = ["GEMINI_ERROR", "DOCAI_ERROR", "FORMATTING_ERROR"]
                 if not final_text or any(flag in final_text for flag in system_error_flags):
-                    st.error(f"🛑 CRITICAL ERROR on Page {page_num}: {final_text}")
-                    st.stop()
+                    # LOGGING AND SKIP LOGIC
+                    error_summary = final_text if final_text else "Empty Response"
+                    msg = f"❌ SKIPPING Page {page_num} due to failure: {error_summary}"
+                    
+                    log_area.text(msg)
+                    st.warning(msg)  # Visual warning in the UI
+                    
+                    # Advance state so we don't get stuck
+                    save_state(i, page_num + 1, "running", last_file_path=short_name)
+                    page_num += 1
+                    continue
 
                 # 3. Last Page Check (Add NOTOC)
                 doc = fitz.open(pdf_path)
