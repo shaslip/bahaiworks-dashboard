@@ -556,6 +556,7 @@ if start_btn:
         gemini_consecutive_failures = 0
         docai_cooldown_pages = 0
         permanent_docai = False
+        pdf_page = None
 
         # --- INNER LOOP: Pages ---
         for pdf_page in range(start_pdf_page, scope_end + 1):
@@ -686,8 +687,10 @@ if start_btn:
             break 
 
         # Book Completed
-        if pdf_page == scope_end:
-            save_state(i + 1, 1, wiki_title) 
+        # If the loop finished (pdf_page reached scope_end) OR 
+        # if the loop was skipped because start > end (meaning book was already done)
+        if (pdf_page is not None and pdf_page == scope_end) or (start_pdf_page > scope_end):
+            save_state(i + 1, 1, wiki_title)
 
         # Update UI
         progress_bar.progress((i + 1 - start_idx) / (len(members) - start_idx))
