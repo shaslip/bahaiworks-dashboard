@@ -331,7 +331,16 @@ if start_btn:
                         # Formatting failure check
                         if "FORMATTING_ERROR" in final_text:
                             log_area.text(f"⚠️ DocAI Formatting Failed. Attempting Gemini Rescue...")
-                            final_text = proofread_with_formatting(img)
+                            
+                            # Try Rescue
+                            rescue_text = proofread_with_formatting(img)
+                            
+                            # If rescue failed, use RAW OCR
+                            if "GEMINI_ERROR" in rescue_text or "Recitation" in rescue_text:
+                                log_area.text("⚠️ Rescue also failed. Saving RAW OCR text.")
+                                final_text = raw_ocr + "\n\n"
+                            else:
+                                final_text = rescue_text
 
                     # Decrement Cooldown if active
                     if docai_cooldown_pages > 0:
@@ -365,7 +374,18 @@ if start_btn:
                         # --- Immediate Fallback for THIS Page ---
                         # We don't want to skip this page, so we process it with DocAI right now
                         raw_ocr = transcribe_with_document_ai(img)
-                        final_text = reformat_raw_text(raw_ocr)
+                        
+                        if "DOCAI_ERROR" in raw_ocr:
+                            final_text = "DOCAI_ERROR" # Let the safety check catch this
+                        else:
+                            # Try to format
+                            formatted_text = reformat_raw_text(raw_ocr)
+                            
+                            if "FORMATTING_ERROR" in formatted_text:
+                                log_area.text("⚠️ Formatting failed. Saving RAW OCR text.")
+                                final_text = raw_ocr + "\n\n"
+                            else:
+                                final_text = formatted_text
 
                     else:
                         # Success! Reset consecutive counter.
