@@ -600,14 +600,19 @@ if start_btn:
                         log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ DocAI failed on {correct_label}. Trying Gemini fallback.", color="#d97706")
                         final_text = proofread_with_formatting(img)
                     else:
-                        final_text = reformat_raw_text(raw_ocr)
+                        # --- CHANGED: Formatting Fallback Logic ---
+                        formatted_text = reformat_raw_text(raw_ocr)
+                        if "FORMATTING_ERROR" in formatted_text:
+                            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ Formatting failed. Saving RAW OCR.", color="#d97706")
+                            final_text = raw_ocr + "\n\n"
+                        else:
+                            final_text = formatted_text
                     
                     # Decrement Cooldown if active
                     if docai_cooldown_pages > 0:
                         docai_cooldown_pages -= 1
                         if docai_cooldown_pages == 0:
                             log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;🟢 Cooldown complete. Re-enabling Gemini next page.", color="green")
-
                 else:
                     # --- Gemini Path ---
                     final_text = proofread_with_formatting(img)
@@ -629,7 +634,17 @@ if start_btn:
 
                         # Immediate Fallback for THIS page
                         raw_ocr = transcribe_with_document_ai(img)
-                        final_text = reformat_raw_text(raw_ocr)
+                        
+                        if "DOCAI_ERROR" in raw_ocr:
+                            final_text = "DOCAI_ERROR" # Let the safety check catch this
+                        else:
+                            # --- CHANGED: Formatting Fallback Logic ---
+                            formatted_text = reformat_raw_text(raw_ocr)
+                            if "FORMATTING_ERROR" in formatted_text:
+                                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ Formatting failed. Saving RAW OCR.", color="#d97706")
+                                final_text = raw_ocr + "\n\n"
+                            else:
+                                final_text = formatted_text
                     
                     else:
                         # Success! Reset consecutive counter.
