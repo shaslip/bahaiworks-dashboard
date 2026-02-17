@@ -715,6 +715,15 @@ with tab_manual:
             st.stop()
             
         log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;📂 Found local PDF: {local_path}", color="green")
+
+        # Get total pages so we know when to trigger cleanup
+        total_pdf_pages = 0
+        try:
+            with fitz.open(local_path) as doc:
+                total_pdf_pages = len(doc)
+        except Exception as e:
+            st.error(f"Failed to read PDF length: {e}")
+            st.stop()
         
         # 4. Determine Anchor Offset
         # We need this to convert YOUR input (Book Page) into the Physical PDF Page
@@ -796,7 +805,15 @@ with tab_manual:
                 if inject_err:
                     log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Injection Failed: {inject_err}", color="red")
                     continue
-                
+
+                # Final Cleanup Trigger
+                # If this is the absolute last page of the PDF, ensure __NOTOC__ exists
+                if pdf_page == total_pdf_pages:
+                    if "__NOTOC__" not in new_wikitext:
+                        new_wikitext += "\n__NOTOC__"
+                        log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;🧹 Appended __NOTOC__ (End of File)", color="blue")
+
+                # Upload
                 res = upload_to_bahaiworks(manual_title, new_wikitext, f"Bot: Manual Proofread {correct_label}")
                 
                 if res.get('edit', {}).get('result') == 'Success':
