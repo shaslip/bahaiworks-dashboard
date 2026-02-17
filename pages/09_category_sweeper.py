@@ -668,7 +668,7 @@ with tab_auto:
         st.success("Auto Sweep Complete!")
 
 # ==============================================================================
-# TAB 2: MANUAL TARGET (Fixed to use Book Page Numbers)
+# TAB 2: MANUAL TARGET (Cleaned Up)
 # ==============================================================================
 with tab_manual:
     st.markdown("**Mode:** Manually process specific **Book Pages** ({{page|X}}).")
@@ -689,7 +689,7 @@ with tab_manual:
             
         current_status_line = st.empty()
         
-        # 1. Index PDFs (Needed to find the file)
+        # 1. Index PDFs
         with st.spinner("Indexing Local PDFs..."):
             pdf_index = build_pdf_index(input_folder)
             
@@ -704,70 +704,59 @@ with tab_manual:
         # 3. Find File
         file_match = re.search(r'file\s*=\s*([^|}\n]+)', current_text, re.IGNORECASE)
         if not file_match:
-            st.error("No 'file=' parameter found in this page.")
+            st.error("No 'file=' parameter found.")
             st.stop()
             
         pdf_filename = file_match.group(1).strip()
         local_path = pdf_index.get(pdf_filename)
         
         if not local_path:
-            st.error(f"PDF '{pdf_filename}' not found in {input_folder}")
+            st.error(f"PDF '{pdf_filename}' not found locally.")
             st.stop()
             
-        log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;📂 Found local PDF: {local_path}", color="green")
-
-        # Get total pages so we know when to trigger cleanup
-        total_pdf_pages = 0
+        # 4. Get Bounds & Anchor
+        # We need total_pdf_pages just for the bounds check
         try:
             with fitz.open(local_path) as doc:
                 total_pdf_pages = len(doc)
         except Exception as e:
-            st.error(f"Failed to read PDF length: {e}")
+            st.error(f"Failed to open PDF: {e}")
             st.stop()
-        
-        # 4. Determine Anchor Offset
-        # We need this to convert YOUR input (Book Page) into the Physical PDF Page
-        anchor_pdf_page = find_anchor_offset(current_text)
-        
-        if anchor_pdf_page is None:
-            log_small("&nbsp;&nbsp;&nbsp;&nbsp;⚠️ No existing {{page}} tags found to calculate offset. Assuming Page 1 = PDF 1.", color="#d97706")
-            anchor_pdf_page = 1
 
-        # Variables for Error Handling (Reset for manual run)
+        anchor_pdf_page = find_anchor_offset(current_text)
+        if anchor_pdf_page is None: anchor_pdf_page = 1
+
+        # Use existing function to find the PDF Page where the doc ends
+        is_text_subpage = manual_title.endswith("/Text")
+        _, scope_end = get_processing_bounds(current_text, total_pdf_pages, is_text_subpage)
+        
+        log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;📏 Document ends at PDF Page: {scope_end}", color="#444")
+
+        # Variables for Error Handling
         gemini_consecutive_failures = 0
         docai_cooldown_pages = 0
         permanent_docai = False
         
         progress_bar = st.progress(0)
         
-        # --- LOOP using User's BOOK PAGE numbers ---
+        # --- LOOP ---
         for idx, book_page_num in enumerate(target_labels):
-            if stop_btn:
-                st.warning("Stopping...")
-                break
+            if stop_btn: break
             
-            # CONVERT Book Page -> PDF Page
-            # Formula: PDF_Page = Book_Page + Anchor - 1
-            # Ex: If Book Page 1 is PDF 5 (Anchor=5). Book Page 46 = 46 + 5 - 1 = 50.
+            # Calculate PDF Page
             pdf_page = book_page_num + anchor_pdf_page - 1
-            
-            # The label is exactly what you typed
             correct_label = str(book_page_num)
             
-            current_status_line.text(f"Processing: Book Page {correct_label} (Mapped to PDF Page {pdf_page})")
+            current_status_line.text(f"Processing: Book Page {correct_label}")
             
-            # --- REUSED PROCESSING LOGIC ---
-            
-            # A. Get Image (Using calculated PDF page)
+            # A. Get Image
             img = get_page_image_data(local_path, pdf_page)
             if not img:
-                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Image Error (Book Page {correct_label} / PDF {pdf_page})", color="red")
+                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Image Error", color="red")
                 continue
 
             # B. Refresh Text & Fix Tags
             if idx > 0: current_text, _ = fetch_wikitext(manual_title)
-            
-            # Fix the tag that corresponds to this PDF page, ensuring it has the correct label
             current_text = find_and_fix_tag_by_page_num(current_text, pdf_filename, pdf_page, correct_label)
             
             # C. AI Processing
@@ -797,7 +786,7 @@ with tab_manual:
                         gemini_consecutive_failures = 0
 
                 if not final_text or any(x in final_text for x in ["GEMINI_ERROR", "DOCAI_ERROR"]):
-                    log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ AI Failed for Page {correct_label}", color="red")
+                    log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ AI Failed", color="red")
                     continue
 
                 # D. Inject & Upload
@@ -805,15 +794,13 @@ with tab_manual:
                 if inject_err:
                     log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Injection Failed: {inject_err}", color="red")
                     continue
-
-                # Final Cleanup Trigger
-                # If this is the absolute last page of the PDF, ensure __NOTOC__ exists
-                if pdf_page == total_pdf_pages:
+                
+                # [CLEANUP] Compare current PDF page to scope_end
+                if pdf_page == scope_end:
                     if "__NOTOC__" not in new_wikitext:
                         new_wikitext += "\n__NOTOC__"
-                        log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;🧹 Appended __NOTOC__ (End of File)", color="blue")
+                        log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;🧹 Appended __NOTOC__ (End of Document)", color="blue")
 
-                # Upload
                 res = upload_to_bahaiworks(manual_title, new_wikitext, f"Bot: Manual Proofread {correct_label}")
                 
                 if res.get('edit', {}).get('result') == 'Success':
