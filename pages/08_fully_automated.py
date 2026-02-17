@@ -416,10 +416,20 @@ if start_btn:
 
                 # C. Fetch Live Wiki Text
                 log_area.text(f"🌐 Fetching live text from {wiki_title}...")
-                current_wikitext, error = fetch_wikitext(wiki_title, session=session)
+                
+                # Retry logic for network hiccups
+                max_retries = 3
+                for attempt in range(max_retries):
+                    current_wikitext, error = fetch_wikitext(wiki_title, session=session)
+                    if not error:
+                        break  # Success!
+                    
+                    if attempt < max_retries - 1:
+                        log_area.text(f"⚠️ Network error fetching text. Retrying in 30s... (Attempt {attempt+1}/{max_retries})")
+                        time.sleep(30)
                 
                 if error:
-                    st.error(f"CRITICAL ERROR: Could not fetch '{wiki_title}'. Does the page exist?")
+                    st.error(f"CRITICAL ERROR: Could not fetch '{wiki_title}' after {max_retries} attempts. Does the page exist? Error: {error}")
                     st.stop()
                 
                 # --- PAGE 1 SPECIAL HANDLING (Header & OCR Removal) ---
