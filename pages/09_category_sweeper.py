@@ -668,22 +668,22 @@ with tab_auto:
         st.success("Auto Sweep Complete!")
 
 # ==============================================================================
-# TAB 2: MANUAL TARGET (New Logic)
+# TAB 2: MANUAL TARGET (Fixed to use Book Page Numbers)
 # ==============================================================================
 with tab_manual:
-    st.markdown("**Mode:** Manually process specific pages of a specific book.")
+    st.markdown("**Mode:** Manually process specific **Book Pages** ({{page|X}}).")
     
     c1, c2 = st.columns(2)
     with c1:
         manual_title = st.text_input("Wiki Page Title", placeholder="e.g. Star of the West/Volume 1/Issue 1")
     with c2:
-        manual_range = st.text_input("PDF Page Range", placeholder="e.g. 1-5, 8, 12")
+        manual_range = st.text_input("Book Page Range (e.g. 46-63)", placeholder="e.g. 46-63, 70")
         
     start_manual_btn = st.button("🎯 Process Range", type="primary")
     
     if start_manual_btn and manual_title and manual_range:
-        target_pages = parse_page_range(manual_range)
-        if not target_pages:
+        target_labels = parse_page_range(manual_range)
+        if not target_labels:
             st.error("Invalid page range.")
             st.stop()
             
@@ -716,9 +716,14 @@ with tab_manual:
             
         log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;📂 Found local PDF: {local_path}", color="green")
         
-        # 4. Anchor & Loop
+        # 4. Determine Anchor Offset
+        # We need this to convert YOUR input (Book Page) into the Physical PDF Page
         anchor_pdf_page = find_anchor_offset(current_text)
         
+        if anchor_pdf_page is None:
+            log_small("&nbsp;&nbsp;&nbsp;&nbsp;⚠️ No existing {{page}} tags found to calculate offset. Assuming Page 1 = PDF 1.", color="#d97706")
+            anchor_pdf_page = 1
+
         # Variables for Error Handling (Reset for manual run)
         gemini_consecutive_failures = 0
         docai_cooldown_pages = 0
@@ -726,24 +731,34 @@ with tab_manual:
         
         progress_bar = st.progress(0)
         
-        for idx, pdf_page in enumerate(target_pages):
+        # --- LOOP using User's BOOK PAGE numbers ---
+        for idx, book_page_num in enumerate(target_labels):
             if stop_btn:
                 st.warning("Stopping...")
                 break
-                
-            correct_label = calculate_page_label(pdf_page, anchor_pdf_page)
-            current_status_line.text(f"Processing Manual: Page {correct_label} (PDF {pdf_page})")
+            
+            # CONVERT Book Page -> PDF Page
+            # Formula: PDF_Page = Book_Page + Anchor - 1
+            # Ex: If Book Page 1 is PDF 5 (Anchor=5). Book Page 46 = 46 + 5 - 1 = 50.
+            pdf_page = book_page_num + anchor_pdf_page - 1
+            
+            # The label is exactly what you typed
+            correct_label = str(book_page_num)
+            
+            current_status_line.text(f"Processing: Book Page {correct_label} (Mapped to PDF Page {pdf_page})")
             
             # --- REUSED PROCESSING LOGIC ---
             
-            # A. Get Image
+            # A. Get Image (Using calculated PDF page)
             img = get_page_image_data(local_path, pdf_page)
             if not img:
-                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Image Error (Page {correct_label})", color="red")
+                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Image Error (Book Page {correct_label} / PDF {pdf_page})", color="red")
                 continue
 
             # B. Refresh Text & Fix Tags
             if idx > 0: current_text, _ = fetch_wikitext(manual_title)
+            
+            # Fix the tag that corresponds to this PDF page, ensuring it has the correct label
             current_text = find_and_fix_tag_by_page_num(current_text, pdf_filename, pdf_page, correct_label)
             
             # C. AI Processing
@@ -793,7 +808,7 @@ with tab_manual:
             except Exception as e:
                 log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Exception: {e}", color="red")
             
-            progress_bar.progress((idx + 1) / len(target_pages))
+            progress_bar.progress((idx + 1) / len(target_labels))
             time.sleep(1)
             
         st.success("Manual Range Complete!")
