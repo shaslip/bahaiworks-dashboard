@@ -101,10 +101,6 @@ def calculate_page_label(pdf_page_num, anchor_pdf_page):
         # Ex: PDF 10 is Page 1. So PDF 10 - 10 + 1 = 1.
         return str(pdf_page_num - anchor_pdf_page + 1)
 
-def log_small(msg, color="black"):
-    """Prints a compact log line."""
-    st.markdown(f"<span style='font-size:13px; font-family:monospace; color:{color};'>{msg}</span>", unsafe_allow_html=True)
-
 def parse_page_range(range_string):
     """
     Parses a string like "1-5, 8, 11-13" into a sorted list of integers.
@@ -123,6 +119,10 @@ def parse_page_range(range_string):
     except ValueError:
         return []
 
+def log_small(msg, color="black"):
+    """Prints a compact log line."""
+    st.markdown(f"<span style='font-size:13px; font-family:monospace; color:{color};'>{msg}</span>", unsafe_allow_html=True)
+    
 def find_anchor_offset(wikitext):
     """
     Scans for any {{page|N|...|page=X}} where N is an integer to establish the offset.
@@ -446,7 +446,8 @@ def reset_state():
 # 3. UI & LOGIC
 # ==============================================================================
 
-st.title("🧹 Category Sweeper & Manual Fixer")
+st.title("🧹 Category Sweeper: Full PDF Processing")
+st.markdown("Autonomously iterates through the maintenance category, finds local PDFs, updates headers, fixes tags, and proofreads.")
 
 # --- Sidebar ---
 st.sidebar.header("Configuration")
@@ -464,10 +465,10 @@ state = load_state()
 
 if st.sidebar.button("🗑️ Reset State"):
     state = reset_state()
-    st.sidebar.success("State cleared.")
+    st.sidebar.success("State cleared. Will start from top of category.")
     st.rerun()
 
-st.sidebar.info(f"Auto-Sweep Resume Index: {state['member_index']}\nPDF Page: {state['pdf_page_num']}")
+st.sidebar.info(f"Resuming at Index: {state['member_index']}\nPDF Page: {state['pdf_page_num']}")
 
 # --- Main Work Area ---
 
@@ -475,24 +476,27 @@ if not os.path.exists(input_folder):
     st.error(f"❌ Input folder does not exist: {input_folder}")
     st.stop()
 
-# Tabs for Mode Selection
+# TABS
 tab_auto, tab_manual = st.tabs(["🤖 Auto Category Sweeper", "🎯 Manual Target"])
 
-# Shared Stop Button (Works for both loops)
-stop_btn = st.button("🛑 Stop Processing", type="secondary", use_container_width=True)
-status_container = st.container(border=True)
-log_area = st.empty()
-
 # ==============================================================================
-# TAB 1: AUTO SWEEPER (Existing Logic)
+# TAB 1: AUTO SWEEPER (Exact Original Code)
 # ==============================================================================
 with tab_auto:
-    st.markdown("**Mode:** Iterates through `Category:Pages_needing_proofreading` autonomously.")
-    start_auto_btn = st.button("🚀 Start Auto-Sweeper", type="primary")
+    # Layout
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        start_btn = st.button("🚀 Start Sweeper", type="primary", use_container_width=True)
+    with col2:
+        stop_btn = st.button("🛑 Stop After Current Page", use_container_width=True)
 
-    if start_auto_btn:
+    status_container = st.container(border=True)
+    log_area = st.empty()
+
+    if start_btn:
+        # --- UI Setup ---
         progress_bar = st.progress(0)
-        current_status_line = st.empty()
+        current_status_line = st.empty() # For transient updates (like exclusions)
         
         # 1. Index PDFs
         with st.spinner("Indexing Local PDFs..."):
@@ -513,12 +517,14 @@ with tab_auto:
             page_obj = members[i]
             wiki_title = page_obj['title']
             
-            # Check Exclusions
+            # --- Check Exclusions ---
             if any(wiki_title.startswith(exclude) for exclude in EXCLUDED_TITLES):
-                current_status_line.text(f"Skipping excluded '{wiki_title}'...")
+                # Transient update (overwrites itself) to prevent spamming the log
+                current_status_line.text(f"Scanning {i}/{len(members)}: Skipping excluded '{wiki_title}'...")
                 save_state(i + 1, 1, wiki_title)
                 continue
             
+            # --- Log Processing Start ---
             log_small(f"📚 ({i+1}/{len(members)}) Processing: <b>{wiki_title}</b>", color="#444")
 
             # A. Fetch Wikitext
@@ -533,7 +539,7 @@ with tab_auto:
             # C. Identify PDF Filename
             file_match = re.search(r'file\s*=\s*([^|}\n]+)', current_text, re.IGNORECASE)
             if not file_match:
-                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ 'file=' parameter not found. Skipping.", color="#d97706")
+                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ 'file=' parameter not found in wikitext. Skipping.", color="#d97706") # Orange
                 save_state(i + 1, 1, wiki_title) 
                 continue
                 
@@ -542,7 +548,7 @@ with tab_auto:
             # D. Locate Local PDF
             local_path = pdf_index.get(pdf_filename)
             if not local_path:
-                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ PDF '{pdf_filename}' not found locally.", color="red")
+                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ PDF '{pdf_filename}' not found in local index. Skipping.", color="red")
                 save_state(i + 1, 1, wiki_title)
                 continue
                 
@@ -555,7 +561,7 @@ with tab_auto:
                 total_pdf_pages = len(doc)
                 doc.close()
             except Exception as e:
-                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Failed to open PDF: {e}", color="red")
+                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Failed to open local PDF: {e}", color="red")
                 continue
 
             # G. Processing Bounds
@@ -566,8 +572,12 @@ with tab_auto:
                 start_pdf_page = max(state['pdf_page_num'], scope_start)
             else:
                 start_pdf_page = scope_start
-            
-            # Variables for Error Handling
+                
+            # Reset Gemini failure counter for this book
+            gemini_failures = 0
+
+            # --- INNER LOOP: Pages ---
+            # --- Processing State ---
             gemini_consecutive_failures = 0
             docai_cooldown_pages = 0
             permanent_docai = False
@@ -576,11 +586,13 @@ with tab_auto:
             # --- INNER LOOP: Pages ---
             for pdf_page in range(start_pdf_page, scope_end + 1):
                 
+                # Stop Check
                 if stop_btn:
                     st.warning("Stopping requested...")
                     break 
                 
                 correct_label = calculate_page_label(pdf_page, anchor_pdf_page)
+                # Transient status update
                 current_status_line.text(f"Working on: {wiki_title} | Page {correct_label}")
 
                 # 1. Get Image
@@ -592,83 +604,130 @@ with tab_auto:
                 # 2. TAG FIXING
                 if pdf_page > start_pdf_page:
                     current_text, _ = fetch_wikitext(wiki_title)
+                
                 current_text = find_and_fix_tag_by_page_num(current_text, pdf_filename, pdf_page, correct_label)
 
-                # 3. AI Processing (Strategies)
+                # 3. AI Processing
                 final_text = ""
                 try:
+                    # --- Determine Strategy ---
+                    # We force DocAI if:
+                    # 1. User selected "DocAI Only"
+                    # 2. We are permanently locked out of Gemini (3rd strike)
+                    # 3. We are in a "cooldown" period (2 failures triggered 5 pages of DocAI)
                     force_docai = (ocr_strategy == "DocAI Only") or permanent_docai or (docai_cooldown_pages > 0)
 
                     if force_docai:
-                        # DocAI Path
+                        # --- DocAI Path ---
                         raw_ocr = transcribe_with_document_ai(img)
+                        # Check for specific DOCAI_ERROR
                         if not raw_ocr or "DOCAI_ERROR" in raw_ocr:
-                            final_text = proofread_with_formatting(img) # Fallback
+                            # Fallback for DocAI failure (rare)
+                            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ DocAI failed on {correct_label}. Trying Gemini fallback.", color="#d97706")
+                            final_text = proofread_with_formatting(img)
                         else:
+                            # --- CHANGED: Formatting Fallback Logic ---
                             formatted_text = reformat_raw_text(raw_ocr)
-                            final_text = formatted_text if "FORMATTING_ERROR" not in formatted_text else raw_ocr + "\n\n"
+                            if "FORMATTING_ERROR" in formatted_text:
+                                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ Formatting failed. Saving RAW OCR.", color="#d97706")
+                                final_text = raw_ocr + "\n\n"
+                            else:
+                                final_text = formatted_text
                         
-                        if docai_cooldown_pages > 0: docai_cooldown_pages -= 1
+                        # Decrement Cooldown if active
+                        if docai_cooldown_pages > 0:
+                            docai_cooldown_pages -= 1
+                            if docai_cooldown_pages == 0:
+                                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;🟢 Cooldown complete. Re-enabling Gemini next page.", color="green")
                     else:
-                        # Gemini Path
+                        # --- Gemini Path ---
                         final_text = proofread_with_formatting(img)
                         
                         if final_text and "GEMINI_ERROR" in final_text:
                             gemini_consecutive_failures += 1
-                            if gemini_consecutive_failures >= 2:
-                                docai_cooldown_pages = 5
-                                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ Switching to DocAI (Cooldown)", color="#d97706")
-                            if gemini_consecutive_failures >= 3:
-                                permanent_docai = True
                             
-                            # Immediate Fallback
+                            # Handle Failure Logic
+                            if gemini_consecutive_failures == 2:
+                                docai_cooldown_pages = 5
+                                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ 2 Consecutive Failures on {correct_label}. Switching to DocAI for 5 pages.", color="#d97706")
+                            
+                            elif gemini_consecutive_failures >= 3:
+                                permanent_docai = True
+                                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⛔ 3rd Strike (Retry Failed) on page {correct_label}. Switching to DocAI for remainder of book.", color="red")
+                            
+                            else:
+                                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ Gemini Error on page {correct_label} ({gemini_consecutive_failures}/2). Fallback to DocAI.", color="#d97706")
+
+                            # Immediate Fallback for THIS page
                             raw_ocr = transcribe_with_document_ai(img)
-                            formatted_text = reformat_raw_text(raw_ocr)
-                            final_text = formatted_text if "FORMATTING_ERROR" not in formatted_text else raw_ocr + "\n\n"
+                            
+                            if "DOCAI_ERROR" in raw_ocr:
+                                final_text = "DOCAI_ERROR" # Let the safety check catch this
+                            else:
+                                # --- CHANGED: Formatting Fallback Logic ---
+                                formatted_text = reformat_raw_text(raw_ocr)
+                                if "FORMATTING_ERROR" in formatted_text:
+                                    log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ Formatting failed. Saving RAW OCR.", color="#d97706")
+                                    final_text = raw_ocr + "\n\n"
+                                else:
+                                    final_text = formatted_text
+                        
                         else:
+                            # Success! Reset consecutive counter.
                             gemini_consecutive_failures = 0
 
-                    if not final_text or any(x in final_text for x in ["GEMINI_ERROR", "DOCAI_ERROR"]):
+                    system_error_flags = ["GEMINI_ERROR", "DOCAI_ERROR", "FORMATTING_ERROR"]
+                    if not final_text or any(flag in final_text for flag in system_error_flags):
                         log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Processing failed for Page {correct_label}", color="red")
                         continue
 
                     # 4. Inject & Upload
                     new_wikitext, inject_err = inject_text_into_page(current_text, correct_label, final_text, pdf_filename)
+                    
                     if inject_err:
-                        log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Injection Error: {inject_err}", color="red")
+                        log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Injection Error ({correct_label}): {inject_err}", color="red")
                         continue
                     
+                    # 5. Check for __NOTOC__
                     if pdf_page == scope_end and "__NOTOC__" not in new_wikitext:
                         new_wikitext += "\n__NOTOC__"
                     
+                    # Upload
                     res = upload_to_bahaiworks(wiki_title, new_wikitext, f"Bot: Proofread {correct_label} (PDF {pdf_page})")
                     
                     if res.get('edit', {}).get('result') == 'Success':
                         save_state(i, pdf_page + 1, wiki_title)
                         current_text = new_wikitext 
                     else:
-                        log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Upload Error: {res}", color="red")
+                        log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Upload API Error ({correct_label}): {res}", color="red")
                         break 
                 
                 except Exception as e:
-                    log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Exception: {e}", color="red")
+                    log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Exception ({correct_label}): {e}", color="red")
                     break 
                     
                 time.sleep(1)
 
-            if stop_btn: break 
+            if stop_btn:
+                break 
 
             # Book Completed
+            # If the loop finished (pdf_page reached scope_end) OR 
+            # if the loop was skipped because start > end (meaning book was already done)
             if (pdf_page is not None and pdf_page == scope_end) or (start_pdf_page > scope_end):
                 save_state(i + 1, 1, wiki_title)
 
+            # Update UI
             progress_bar.progress((i + 1 - start_idx) / (len(members) - start_idx))
-            if run_mode.startswith("Test"): break
+            
+            if run_mode.startswith("Test"):
+                st.info("Test Mode: Stopping after 1 book.")
+                break
                 
-        st.success("Auto Sweep Complete!")
+        st.success(f"Sweep Complete!")
 
 # ==============================================================================
-# TAB 2: MANUAL TARGET (Cleaned Up)
+# TAB 2: MANUAL TARGET (Integrated)
 # ==============================================================================
 with tab_manual:
     st.markdown("**Mode:** Manually process specific **Book Pages** ({{page|X}}).")
@@ -678,9 +737,10 @@ with tab_manual:
         manual_title = st.text_input("Wiki Page Title", placeholder="e.g. Star of the West/Volume 1/Issue 1")
     with c2:
         manual_range = st.text_input("Book Page Range (e.g. 46-63)", placeholder="e.g. 46-63, 70")
-        
-    start_manual_btn = st.button("🎯 Process Range", type="primary")
     
+    start_manual_btn = st.button("🎯 Process Range", type="primary")
+    manual_stop_btn = st.button("🛑 Stop Manual Process")
+
     if start_manual_btn and manual_title and manual_range:
         target_labels = parse_page_range(manual_range)
         if not target_labels:
@@ -714,8 +774,7 @@ with tab_manual:
             st.error(f"PDF '{pdf_filename}' not found locally.")
             st.stop()
             
-        # 4. Get Bounds & Anchor
-        # We need total_pdf_pages just for the bounds check
+        # 4. Get Bounds & Anchor (Needed for scope_end cleanup check)
         try:
             with fitz.open(local_path) as doc:
                 total_pdf_pages = len(doc)
@@ -726,7 +785,6 @@ with tab_manual:
         anchor_pdf_page = find_anchor_offset(current_text)
         if anchor_pdf_page is None: anchor_pdf_page = 1
 
-        # Use existing function to find the PDF Page where the doc ends
         is_text_subpage = manual_title.endswith("/Text")
         _, scope_end = get_processing_bounds(current_text, total_pdf_pages, is_text_subpage)
         
@@ -741,7 +799,9 @@ with tab_manual:
         
         # --- LOOP ---
         for idx, book_page_num in enumerate(target_labels):
-            if stop_btn: break
+            if manual_stop_btn: 
+                st.warning("Stopping...")
+                break
             
             # Calculate PDF Page
             pdf_page = book_page_num + anchor_pdf_page - 1
@@ -762,31 +822,63 @@ with tab_manual:
             # C. AI Processing
             final_text = ""
             try:
+                # --- Determine Strategy ---
                 force_docai = (ocr_strategy == "DocAI Only") or permanent_docai or (docai_cooldown_pages > 0)
 
                 if force_docai:
+                    # --- DocAI Path ---
                     raw_ocr = transcribe_with_document_ai(img)
                     if not raw_ocr or "DOCAI_ERROR" in raw_ocr:
+                        log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ DocAI failed on {correct_label}. Trying Gemini fallback.", color="#d97706")
                         final_text = proofread_with_formatting(img)
                     else:
                         formatted_text = reformat_raw_text(raw_ocr)
-                        final_text = formatted_text if "FORMATTING_ERROR" not in formatted_text else raw_ocr + "\n\n"
-                    if docai_cooldown_pages > 0: docai_cooldown_pages -= 1
+                        if "FORMATTING_ERROR" in formatted_text:
+                            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ Formatting failed. Saving RAW OCR.", color="#d97706")
+                            final_text = raw_ocr + "\n\n"
+                        else:
+                            final_text = formatted_text
+                    
+                    if docai_cooldown_pages > 0:
+                        docai_cooldown_pages -= 1
+                        if docai_cooldown_pages == 0:
+                            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;🟢 Cooldown complete. Re-enabling Gemini next page.", color="green")
                 else:
+                    # --- Gemini Path ---
                     final_text = proofread_with_formatting(img)
+                    
                     if final_text and "GEMINI_ERROR" in final_text:
                         gemini_consecutive_failures += 1
-                        if gemini_consecutive_failures >= 2: docai_cooldown_pages = 5
-                        if gemini_consecutive_failures >= 3: permanent_docai = True
                         
+                        if gemini_consecutive_failures == 2:
+                            docai_cooldown_pages = 5
+                            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ 2 Consecutive Failures on {correct_label}. Switching to DocAI for 5 pages.", color="#d97706")
+                        
+                        elif gemini_consecutive_failures >= 3:
+                            permanent_docai = True
+                            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⛔ 3rd Strike (Retry Failed) on page {correct_label}. Switching to DocAI for remainder of book.", color="red")
+                        
+                        else:
+                            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ Gemini Error on page {correct_label} ({gemini_consecutive_failures}/2). Fallback to DocAI.", color="#d97706")
+
                         raw_ocr = transcribe_with_document_ai(img)
-                        formatted_text = reformat_raw_text(raw_ocr)
-                        final_text = formatted_text if "FORMATTING_ERROR" not in formatted_text else raw_ocr + "\n\n"
+                        
+                        if "DOCAI_ERROR" in raw_ocr:
+                            final_text = "DOCAI_ERROR" 
+                        else:
+                            formatted_text = reformat_raw_text(raw_ocr)
+                            if "FORMATTING_ERROR" in formatted_text:
+                                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ Formatting failed. Saving RAW OCR.", color="#d97706")
+                                final_text = raw_ocr + "\n\n"
+                            else:
+                                final_text = formatted_text
+                    
                     else:
                         gemini_consecutive_failures = 0
 
-                if not final_text or any(x in final_text for x in ["GEMINI_ERROR", "DOCAI_ERROR"]):
-                    log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ AI Failed", color="red")
+                system_error_flags = ["GEMINI_ERROR", "DOCAI_ERROR", "FORMATTING_ERROR"]
+                if not final_text or any(flag in final_text for flag in system_error_flags):
+                    log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Processing failed for Page {correct_label}", color="red")
                     continue
 
                 # D. Inject & Upload
