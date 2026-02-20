@@ -292,6 +292,28 @@ if start_btn:
         docai_cooldown_pages = 0
         permanent_docai = False
 
+        # --- NEW: Local Working Copy Setup ---
+        wip_file_path = os.path.join(project_root, f"wip_{short_name}.txt")
+        
+        if start_page == 1 or not os.path.exists(wip_file_path):
+            log_area.text(f"🌐 Fetching live text from {wiki_title} to start local editing...")
+            max_retries = 3
+            for attempt in range(max_retries):
+                current_wikitext, error = fetch_wikitext(wiki_title, session=session)
+                if not error:
+                    break
+                if attempt < max_retries - 1:
+                    time.sleep(30)
+            if error:
+                st.error(f"CRITICAL ERROR: Could not fetch '{wiki_title}'. Error: {error}")
+                st.stop()
+            
+            # Save the initial fetch to our local working file
+            with open(wip_file_path, "w", encoding="utf-8") as f:
+                f.write(current_wikitext)
+        else:
+            log_area.text(f"📂 Resuming from local working copy for {short_name}...")
+
         # 4c. Iterate Pages in PDF
         page_num = start_page
 
@@ -414,23 +436,9 @@ if start_btn:
                 if is_last_page:
                     final_text += "\n__NOTOC__"
 
-                # C. Fetch Live Wiki Text
-                log_area.text(f"🌐 Fetching live text from {wiki_title}...")
-                
-                # Retry logic for network hiccups
-                max_retries = 3
-                for attempt in range(max_retries):
-                    current_wikitext, error = fetch_wikitext(wiki_title, session=session)
-                    if not error:
-                        break  # Success!
-                    
-                    if attempt < max_retries - 1:
-                        log_area.text(f"⚠️ Network error fetching text. Retrying in 30s... (Attempt {attempt+1}/{max_retries})")
-                        time.sleep(30)
-                
-                if error:
-                    st.error(f"CRITICAL ERROR: Could not fetch '{wiki_title}' after {max_retries} attempts. Does the page exist? Error: {error}")
-                    st.stop()
+                # C. Load current local wikitext
+                with open(wip_file_path, "r", encoding="utf-8") as f:
+                    current_wikitext = f.read()
                 
                 # --- PAGE 1 SPECIAL HANDLING (Header & OCR Removal) ---
                 if page_num == 1:
@@ -475,40 +483,44 @@ if start_btn:
                 else:
                     current_wikitext = update_header_ps_tag(current_wikitext)
                 
-                # D. Inject Content
-                log_area.text(f"💉 Injecting content into {{page|{page_num}}}...")
+                # D. Inject Content Locally
+                log_area.text(f"💉 Injecting content into {{page|{page_num}}} locally...")
                 final_wikitext, inject_error = inject_text_into_page(current_wikitext, page_num, final_text, short_name)
                 
                 if inject_error:
                     st.error(f"CRITICAL ERROR on {short_name} Page {page_num}: {inject_error}")
                     st.stop()
 
-                # E. Upload
-                log_area.text(f"💾 Saving to Bahai.works...")
-                summary = f"Automated Proofread: {short_name} Pg {page_num}"
-                res = upload_to_bahaiworks(wiki_title, final_wikitext, summary, session=session)
-                
-                if res.get('edit', {}).get('result') != 'Success':
-                    st.error(f"UPLOAD FAILED: {res}")
-                    st.stop()
+                # E. Save Progress Locally
+                log_area.text(f"💾 Saving progress locally...")
+                with open(wip_file_path, "w", encoding="utf-8") as f:
+                    f.write(final_wikitext)
 
-                # --- SAFE FINAL CLEANUP (Run only on the last page) ---
+                # --- SAFE FINAL CLEANUP & UPLOAD (Run only on the last page) ---
                 if is_last_page:
                     log_area.text(f"🧹 Running final seam cleanup on {short_name}...")
-                    full_text, fetch_err = fetch_wikitext(wiki_title, session=session)
-                    if not fetch_err and full_text:
-                        cleaned_text = cleanup_page_seams(full_text)
-                        if cleaned_text != full_text:
-                            upload_to_bahaiworks(wiki_title, cleaned_text, "Automated Cleanup: Seams & Hyphens", session=session)
+                    cleaned_text = cleanup_page_seams(final_wikitext)
+                    
+                    log_area.text(f"🚀 Uploading completed issue to Bahai.works...")
+                    summary = f"Automated Proofread: {short_name} (Full Issue)"
+                    res = upload_to_bahaiworks(wiki_title, cleaned_text, summary, session=session)
+                    
+                    if res.get('edit', {}).get('result') != 'Success':
+                        st.error(f"UPLOAD FAILED: {res}")
+                        st.stop()
+                    
+                    # Clean up local WIP file now that it's successfully uploaded
+                    if os.path.exists(wip_file_path):
+                        os.remove(wip_file_path)
 
                 # F. Update State (Success)
                 save_state(i, page_num + 1, "running", last_file_path=short_name)
                 
                 with status_container:
-                    st.success(f"✅ Saved Page {page_num}")
+                    st.success(f"✅ Saved Page {page_num} locally")
                 
                 page_num += 1
-                time.sleep(1) 
+                time.sleep(1)
 
             except Exception as e:
                 st.error(f"🚨 EXCEPTION OCCURRED: {str(e)}")
