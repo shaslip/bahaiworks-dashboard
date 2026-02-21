@@ -348,16 +348,31 @@ if __name__ == '__main__':
                     shared_logs[i] = manager.list()
 
                 with st.spinner(f"Processing {short_name} in {len(batches)} parallel batches..."):
-                    # Pass the silencer directly into the workers as they boot up
-                    executor = concurrent.futures.ProcessPoolExecutor(
-                        max_workers=num_batches,
-                        initializer=mute_streamlit_in_worker
-                    )
+                        # Pass the silencer directly into the workers as they boot up
+                        executor = concurrent.futures.ProcessPoolExecutor(
+                            max_workers=num_batches,
+                            initializer=mute_streamlit_in_worker
+                        )
 
-                    # --- REAL-TIME POLLING LOOP ---
-                    while True:
-                        all_done = True
-                        for batch_id, future in enumerate(futures):
+                        # --- NEW: Submit tasks to the executor to generate futures ---
+                        futures = []
+                        for batch_id, batch_pages in enumerate(batches):
+                            future = executor.submit(
+                                process_pdf_batch,
+                                batch_id,          # batch_id
+                                batch_pages,       # page_list
+                                pdf_path,          # pdf_path
+                                ocr_strategy,      # ocr_strategy
+                                short_name,        # short_name
+                                project_root,      # project_root
+                                shared_logs[batch_id] # shared_log_list
+                            )
+                            futures.append(future)
+
+                        # --- REAL-TIME POLLING LOOP ---
+                        while True:
+                            all_done = True
+                            for batch_id, future in enumerate(futures):
                             current_logs = list(shared_logs[batch_id])
                             if current_logs:
                                 batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
