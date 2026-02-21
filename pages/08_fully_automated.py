@@ -25,7 +25,7 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 # --- Imports ---
-from src.gemini_processor import proofread_with_formatting, transcribe_with_document_ai, reformat_raw_text
+from src.batch_worker import process_pdf_batch, get_page_image_data
 from src.mediawiki_uploader import (
     upload_to_bahaiworks, 
     API_URL, 
