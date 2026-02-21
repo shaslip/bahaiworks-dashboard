@@ -1,18 +1,20 @@
+import os
 import logging
 
-# 1. Create a ruthless filter that targets the exact phrase
-class MuteStreamlitContextWarning(logging.Filter):
-    def filter(self, record):
-        return "missing ScriptRunContext" not in record.getMessage()
+# 1. Force Streamlit's internal config to only log true errors in the background
+os.environ["STREAMLIT_LOGGER_LEVEL"] = "error"
 
-# 2. Attach it to Streamlit's specific logger AND the root logger
-logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").addFilter(MuteStreamlitContextWarning())
-logging.getLogger().addFilter(MuteStreamlitContextWarning())
+# 2. Import Streamlit FIRST so it builds its default loggers, then permanently disable the noisy one
+import streamlit as st
+noisy_logger = logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context")
+noisy_logger.setLevel(logging.ERROR)
+noisy_logger.disabled = True
 
-# 3. NOW it is safe to do the rest of the imports
-import os
+# 3. Now do the rest of the imports safely
 import json
 import io
+import time
+import gc
 import fitz  # PyMuPDF
 from PIL import Image
 from src.gemini_processor import proofread_with_formatting, transcribe_with_document_ai, reformat_raw_text
