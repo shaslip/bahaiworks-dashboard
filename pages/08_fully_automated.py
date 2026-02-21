@@ -373,17 +373,17 @@ if __name__ == '__main__':
                         while True:
                             all_done = True
                             for batch_id, future in enumerate(futures):
-                            current_logs = list(shared_logs[batch_id])
-                            if current_logs:
-                                batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
-                            
-                            if not future.done():
-                                all_done = False
+                                current_logs = list(shared_logs[batch_id])
+                                if current_logs:
+                                    batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
                                 
-                        if all_done:
-                            break
-                            
-                        time.sleep(1) 
+                                if not future.done():
+                                    all_done = False
+                                    
+                            if all_done:
+                                break
+                                
+                            time.sleep(1)
 
                     # --- FORCE SHUTDOWN TO PREVENT THE UI HANG ---
                     executor.shutdown(wait=False, cancel_futures=True)
