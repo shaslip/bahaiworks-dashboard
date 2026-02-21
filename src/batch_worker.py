@@ -1,11 +1,21 @@
+import logging
+
+# 1. Create a ruthless filter that targets the exact phrase
+class MuteStreamlitContextWarning(logging.Filter):
+    def filter(self, record):
+        return "missing ScriptRunContext" not in record.getMessage()
+
+# 2. Attach it to Streamlit's specific logger AND the root logger
+logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").addFilter(MuteStreamlitContextWarning())
+logging.getLogger().addFilter(MuteStreamlitContextWarning())
+
+# 3. NOW it is safe to do the rest of the imports
 import os
 import json
 import io
 import fitz  # PyMuPDF
 from PIL import Image
 from src.gemini_processor import proofread_with_formatting, transcribe_with_document_ai, reformat_raw_text
-import logging
-logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").setLevel(logging.ERROR)
 
 def get_page_image_data(pdf_path, page_num_1_based):
     doc = fitz.open(pdf_path)
