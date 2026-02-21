@@ -19,6 +19,16 @@ import fitz  # PyMuPDF
 from PIL import Image
 from src.gemini_processor import proofread_with_formatting, transcribe_with_document_ai, reformat_raw_text
 
+def mute_streamlit_in_worker():
+    """Runs the exact second a background process wakes up to permanently kill the Streamlit warning"""
+    import logging
+    import os
+    os.environ["STREAMLIT_LOGGER_LEVEL"] = "error"
+    logger = logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context")
+    logger.setLevel(logging.ERROR)
+    logger.disabled = True
+    logger.propagate = False
+
 def get_page_image_data(pdf_path, page_num_1_based):
     doc = fitz.open(pdf_path)
     if page_num_1_based > len(doc):
