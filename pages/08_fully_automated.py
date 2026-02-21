@@ -493,7 +493,7 @@ if start_btn:
         with open(wip_file_path, "r", encoding="utf-8") as f:
             current_wikitext = f.read()
 
-        save_state(i, page_num + 1, "merging", last_file_path=short_name)
+        save_state(i, pages_to_process[0], "merging", last_file_path=short_name)
 
         for page_num in pages_to_process:
             if stop_info:
