@@ -337,7 +337,6 @@ if __name__ == '__main__':
 
             # --- NEW: MULTIPROCESSING SETUP ---
             from multiprocessing import Manager
-            from src.batch_worker import mute_streamlit_in_worker
             
             os.environ["PYTHONPATH"] = project_root
             
@@ -350,8 +349,7 @@ if __name__ == '__main__':
                 with st.spinner(f"Processing {short_name} in {len(batches)} parallel batches..."):
                     # Pass the silencer directly into the workers as they boot up
                     executor = concurrent.futures.ProcessPoolExecutor(
-                        max_workers=num_batches,
-                        initializer=mute_streamlit_in_worker
+                        max_workers=num_batches
                     )
 
                     # --- NEW: Submit tasks to the executor to generate futures ---
