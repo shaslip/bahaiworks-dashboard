@@ -411,7 +411,13 @@ if start_btn:
         total_pages = len(doc)
         doc.close()
 
-        pages_to_process = list(range(1, total_pages + 1))
+        # --- Check state for starting page ---
+        if i == state['current_file_index']:
+            start_page = state['current_page_num']
+        else:
+            start_page = 1
+
+        pages_to_process = list(range(start_page, total_pages + 1))
         
         if not pages_to_process:
             log_area.text(f"No pages left to process for {short_name}.")
@@ -440,13 +446,14 @@ if start_btn:
                         )
                     )
 
-                # Stream logs as batches complete
+                # Accumulate logs to show in the UI
+                all_logs = []
                 for future in concurrent.futures.as_completed(futures):
                     try:
                         batch_logs = future.result()
-                        for log in batch_logs:
-                            # Print to terminal to avoid Streamlit UI threading conflicts
-                            print(log) 
+                        all_logs.extend(batch_logs)
+                        # Show the most recent 15 lines in the UI log area
+                        log_area.text("\n".join(all_logs[-15:]))
                     except Exception as e:
                         st.error(f"🚨 Thread Exception: {str(e)}")
                         st.stop()
@@ -468,17 +475,26 @@ if start_btn:
         with open(wip_file_path, "r", encoding="utf-8") as f:
             current_wikitext = f.read()
 
+        save_state(i, page_num + 1, "merging", last_file_path=short_name)
+
         for page_num in pages_to_process:
             if stop_info:
                 st.warning("Stopping requested... finishing current document.")
                 break
 
             final_text = all_extracted_text.get(page_num, "")
-            if not final_text:
-                continue # Skip failed/empty pages
-
             is_last_page = (page_num == total_pages)
-            if is_last_page:
+            
+            if not final_text:
+                log_area.text(f"⚠️ Page {page_num} was empty or failed. Skipping injection.")
+                # We still need to trigger the final upload if this skipped page was the last page
+                if is_last_page:
+                    pass # Let it fall through to the cleanup phase below
+                else:
+                    save_state(i, page_num + 1, "merging", last_file_path=short_name)
+                    continue 
+
+            if is_last_page and final_text:
                 final_text += "\n__NOTOC__"
 
             # --- PAGE 1 SPECIAL HANDLING ---
