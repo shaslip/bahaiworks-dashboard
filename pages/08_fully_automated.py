@@ -167,349 +167,350 @@ def reset_state():
 # 3. UI & MAIN LOGIC
 # ==============================================================================
 
-st.title("🤖 Fully Automated Periodical Processor")
+if __name__ == '__main__':
+    st.title("🤖 Fully Automated Periodical Processor")
 
-# --- Sidebar Controls ---
-st.sidebar.header("Configuration")
-input_folder = st.sidebar.text_input("Local PDF Folder", value="/media/sarah/4TB/Projects/Bahai.works/English/Canada/1948-1975_CBN/")
-base_title = st.sidebar.text_input("Base Wiki Title", value="Canadian_Bahá’í_News")
+    # --- Sidebar Controls ---
+    st.sidebar.header("Configuration")
+    input_folder = st.sidebar.text_input("Local PDF Folder", value="/media/sarah/4TB/Projects/Bahai.works/English/Canada/1948-1975_CBN/")
+    base_title = st.sidebar.text_input("Base Wiki Title", value="Canadian_Bahá’í_News")
 
-run_mode = st.sidebar.radio("Run Mode", ["Test (1 PDF Only)", "Production (All PDFs)"])
+    run_mode = st.sidebar.radio("Run Mode", ["Test (1 PDF Only)", "Production (All PDFs)"])
 
-ocr_strategy = st.sidebar.radio(
-    "OCR Strategy", 
-    ["Gemini (Default)", "DocAI Only"], 
-    help="DocAI Only skips Gemini and goes straight to Google Cloud Vision OCR."
-)
+    ocr_strategy = st.sidebar.radio(
+        "OCR Strategy", 
+        ["Gemini (Default)", "DocAI Only"], 
+        help="DocAI Only skips Gemini and goes straight to Google Cloud Vision OCR."
+    )
 
-st.sidebar.divider()
+    st.sidebar.divider()
 
-# Load State
-state = load_state()
+    # Load State
+    state = load_state()
 
-if st.sidebar.button("🗑️ Reset State (Start Over)"):
-    state = reset_state()
-    st.sidebar.success("State cleared.")
-    st.rerun()
-
-st.sidebar.markdown(f"**Current State:**\n- File Index: `{state['current_file_index']}`\n- Page: `{state['current_page_num']}`")
-
-# --- Manual State Modification ---
-with st.sidebar.expander("🔧 Modify Position"):
-    # Input fields initialized with current state values
-    new_file_index = st.number_input("File Index (0-based)", min_value=0, value=state['current_file_index'])
-    new_page_num = st.number_input("Page Number", min_value=1, value=state['current_page_num'])
-    
-    if st.button("Update State"):
-        # Update the JSON file with your manual values
-        save_state(new_file_index, new_page_num, "manual_override", last_file_path=state.get('last_processed'))
-        st.sidebar.success("State updated!")
-        time.sleep(0.5) 
+    if st.sidebar.button("🗑️ Reset State (Start Over)"):
+        state = reset_state()
+        st.sidebar.success("State cleared.")
         st.rerun()
 
-# --- Main Area ---
+    st.sidebar.markdown(f"**Current State:**\n- File Index: `{state['current_file_index']}`\n- Page: `{state['current_page_num']}`")
 
-if not input_folder or not os.path.exists(input_folder):
-    st.warning("Please provide a valid local folder path.")
-    st.stop()
+    # --- Manual State Modification ---
+    with st.sidebar.expander("🔧 Modify Position"):
+        # Input fields initialized with current state values
+        new_file_index = st.number_input("File Index (0-based)", min_value=0, value=state['current_file_index'])
+        new_page_num = st.number_input("Page Number", min_value=1, value=state['current_page_num'])
+        
+        if st.button("Update State"):
+            # Update the JSON file with your manual values
+            save_state(new_file_index, new_page_num, "manual_override", last_file_path=state.get('last_processed'))
+            st.sidebar.success("State updated!")
+            time.sleep(0.5) 
+            st.rerun()
 
-# 1. Scan Files
-pdf_files = get_all_pdf_files(input_folder)
-total_files = len(pdf_files)
+    # --- Main Area ---
 
-if total_files == 0:
-    st.error("No PDF files found in the directory.")
-    st.stop()
-
-# --- GUARD CLAUSE ---
-if state['current_file_index'] >= total_files:
-    st.warning(f"⚠️ Saved index ({state['current_file_index']}) is larger than total files ({total_files}). Resetting start position to 0.")
-    state['current_file_index'] = 0
-    state['current_page_num'] = 1
-    # Save the corrected state immediately
-    save_state(0, 1, "auto_reset")
-
-st.info(f"📂 Found {total_files} PDF files in `{input_folder}`")
-
-# 2. Status Display
-status_container = st.container(border=True)
-log_area = st.empty()
-
-# 3. Action Buttons
-col1, col2 = st.columns(2)
-with col1:
-    start_btn = st.button("🚀 Start / Resume Automation", type="primary", use_container_width=True)
-with col2:
-    stop_info = st.button("🛑 Stop (Finish Current Page)", use_container_width=True)
-
-# 4. Automation Loop
-if start_btn:
-    # 1. SETUP SHARED SESSION
-    session = requests.Session()
-    try:
-        with st.spinner("🔐 Authenticating with MediaWiki..."):
-            get_csrf_token(session)
-            st.success("Authenticated successfully!")
-    except Exception as e:
-        st.error(f"Authentication Failed: {e}")
+    if not input_folder or not os.path.exists(input_folder):
+        st.warning("Please provide a valid local folder path.")
         st.stop()
 
-    current_idx = state['current_file_index']
-    
-    # If resuming, we start from the file index in state
-    # If "Test Mode" is on, we only loop ONCE.
-    end_idx = current_idx + 1 if run_mode.startswith("Test") else total_files
+    # 1. Scan Files
+    pdf_files = get_all_pdf_files(input_folder)
+    total_files = len(pdf_files)
 
-    for i in range(current_idx, end_idx):
-        pdf_path = pdf_files[i]
-        
-        # 4a. Resolve Titles
-        wiki_title = get_wiki_title(pdf_path, input_folder, base_title)
-        
-        if not wiki_title:
-            st.error(f"Could not determine Wiki Title for {pdf_path}. Skipping.")
-            continue
+    if total_files == 0:
+        st.error("No PDF files found in the directory.")
+        st.stop()
 
-        short_name = os.path.basename(pdf_path)
-        
-        status_container.markdown(f"### 🔨 Processing File {i+1}/{total_files}: `{short_name}`")
-        status_container.caption(f"Target Wiki Page: `{wiki_title}`")
+    # --- GUARD CLAUSE ---
+    if state['current_file_index'] >= total_files:
+        st.warning(f"⚠️ Saved index ({state['current_file_index']}) is larger than total files ({total_files}). Resetting start position to 0.")
+        state['current_file_index'] = 0
+        state['current_page_num'] = 1
+        # Save the corrected state immediately
+        save_state(0, 1, "auto_reset")
 
-        # --- NEW: Local Working Copy Setup ---
-        wip_file_path = os.path.join(project_root, f"wip_{short_name}.txt")
+    st.info(f"📂 Found {total_files} PDF files in `{input_folder}`")
+
+    # 2. Status Display
+    status_container = st.container(border=True)
+    log_area = st.empty()
+
+    # 3. Action Buttons
+    col1, col2 = st.columns(2)
+    with col1:
+        start_btn = st.button("🚀 Start / Resume Automation", type="primary", use_container_width=True)
+    with col2:
+        stop_info = st.button("🛑 Stop (Finish Current Page)", use_container_width=True)
+
+    # 4. Automation Loop
+    if start_btn:
+        # 1. SETUP SHARED SESSION
+        session = requests.Session()
+        try:
+            with st.spinner("🔐 Authenticating with MediaWiki..."):
+                get_csrf_token(session)
+                st.success("Authenticated successfully!")
+        except Exception as e:
+            st.error(f"Authentication Failed: {e}")
+            st.stop()
+
+        current_idx = state['current_file_index']
         
-        if not os.path.exists(wip_file_path):
-            log_area.text(f"🌐 Fetching live text from {wiki_title} to start local editing...")
-            max_retries = 3
-            for attempt in range(max_retries):
-                current_wikitext, error = fetch_wikitext(wiki_title, session=session)
-                if not error:
-                    break
-                if attempt < max_retries - 1:
-                    time.sleep(30)
-            if error:
-                st.error(f"CRITICAL ERROR: Could not fetch '{wiki_title}'. Error: {error}")
-                st.stop()
+        # If resuming, we start from the file index in state
+        # If "Test Mode" is on, we only loop ONCE.
+        end_idx = current_idx + 1 if run_mode.startswith("Test") else total_files
+
+        for i in range(current_idx, end_idx):
+            pdf_path = pdf_files[i]
             
-            # Save the initial fetch to our local working file
-            with open(wip_file_path, "w", encoding="utf-8") as f:
-                f.write(current_wikitext)
-        else:
-            log_area.text(f"📂 Resuming from local working copy for {short_name}...")
-
-        # 4c. Parallel Batch Processing
-        doc = fitz.open(pdf_path)
-        total_pages = len(doc)
-        doc.close()
-
-        # --- Check state for starting page ---
-        if i == state['current_file_index']:
-            start_page = state['current_page_num']
-        else:
-            start_page = 1
-
-        pages_to_process = list(range(start_page, total_pages + 1))
-        
-        if not pages_to_process:
-            log_area.text(f"No pages left to process for {short_name}.")
-            continue
-
-        # Split into 5 roughly equal batches
-        num_batches = 5
-        batch_size = math.ceil(len(pages_to_process) / num_batches)
-        batches = [pages_to_process[j:j + batch_size] for j in range(0, len(pages_to_process), batch_size)]
-
-        st.write(f"🚀 Starting parallel processing: {len(pages_to_process)} pages across {len(batches)} batches.")
-
-        # --- UI SETUP FOR BATCH LOGGING ---
-        batch_placeholders = {}
-        
-        for i in range(len(batches)):
-            start_pg = batches[i][0]
-            end_pg = batches[i][-1]
+            # 4a. Resolve Titles
+            wiki_title = get_wiki_title(pdf_path, input_folder, base_title)
             
-            # Format cleanly if a batch happens to only have 1 page
-            page_label = f"pg {start_pg}" if start_pg == end_pg else f"pgs {start_pg}-{end_pg}"
+            if not wiki_title:
+                st.error(f"Could not determine Wiki Title for {pdf_path}. Skipping.")
+                continue
+
+            short_name = os.path.basename(pdf_path)
             
-            with st.expander(f"Batch {i+1} Status ({page_label})", expanded=True):
-                batch_placeholders[i] = st.empty()
+            status_container.markdown(f"### 🔨 Processing File {i+1}/{total_files}: `{short_name}`")
+            status_container.caption(f"Target Wiki Page: `{wiki_title}`")
 
-        # --- NEW: MULTIPROCESSING SETUP ---
-        from multiprocessing import Manager
-        
-        os.environ["PYTHONPATH"] = project_root
-        
-        with Manager() as manager:
-            # Create a managed dictionary to hold managed lists for each batch
-            shared_logs = manager.dict()
-            for i in range(len(batches)):
-                shared_logs[i] = manager.list()
-
-            with st.spinner(f"Processing {short_name} in {len(batches)} parallel batches..."):
-                # REMOVED the 'with' block so it doesn't trap the script on exit
-                executor = concurrent.futures.ProcessPoolExecutor(max_workers=num_batches)
-                futures = []
-                for batch_id, page_list in enumerate(batches):
-                    futures.append(
-                        executor.submit(
-                            process_pdf_batch, 
-                            batch_id, 
-                            page_list, 
-                            pdf_path, 
-                            ocr_strategy, 
-                            short_name, 
-                            project_root,
-                            shared_logs[batch_id]
-                        )
-                    )
-
-                # --- REAL-TIME POLLING LOOP ---
-                while True:
-                    all_done = True
-                    for batch_id, future in enumerate(futures):
-                        current_logs = list(shared_logs[batch_id])
-                        if current_logs:
-                            batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
-                        
-                        if not future.done():
-                            all_done = False
-                            
-                    if all_done:
+            # --- NEW: Local Working Copy Setup ---
+            wip_file_path = os.path.join(project_root, f"wip_{short_name}.txt")
+            
+            if not os.path.exists(wip_file_path):
+                log_area.text(f"🌐 Fetching live text from {wiki_title} to start local editing...")
+                max_retries = 3
+                for attempt in range(max_retries):
+                    current_wikitext, error = fetch_wikitext(wiki_title, session=session)
+                    if not error:
                         break
-                        
-                    time.sleep(1) 
-
-                # --- FORCE SHUTDOWN TO PREVENT THE UI HANG ---
-                executor.shutdown(wait=False, cancel_futures=True)
-                
-                # Ruthlessly kill the background workers so gRPC threads don't cause a RAM leak
-                import os, signal
-                for pid in executor._processes.keys():
-                    try:
-                        os.kill(pid, signal.SIGKILL)
-                    except OSError:
-                        pass
-
-        # 4d. Sequential Merge & Wiki Injection
-        log_area.text(f"🔄 Merging parallel batches and injecting wikitext for {short_name}...")
-        
-        # Load all temporary batch files into one dictionary
-        all_extracted_text = {}
-        for batch_id in range(len(batches)):
-            batch_file_path = os.path.join(project_root, f"temp_{short_name}_batch_{batch_id}.json")
-            if os.path.exists(batch_file_path):
-                with open(batch_file_path, "r", encoding="utf-8") as f:
-                    batch_data = json.load(f)
-                    for p_num_str, text in batch_data.items():
-                        all_extracted_text[int(p_num_str)] = text
-
-        # Sequentially inject each page into the live wikitext
-        with open(wip_file_path, "r", encoding="utf-8") as f:
-            current_wikitext = f.read()
-
-        save_state(i, pages_to_process[0], "merging", last_file_path=short_name)
-
-        for page_num in pages_to_process:
-            if stop_info:
-                st.warning("Stopping requested... finishing current document.")
-                break
-
-            final_text = all_extracted_text.get(page_num, "")
-            is_last_page = (page_num == total_pages)
-            
-            if not final_text:
-                log_area.text(f"⚠️ Page {page_num} was empty or failed. Skipping injection.")
-                # We still need to trigger the final upload if this skipped page was the last page
-                if is_last_page:
-                    pass # Let it fall through to the cleanup phase below
-                else:
-                    save_state(i, page_num + 1, "merging", last_file_path=short_name)
-                    continue 
-
-            if is_last_page and final_text:
-                final_text += "\n__NOTOC__"
-
-            # --- PAGE 1 SPECIAL HANDLING ---
-            if page_num == 1:
-                current_wikitext = re.sub(r'\{\{ocr.*?\}\}\n?', '', current_wikitext, flags=re.IGNORECASE)
-                
-                found_year = None
-                cat_match = re.search(r'\[\[Category:\s*(\d{4})\s*\]\]', current_wikitext, re.IGNORECASE)
-                if cat_match: found_year = cat_match.group(1)
-
-                if "{{header" not in current_wikitext:
-                    volume_found = None
-                    issue_identifier = None 
-                    
-                    if "/Volume_" in wiki_title and "/Issue_" in wiki_title:
-                        v_match = re.search(r'Volume_(\d+)', wiki_title)
-                        i_match = re.search(r'Issue_(\d+)', wiki_title)
-                        if v_match and i_match:
-                            volume_found = v_match.group(1)
-                            issue_identifier = i_match.group(1)
-                    else:
-                        i_match = re.search(r'Issue_([\d-]+)', wiki_title)
-                        if i_match:
-                            issue_identifier = i_match.group(1)
-                        else:
-                            fn_match = re.search(r'(\d+(?:-\d+)?)', short_name)
-                            if fn_match: issue_identifier = fn_match.group(1)
-
-                    if issue_identifier:
-                        header = generate_header(issue_identifier, year=found_year, volume=volume_found)
-                        access_match = re.match(r'^\s*<accesscontrol>.*?</accesscontrol>\s*', current_wikitext, re.DOTALL | re.IGNORECASE)
-                        if access_match:
-                            access_tag = access_match.group(0).strip()
-                            remaining_body = current_wikitext[access_match.end():].lstrip()
-                            current_wikitext = access_tag + "\n" + header + "\n" + remaining_body
-                        else:
-                            current_wikitext = header + "\n" + current_wikitext.lstrip()
-            else:
-                current_wikitext = update_header_ps_tag(current_wikitext)
-            
-            # Inject Content
-            final_wikitext, inject_error = inject_text_into_page(current_wikitext, page_num, final_text, short_name)
-            
-            if inject_error:
-                st.error(f"CRITICAL ERROR injecting {short_name} Page {page_num}: {inject_error}")
-                st.stop()
-                
-            current_wikitext = final_wikitext
-            
-            # Save local WIP step-by-step just in case
-            with open(wip_file_path, "w", encoding="utf-8") as f:
-                f.write(current_wikitext)
-
-            # --- SAFE FINAL CLEANUP & UPLOAD ---
-            if is_last_page:
-                log_area.text(f"🧹 Running final seam cleanup on {short_name}...")
-                cleaned_text = cleanup_page_seams(current_wikitext)
-                
-                log_area.text(f"🚀 Uploading completed issue to Bahai.works...")
-                summary = f"Automated Proofread: {short_name} (Full Issue)"
-                res = upload_to_bahaiworks(wiki_title, cleaned_text, summary, session=session)
-                
-                if res.get('edit', {}).get('result') != 'Success':
-                    st.error(f"UPLOAD FAILED: {res}")
+                    if attempt < max_retries - 1:
+                        time.sleep(30)
+                if error:
+                    st.error(f"CRITICAL ERROR: Could not fetch '{wiki_title}'. Error: {error}")
                     st.stop()
                 
-                if os.path.exists(wip_file_path):
-                    os.remove(wip_file_path)
+                # Save the initial fetch to our local working file
+                with open(wip_file_path, "w", encoding="utf-8") as f:
+                    f.write(current_wikitext)
+            else:
+                log_area.text(f"📂 Resuming from local working copy for {short_name}...")
+
+            # 4c. Parallel Batch Processing
+            doc = fitz.open(pdf_path)
+            total_pages = len(doc)
+            doc.close()
+
+            # --- Check state for starting page ---
+            if i == state['current_file_index']:
+                start_page = state['current_page_num']
+            else:
+                start_page = 1
+
+            pages_to_process = list(range(start_page, total_pages + 1))
+            
+            if not pages_to_process:
+                log_area.text(f"No pages left to process for {short_name}.")
+                continue
+
+            # Split into 5 roughly equal batches
+            num_batches = 5
+            batch_size = math.ceil(len(pages_to_process) / num_batches)
+            batches = [pages_to_process[j:j + batch_size] for j in range(0, len(pages_to_process), batch_size)]
+
+            st.write(f"🚀 Starting parallel processing: {len(pages_to_process)} pages across {len(batches)} batches.")
+
+            # --- UI SETUP FOR BATCH LOGGING ---
+            batch_placeholders = {}
+            
+            for i in range(len(batches)):
+                start_pg = batches[i][0]
+                end_pg = batches[i][-1]
                 
-                # Clean up temp batch files only after successful upload
-                for batch_id in range(len(batches)):
-                    batch_file_path = os.path.join(project_root, f"temp_{short_name}_batch_{batch_id}.json")
-                    if os.path.exists(batch_file_path):
-                        os.remove(batch_file_path)
+                # Format cleanly if a batch happens to only have 1 page
+                page_label = f"pg {start_pg}" if start_pg == end_pg else f"pgs {start_pg}-{end_pg}"
+                
+                with st.expander(f"Batch {i+1} Status ({page_label})", expanded=True):
+                    batch_placeholders[i] = st.empty()
 
-        # Update State (Success for entire file)
-        save_state(i + 1, 1, "running", last_file_path=short_name)
-        with status_container:
-            st.success(f"✅ Finished Document: {short_name}")
+            # --- NEW: MULTIPROCESSING SETUP ---
+            from multiprocessing import Manager
+            
+            os.environ["PYTHONPATH"] = project_root
+            
+            with Manager() as manager:
+                # Create a managed dictionary to hold managed lists for each batch
+                shared_logs = manager.dict()
+                for i in range(len(batches)):
+                    shared_logs[i] = manager.list()
 
-        if stop_info:
-            break
+                with st.spinner(f"Processing {short_name} in {len(batches)} parallel batches..."):
+                    # REMOVED the 'with' block so it doesn't trap the script on exit
+                    executor = concurrent.futures.ProcessPoolExecutor(max_workers=num_batches)
+                    futures = []
+                    for batch_id, page_list in enumerate(batches):
+                        futures.append(
+                            executor.submit(
+                                process_pdf_batch, 
+                                batch_id, 
+                                page_list, 
+                                pdf_path, 
+                                ocr_strategy, 
+                                short_name, 
+                                project_root,
+                                shared_logs[batch_id]
+                            )
+                        )
 
-    # End of Loop
-    st.success("🎉 Batch Processing Complete!")
-    save_state(end_idx, 1, "done", last_file_path=short_name)
+                    # --- REAL-TIME POLLING LOOP ---
+                    while True:
+                        all_done = True
+                        for batch_id, future in enumerate(futures):
+                            current_logs = list(shared_logs[batch_id])
+                            if current_logs:
+                                batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
+                            
+                            if not future.done():
+                                all_done = False
+                                
+                        if all_done:
+                            break
+                            
+                        time.sleep(1) 
+
+                    # --- FORCE SHUTDOWN TO PREVENT THE UI HANG ---
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    
+                    # Ruthlessly kill the background workers so gRPC threads don't cause a RAM leak
+                    import os, signal
+                    for pid in executor._processes.keys():
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                        except OSError:
+                            pass
+
+            # 4d. Sequential Merge & Wiki Injection
+            log_area.text(f"🔄 Merging parallel batches and injecting wikitext for {short_name}...")
+            
+            # Load all temporary batch files into one dictionary
+            all_extracted_text = {}
+            for batch_id in range(len(batches)):
+                batch_file_path = os.path.join(project_root, f"temp_{short_name}_batch_{batch_id}.json")
+                if os.path.exists(batch_file_path):
+                    with open(batch_file_path, "r", encoding="utf-8") as f:
+                        batch_data = json.load(f)
+                        for p_num_str, text in batch_data.items():
+                            all_extracted_text[int(p_num_str)] = text
+
+            # Sequentially inject each page into the live wikitext
+            with open(wip_file_path, "r", encoding="utf-8") as f:
+                current_wikitext = f.read()
+
+            save_state(i, pages_to_process[0], "merging", last_file_path=short_name)
+
+            for page_num in pages_to_process:
+                if stop_info:
+                    st.warning("Stopping requested... finishing current document.")
+                    break
+
+                final_text = all_extracted_text.get(page_num, "")
+                is_last_page = (page_num == total_pages)
+                
+                if not final_text:
+                    log_area.text(f"⚠️ Page {page_num} was empty or failed. Skipping injection.")
+                    # We still need to trigger the final upload if this skipped page was the last page
+                    if is_last_page:
+                        pass # Let it fall through to the cleanup phase below
+                    else:
+                        save_state(i, page_num + 1, "merging", last_file_path=short_name)
+                        continue 
+
+                if is_last_page and final_text:
+                    final_text += "\n__NOTOC__"
+
+                # --- PAGE 1 SPECIAL HANDLING ---
+                if page_num == 1:
+                    current_wikitext = re.sub(r'\{\{ocr.*?\}\}\n?', '', current_wikitext, flags=re.IGNORECASE)
+                    
+                    found_year = None
+                    cat_match = re.search(r'\[\[Category:\s*(\d{4})\s*\]\]', current_wikitext, re.IGNORECASE)
+                    if cat_match: found_year = cat_match.group(1)
+
+                    if "{{header" not in current_wikitext:
+                        volume_found = None
+                        issue_identifier = None 
+                        
+                        if "/Volume_" in wiki_title and "/Issue_" in wiki_title:
+                            v_match = re.search(r'Volume_(\d+)', wiki_title)
+                            i_match = re.search(r'Issue_(\d+)', wiki_title)
+                            if v_match and i_match:
+                                volume_found = v_match.group(1)
+                                issue_identifier = i_match.group(1)
+                        else:
+                            i_match = re.search(r'Issue_([\d-]+)', wiki_title)
+                            if i_match:
+                                issue_identifier = i_match.group(1)
+                            else:
+                                fn_match = re.search(r'(\d+(?:-\d+)?)', short_name)
+                                if fn_match: issue_identifier = fn_match.group(1)
+
+                        if issue_identifier:
+                            header = generate_header(issue_identifier, year=found_year, volume=volume_found)
+                            access_match = re.match(r'^\s*<accesscontrol>.*?</accesscontrol>\s*', current_wikitext, re.DOTALL | re.IGNORECASE)
+                            if access_match:
+                                access_tag = access_match.group(0).strip()
+                                remaining_body = current_wikitext[access_match.end():].lstrip()
+                                current_wikitext = access_tag + "\n" + header + "\n" + remaining_body
+                            else:
+                                current_wikitext = header + "\n" + current_wikitext.lstrip()
+                else:
+                    current_wikitext = update_header_ps_tag(current_wikitext)
+                
+                # Inject Content
+                final_wikitext, inject_error = inject_text_into_page(current_wikitext, page_num, final_text, short_name)
+                
+                if inject_error:
+                    st.error(f"CRITICAL ERROR injecting {short_name} Page {page_num}: {inject_error}")
+                    st.stop()
+                    
+                current_wikitext = final_wikitext
+                
+                # Save local WIP step-by-step just in case
+                with open(wip_file_path, "w", encoding="utf-8") as f:
+                    f.write(current_wikitext)
+
+                # --- SAFE FINAL CLEANUP & UPLOAD ---
+                if is_last_page:
+                    log_area.text(f"🧹 Running final seam cleanup on {short_name}...")
+                    cleaned_text = cleanup_page_seams(current_wikitext)
+                    
+                    log_area.text(f"🚀 Uploading completed issue to Bahai.works...")
+                    summary = f"Automated Proofread: {short_name} (Full Issue)"
+                    res = upload_to_bahaiworks(wiki_title, cleaned_text, summary, session=session)
+                    
+                    if res.get('edit', {}).get('result') != 'Success':
+                        st.error(f"UPLOAD FAILED: {res}")
+                        st.stop()
+                    
+                    if os.path.exists(wip_file_path):
+                        os.remove(wip_file_path)
+                    
+                    # Clean up temp batch files only after successful upload
+                    for batch_id in range(len(batches)):
+                        batch_file_path = os.path.join(project_root, f"temp_{short_name}_batch_{batch_id}.json")
+                        if os.path.exists(batch_file_path):
+                            os.remove(batch_file_path)
+
+            # Update State (Success for entire file)
+            save_state(i + 1, 1, "running", last_file_path=short_name)
+            with status_container:
+                st.success(f"✅ Finished Document: {short_name}")
+
+            if stop_info:
+                break
+
+        # End of Loop
+        st.success("🎉 Batch Processing Complete!")
+        save_state(end_idx, 1, "done", last_file_path=short_name)
