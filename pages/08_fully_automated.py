@@ -348,54 +348,54 @@ if __name__ == '__main__':
                     shared_logs[i] = manager.list()
 
                 with st.spinner(f"Processing {short_name} in {len(batches)} parallel batches..."):
-                        # Pass the silencer directly into the workers as they boot up
-                        executor = concurrent.futures.ProcessPoolExecutor(
-                            max_workers=num_batches,
-                            initializer=mute_streamlit_in_worker
+                    # Pass the silencer directly into the workers as they boot up
+                    executor = concurrent.futures.ProcessPoolExecutor(
+                        max_workers=num_batches,
+                        initializer=mute_streamlit_in_worker
+                    )
+
+                    # --- NEW: Submit tasks to the executor to generate futures ---
+                    futures = []
+                    for batch_id, batch_pages in enumerate(batches):
+                        future = executor.submit(
+                            process_pdf_batch,
+                            batch_id,          # batch_id
+                            batch_pages,       # page_list
+                            pdf_path,          # pdf_path
+                            ocr_strategy,      # ocr_strategy
+                            short_name,        # short_name
+                            project_root,      # project_root
+                            shared_logs[batch_id] # shared_log_list
                         )
+                        futures.append(future)
 
-                        # --- NEW: Submit tasks to the executor to generate futures ---
-                        futures = []
-                        for batch_id, batch_pages in enumerate(batches):
-                            future = executor.submit(
-                                process_pdf_batch,
-                                batch_id,          # batch_id
-                                batch_pages,       # page_list
-                                pdf_path,          # pdf_path
-                                ocr_strategy,      # ocr_strategy
-                                short_name,        # short_name
-                                project_root,      # project_root
-                                shared_logs[batch_id] # shared_log_list
-                            )
-                            futures.append(future)
-
-                        # --- REAL-TIME POLLING LOOP ---
-                        while True:
-                            all_done = True
-                            for batch_id, future in enumerate(futures):
-                                current_logs = list(shared_logs[batch_id])
-                                if current_logs:
-                                    batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
+                    # --- REAL-TIME POLLING LOOP ---
+                    while True:
+                        all_done = True
+                        for batch_id, future in enumerate(futures):
+                            current_logs = list(shared_logs[batch_id])
+                            if current_logs:
+                                batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
+                            
+                            if not future.done():
+                                all_done = False
                                 
-                                if not future.done():
-                                    all_done = False
-                                    
-                            if all_done:
-                                break
-                                
-                            time.sleep(1)
+                        if all_done:
+                            break
+                            
+                        time.sleep(1)
 
-                    # --- FORCE SHUTDOWN TO PREVENT THE UI HANG ---
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    
-                    # Ruthlessly kill the background workers so gRPC threads don't cause a RAM leak
-                    import os, signal
-                    if hasattr(executor, '_processes') and executor._processes is not None:
-                        for pid in executor._processes.keys():
-                            try:
-                                os.kill(pid, signal.SIGKILL)
-                            except OSError:
-                                pass
+                # --- FORCE SHUTDOWN TO PREVENT THE UI HANG ---
+                executor.shutdown(wait=False, cancel_futures=True)
+                
+                # Ruthlessly kill the background workers so gRPC threads don't cause a RAM leak
+                import os, signal
+                if hasattr(executor, '_processes') and executor._processes is not None:
+                    for pid in executor._processes.keys():
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                        except OSError:
+                            pass
 
             # 4d. Sequential Merge & Wiki Injection
             log_area.text(f"🔄 Merging parallel batches and injecting wikitext for {short_name}...")
