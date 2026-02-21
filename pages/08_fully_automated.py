@@ -201,7 +201,6 @@ def process_pdf_batch(batch_id, page_list, pdf_path, ocr_strategy, short_name, p
                 shared_log_list.append(f"🟢 Cooldown complete. Re-enabling Gemini.")
 
         else:
-            shared_log_list.append(f"✨ Gemini processing Page {page_num}...")
             final_text = proofread_with_formatting(img)
             is_gemini_error = "GEMINI_ERROR" in final_text or "Recitation" in final_text or "Copyright" in final_text
 
