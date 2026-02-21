@@ -317,14 +317,8 @@ if __name__ == '__main__':
 
             # Split into 5 roughly equal batches
             num_batches = 5
-            
-            # Round-robin dealing: deal pages like a deck of cards to average out the workload
-            batches = [[] for _ in range(num_batches)]
-            for idx, p_num in enumerate(pages_to_process):
-                batches[idx % num_batches].append(p_num)
-                
-            # Filter out empty batches just in case the document has fewer than 5 pages left
-            batches = [b for b in batches if b]
+            batch_size = math.ceil(len(pages_to_process) / num_batches)
+            batches = [pages_to_process[j:j + batch_size] for j in range(0, len(pages_to_process), batch_size)]
 
             st.write(f"🚀 Starting parallel processing: {len(pages_to_process)} pages across {len(batches)} batches.")
 
@@ -332,9 +326,11 @@ if __name__ == '__main__':
             batch_placeholders = {}
             
             for i in range(len(batches)):
-                # Since the pages are no longer sequential, we update the UI label to show the count and spread
-                num_pages = len(batches[i])
-                page_label = f"{num_pages} pages (e.g., {batches[i][0]}, {batches[i][1]}...)" if num_pages > 1 else f"1 page"
+                start_pg = batches[i][0]
+                end_pg = batches[i][-1]
+                
+                # Format cleanly if a batch happens to only have 1 page
+                page_label = f"pg {start_pg}" if start_pg == end_pg else f"pgs {start_pg}-{end_pg}"
                 
                 with st.expander(f"Batch {i+1} Status ({page_label})", expanded=True):
                     batch_placeholders[i] = st.empty()
