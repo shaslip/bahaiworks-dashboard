@@ -429,52 +429,62 @@ if start_btn:
 
         # --- UI SETUP FOR BATCH LOGGING ---
         batch_placeholders = {}
-        shared_logs = {i: [] for i in range(num_batches)}
         
         for i in range(num_batches):
             with st.expander(f"Batch {i+1} Status", expanded=True):
                 batch_placeholders[i] = st.empty()
 
-        with st.spinner(f"Processing {short_name} in {len(batches)} parallel batches..."):
-            with concurrent.futures.ThreadPoolExecutor(max_workers=num_batches) as executor:
-                futures = []
-                for batch_id, page_list in enumerate(batches):
-                    futures.append(
-                        executor.submit(
-                            process_pdf_batch, 
-                            batch_id, 
-                            page_list, 
-                            pdf_path, 
-                            ocr_strategy, 
-                            short_name, 
-                            project_root,
-                            shared_logs[batch_id]  # Pass the shared list for real-time updates
+        # --- NEW: MULTIPROCESSING SETUP ---
+        from multiprocessing import Manager
+        
+        with Manager() as manager:
+            # Create a managed dictionary to hold managed lists for each batch
+            shared_logs = manager.dict()
+            for i in range(num_batches):
+                shared_logs[i] = manager.list()
+
+            with st.spinner(f"Processing {short_name} in {len(batches)} parallel batches..."):
+                # Swapped to ProcessPoolExecutor to bypass the Python GIL
+                with concurrent.futures.ProcessPoolExecutor(max_workers=num_batches) as executor:
+                    futures = []
+                    for batch_id, page_list in enumerate(batches):
+                        futures.append(
+                            executor.submit(
+                                process_pdf_batch, 
+                                batch_id, 
+                                page_list, 
+                                pdf_path, 
+                                ocr_strategy, 
+                                short_name, 
+                                project_root,
+                                shared_logs[batch_id]  # Pass the managed list proxy
+                            )
                         )
-                    )
 
-                # --- REAL-TIME POLLING LOOP ---
-                while True:
-                    all_done = True
-                    for batch_id, future in enumerate(futures):
-                        # Update the text inside the expander
-                        if shared_logs[batch_id]:
-                            batch_placeholders[batch_id].text("\n".join(shared_logs[batch_id]))
-                        
-                        if not future.done():
-                            all_done = False
+                    # --- REAL-TIME POLLING LOOP ---
+                    while True:
+                        all_done = True
+                        for batch_id, future in enumerate(futures):
+                            # Extract the managed list back into a standard list to read it safely
+                            current_logs = list(shared_logs[batch_id])
+                            if current_logs:
+                                batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
                             
-                    if all_done:
-                        break
-                        
-                    time.sleep(1) # Refresh UI every 1 second
+                            if not future.done():
+                                all_done = False
+                                
+                        if all_done:
+                            break
+                            
+                        time.sleep(1) # Refresh UI every 1 second
 
-                # Catch any thread exceptions
-                for future in futures:
-                    try:
-                        future.result()
-                    except Exception as e:
-                        st.error(f"🚨 Thread Exception: {str(e)}")
-                        st.stop()
+                    # Catch any process exceptions
+                    for future in futures:
+                        try:
+                            future.result()
+                        except Exception as e:
+                            st.error(f"🚨 Process Exception: {str(e)}")
+                            st.stop()
 
         # 4d. Sequential Merge & Wiki Injection
         log_area.text(f"🔄 Merging parallel batches and injecting wikitext for {short_name}...")
