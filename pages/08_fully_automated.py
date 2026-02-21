@@ -4,9 +4,6 @@ import sys
 import json
 import re
 import time
-import fitz  # PyMuPDF
-from PIL import Image
-import io
 import requests
 import concurrent.futures
 import math
