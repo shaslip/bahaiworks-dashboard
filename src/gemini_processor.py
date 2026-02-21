@@ -192,7 +192,7 @@ def transcribe_with_document_ai(image):
         request = documentai.ProcessRequest(name=name, raw_document=raw_document)
 
         # Process the document
-        result = client.process_document(request=request)
+        result = client.process_document(request=request, timeout=120)
         
         # Return the raw text
         return result.document.text
@@ -227,7 +227,10 @@ def reformat_raw_text(raw_text):
         # We append the text to the prompt
         full_prompt = prompt + f"\n{raw_text}\nRAW TEXT END"
         
-        response = model.generate_content(full_prompt)
+        response = model.generate_content(
+            full_prompt,
+            request_options={"timeout": 120}
+        )
         
         # If Gemini *still* refuses (unlikely but possible on text), return raw text as fail-safe
         if response.prompt_feedback.block_reason:
@@ -252,7 +255,10 @@ def proofread_page(image):
     5. Return ONLY the text. No markdown formatting blocks (```), no conversational filler.
     """
     try:
-        response = model.generate_content([prompt, image])
+        response = model.generate_content(
+            [prompt, image],
+            request_options={"timeout": 120}
+        )
         return response.text.strip()
     except Exception as e:
         return f"Error: {e}"
@@ -294,7 +300,10 @@ def proofread_with_formatting(image):
     for attempt in range(max_retries + 1):
         try:
             # Generate content
-            response = model.generate_content([prompt, image])
+            response = model.generate_content(
+                [prompt, image],
+                request_options={"timeout": 120}
+            )
             
             # Check for Recitation/Copyright block (finish_reason 4)
             # We check this BEFORE accessing .text to avoid the crash
