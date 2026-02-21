@@ -146,31 +146,6 @@ def get_page_image_data(pdf_path, page_num_1_based):
     doc.close()
     return img
 
-# ==============================================================================
-# 2. STATE MANAGEMENT
-# ==============================================================================
-
-def load_state():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, 'r') as f:
-            return json.load(f)
-    return {"current_file_index": 0, "current_page_num": 1, "status": "idle", "last_processed": None}
-
-def save_state(file_index, page_num, status, last_file_path=None):
-    state = {
-        "current_file_index": file_index,
-        "current_page_num": page_num,
-        "status": status,
-        "last_processed": last_file_path
-    }
-    with open(STATE_FILE, 'w') as f:
-        json.dump(state, f, indent=4)
-
-def reset_state():
-    if os.path.exists(STATE_FILE):
-        os.remove(STATE_FILE)
-    return {"current_file_index": 0, "current_page_num": 1, "status": "idle", "last_processed": None}
-
 def process_pdf_batch(batch_id, page_list, pdf_path, ocr_strategy, short_name, project_root):
     gemini_consecutive_failures = 0
     docai_cooldown_pages = 0
@@ -271,6 +246,31 @@ def process_pdf_batch(batch_id, page_list, pdf_path, ocr_strategy, short_name, p
             json.dump(batch_results, f)
 
     return logs
+
+# ==============================================================================
+# 2. STATE MANAGEMENT
+# ==============================================================================
+
+def load_state():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, 'r') as f:
+            return json.load(f)
+    return {"current_file_index": 0, "current_page_num": 1, "status": "idle", "last_processed": None}
+
+def save_state(file_index, page_num, status, last_file_path=None):
+    state = {
+        "current_file_index": file_index,
+        "current_page_num": page_num,
+        "status": status,
+        "last_processed": last_file_path
+    }
+    with open(STATE_FILE, 'w') as f:
+        json.dump(state, f, indent=4)
+
+def reset_state():
+    if os.path.exists(STATE_FILE):
+        os.remove(STATE_FILE)
+    return {"current_file_index": 0, "current_page_num": 1, "status": "idle", "last_processed": None}
 
 # ==============================================================================
 # 3. UI & MAIN LOGIC
