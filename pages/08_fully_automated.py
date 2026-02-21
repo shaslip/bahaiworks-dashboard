@@ -146,7 +146,7 @@ def get_page_image_data(pdf_path, page_num_1_based):
     doc.close()
     return img
 
-def process_pdf_batch(batch_id, page_list, pdf_path, ocr_strategy, short_name, project_root):
+def process_pdf_batch(batch_id, page_list, pdf_path, ocr_strategy, short_name, project_root, shared_log_list):
     gemini_consecutive_failures = 0
     docai_cooldown_pages = 0
     permanent_docai = False
@@ -154,7 +154,6 @@ def process_pdf_batch(batch_id, page_list, pdf_path, ocr_strategy, short_name, p
     batch_file_path = os.path.join(project_root, f"temp_{short_name}_batch_{batch_id}.json")
     batch_results = {}
     
-    # Load existing progress if script was previously interrupted
     if os.path.exists(batch_file_path):
         try:
             with open(batch_file_path, "r", encoding="utf-8") as f:
@@ -163,17 +162,14 @@ def process_pdf_batch(batch_id, page_list, pdf_path, ocr_strategy, short_name, p
         except json.JSONDecodeError:
             pass
 
-    logs = []
-    
     for page_num in page_list:
-        # Skip if already successfully processed in a previous interrupted run
         if page_num in batch_results and batch_results[page_num] and "ERROR" not in batch_results[page_num]:
-            logs.append(f"Batch {batch_id}: ⏩ Skipping Page {page_num} (Already processed)")
+            shared_log_list.append(f"⏩ Skipping Page {page_num} (Already processed)")
             continue
 
-        logs.append(f"Batch {batch_id}: 📄 Reading Page {page_num}...")
+        # (Removed the "📄 Reading Page..." log here entirely)
+
         img = get_page_image_data(pdf_path, page_num)
-        
         if img is None:
             continue
             
@@ -182,30 +178,30 @@ def process_pdf_batch(batch_id, page_list, pdf_path, ocr_strategy, short_name, p
 
         if force_docai:
             mode_label = "Permanent DocAI" if permanent_docai else f"Cooldown DocAI ({docai_cooldown_pages} left)"
-            logs.append(f"Batch {batch_id}: 🤖 [{mode_label}] Processing Page {page_num}...")
+            shared_log_list.append(f"🤖 [{mode_label}] Processing Page {page_num}...")
             
             raw_ocr = transcribe_with_document_ai(img)
             if "DOCAI_ERROR" in raw_ocr:
-                logs.append(f"Batch {batch_id}: ⚠️ DocAI Failed. Attempting Gemini Rescue...")
+                shared_log_list.append(f"⚠️ DocAI Failed. Attempting Gemini Rescue...")
                 final_text = proofread_with_formatting(img)
             else:
                 final_text = reformat_raw_text(raw_ocr)
                 if "FORMATTING_ERROR" in final_text:
-                    logs.append(f"Batch {batch_id}: ⚠️ DocAI Formatting Failed. Attempting Gemini Rescue...")
+                    shared_log_list.append(f"⚠️ DocAI Formatting Failed. Attempting Gemini Rescue...")
                     rescue_text = proofread_with_formatting(img)
                     if "GEMINI_ERROR" in rescue_text or "Recitation" in rescue_text:
-                        logs.append(f"Batch {batch_id}: ⚠️ Rescue also failed. Saving RAW OCR text.")
+                        shared_log_list.append(f"⚠️ Rescue also failed. Saving RAW OCR text.")
                         final_text = raw_ocr + "\n\n"
                     else:
                         final_text = rescue_text
 
-            if docai_cooldown_pages > 0:
-                docai_cooldown_pages -= 1
-                if docai_cooldown_pages == 0:
-                    logs.append(f"Batch {batch_id}: 🟢 Cooldown complete. Re-enabling Gemini.")
+        if docai_cooldown_pages > 0:
+            docai_cooldown_pages -= 1
+            if docai_cooldown_pages == 0:
+                shared_log_list.append(f"🟢 Cooldown complete. Re-enabling Gemini.")
 
         else:
-            logs.append(f"Batch {batch_id}: ✨ Gemini processing Page {page_num}...")
+            shared_log_list.append(f"✨ Gemini processing Page {page_num}...")
             final_text = proofread_with_formatting(img)
             is_gemini_error = "GEMINI_ERROR" in final_text or "Recitation" in final_text or "Copyright" in final_text
 
@@ -213,12 +209,12 @@ def process_pdf_batch(batch_id, page_list, pdf_path, ocr_strategy, short_name, p
                 gemini_consecutive_failures += 1
                 if gemini_consecutive_failures == 2:
                     docai_cooldown_pages = 5
-                    logs.append(f"Batch {batch_id}: ⚠️ 2 Consecutive Failures. Switching to DocAI for next 5 pages.")
+                    shared_log_list.append(f"⚠️ 2 Consecutive Failures. Switching to DocAI for next 5 pages.")
                 elif gemini_consecutive_failures >= 3:
                     permanent_docai = True
-                    logs.append(f"Batch {batch_id}: ⛔ 3rd Strike. Switching to DocAI for remainder of batch.")
+                    shared_log_list.append(f"⛔ 3rd Strike. Switching to DocAI for remainder of batch.")
                 else:
-                    logs.append(f"Batch {batch_id}: ⚠️ Gemini Error ({gemini_consecutive_failures}/2). Retrying with DocAI...")
+                    shared_log_list.append(f"⚠️ Gemini Error ({gemini_consecutive_failures}/2). Retrying with DocAI...")
 
                 raw_ocr = transcribe_with_document_ai(img)
                 if "DOCAI_ERROR" in raw_ocr:
@@ -226,7 +222,7 @@ def process_pdf_batch(batch_id, page_list, pdf_path, ocr_strategy, short_name, p
                 else:
                     formatted_text = reformat_raw_text(raw_ocr)
                     if "FORMATTING_ERROR" in formatted_text:
-                        logs.append(f"Batch {batch_id}: ⚠️ Formatting failed. Saving RAW OCR text.")
+                        shared_log_list.append(f"⚠️ Formatting failed. Saving RAW OCR text.")
                         final_text = raw_ocr + "\n\n"
                     else:
                         final_text = formatted_text
@@ -236,16 +232,17 @@ def process_pdf_batch(batch_id, page_list, pdf_path, ocr_strategy, short_name, p
         system_error_flags = ["GEMINI_ERROR", "DOCAI_ERROR", "FORMATTING_ERROR"]
         if not final_text or any(flag in final_text for flag in system_error_flags):
             error_summary = final_text if final_text else "Empty Response"
-            logs.append(f"Batch {batch_id}: ❌ SKIPPING Page {page_num} due to failure: {error_summary}")
+            shared_log_list.append(f"❌ SKIPPING Page {page_num} due to failure: {error_summary}")
             batch_results[page_num] = "" 
         else:
             batch_results[page_num] = final_text
+            # --- NEW: Re-added the local save confirmation ---
+            shared_log_list.append(f"✅ Saved Page {page_num} locally")
 
-        # --- NEW: Save incrementally after every page ---
         with open(batch_file_path, "w", encoding="utf-8") as f:
             json.dump(batch_results, f)
 
-    return logs
+    return True
 
 # ==============================================================================
 # 2. STATE MANAGEMENT
@@ -428,7 +425,15 @@ if start_btn:
         batch_size = math.ceil(len(pages_to_process) / num_batches)
         batches = [pages_to_process[j:j + batch_size] for j in range(0, len(pages_to_process), batch_size)]
 
-        log_area.text(f"🚀 Starting parallel processing: {len(pages_to_process)} pages across {len(batches)} batches.")
+        st.write(f"🚀 Starting parallel processing: {len(pages_to_process)} pages across {len(batches)} batches.")
+
+        # --- UI SETUP FOR BATCH LOGGING ---
+        batch_placeholders = {}
+        shared_logs = {i: [] for i in range(num_batches)}
+        
+        for i in range(num_batches):
+            with st.expander(f"Batch {i+1} Status", expanded=True):
+                batch_placeholders[i] = st.empty()
 
         with st.spinner(f"Processing {short_name} in {len(batches)} parallel batches..."):
             with concurrent.futures.ThreadPoolExecutor(max_workers=num_batches) as executor:
@@ -442,18 +447,31 @@ if start_btn:
                             pdf_path, 
                             ocr_strategy, 
                             short_name, 
-                            project_root
+                            project_root,
+                            shared_logs[batch_id]  # Pass the shared list for real-time updates
                         )
                     )
 
-                # Accumulate logs to show in the UI
-                all_logs = []
-                for future in concurrent.futures.as_completed(futures):
+                # --- REAL-TIME POLLING LOOP ---
+                while True:
+                    all_done = True
+                    for batch_id, future in enumerate(futures):
+                        # Update the text inside the expander
+                        if shared_logs[batch_id]:
+                            batch_placeholders[batch_id].text("\n".join(shared_logs[batch_id]))
+                        
+                        if not future.done():
+                            all_done = False
+                            
+                    if all_done:
+                        break
+                        
+                    time.sleep(1) # Refresh UI every 1 second
+
+                # Catch any thread exceptions
+                for future in futures:
                     try:
-                        batch_logs = future.result()
-                        all_logs.extend(batch_logs)
-                        # Show the most recent 15 lines in the UI log area
-                        log_area.text("\n".join(all_logs[-15:]))
+                        future.result()
                     except Exception as e:
                         st.error(f"🚨 Thread Exception: {str(e)}")
                         st.stop()
