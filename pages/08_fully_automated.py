@@ -383,22 +383,11 @@ if start_btn:
         
         status_container.markdown(f"### 🔨 Processing File {i+1}/{total_files}: `{short_name}`")
         status_container.caption(f"Target Wiki Page: `{wiki_title}`")
-        
-        # 4b. Resume Page Logic
-        if i == state['current_file_index']:
-            start_page = state['current_page_num']
-        else:
-            start_page = 1
-            
-        # --- NEW: Per-Book Failure State ---
-        gemini_consecutive_failures = 0
-        docai_cooldown_pages = 0
-        permanent_docai = False
 
         # --- NEW: Local Working Copy Setup ---
         wip_file_path = os.path.join(project_root, f"wip_{short_name}.txt")
         
-        if start_page == 1 or not os.path.exists(wip_file_path):
+        if not os.path.exists(wip_file_path):
             log_area.text(f"🌐 Fetching live text from {wiki_title} to start local editing...")
             max_retries = 3
             for attempt in range(max_retries):
@@ -431,7 +420,7 @@ if start_btn:
         # Split into 5 roughly equal batches
         num_batches = 5
         batch_size = math.ceil(len(pages_to_process) / num_batches)
-        batches = [pages_to_process[i:i + batch_size] for i in range(0, len(pages_to_process), batch_size)]
+        batches = [pages_to_process[j:j + batch_size] for j in range(0, len(pages_to_process), batch_size)]
 
         log_area.text(f"🚀 Starting parallel processing: {len(pages_to_process)} pages across {len(batches)} batches.")
 
@@ -480,6 +469,10 @@ if start_btn:
             current_wikitext = f.read()
 
         for page_num in pages_to_process:
+            if stop_info:
+                st.warning("Stopping requested... finishing current document.")
+                break
+
             final_text = all_extracted_text.get(page_num, "")
             if not final_text:
                 continue # Skip failed/empty pages
