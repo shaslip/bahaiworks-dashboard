@@ -4,6 +4,8 @@ import io
 import fitz  # PyMuPDF
 from PIL import Image
 from src.gemini_processor import proofread_with_formatting, transcribe_with_document_ai, reformat_raw_text
+import logging
+logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").setLevel(logging.ERROR)
 
 def get_page_image_data(pdf_path, page_num_1_based):
     doc = fitz.open(pdf_path)
