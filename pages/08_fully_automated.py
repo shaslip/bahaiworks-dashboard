@@ -337,6 +337,8 @@ if start_btn:
         # --- NEW: MULTIPROCESSING SETUP ---
         from multiprocessing import Manager
         
+        os.environ["PYTHONPATH"] = project_root
+        
         with Manager() as manager:
             # Create a managed dictionary to hold managed lists for each batch
             shared_logs = manager.dict()
