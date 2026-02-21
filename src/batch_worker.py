@@ -1,65 +1,9 @@
 import os
-import logging
-
-# 1. Aggressively monkey-patch the core logger to intercept the exact string BEFORE any imports
-_original_warning = logging.Logger.warning
-
-def _silenced_warning(self, msg, *args, **kwargs):
-    if isinstance(msg, str) and "missing ScriptRunContext" in msg:
-        return
-    _original_warning(self, msg, *args, **kwargs)
-
-logging.Logger.warning = _silenced_warning
-
-# 2. Force Streamlit error mode via environment variables
-os.environ["STREAMLIT_LOGGER_LEVEL"] = "error"
-os.environ["STREAMLIT_SERVER_HEADLESS"] = "true"
-
-# 3. Leave a dummy function so we don't break the executor call in 08_fully_automated.py
-def mute_streamlit_in_worker():
-    pass
-
-# 4. Now safely import Streamlit and the rest of your modules
-import streamlit as st
 import json
 import io
-import time
-import gc
 import fitz  # PyMuPDF
 from PIL import Image
 from src.gemini_processor import proofread_with_formatting, transcribe_with_document_ai, reformat_raw_text
-
-def mute_streamlit_in_worker():
-    """Runs the exact second a background process wakes up to permanently kill the Streamlit warning"""
-    import logging
-    import os
-    
-    os.environ["STREAMLIT_LOGGER_LEVEL"] = "error"
-    
-    class MuteScriptRunContext(logging.Filter):
-        def filter(self, record):
-            # Drop the log record completely if it contains the annoying string
-            return "missing ScriptRunContext" not in record.getMessage()
-
-    # 1. Target the specific Streamlit loggers
-    loggers_to_mute = [
-        "streamlit.runtime.scriptrunner_utils.script_run_context",
-        "streamlit",
-        "streamlit.runtime"
-    ]
-    
-    for logger_name in loggers_to_mute:
-        logger = logging.getLogger(logger_name)
-        logger.setLevel(logging.ERROR)
-        logger.disabled = True
-        logger.propagate = False
-        logger.addFilter(MuteScriptRunContext())
-
-    # 2. Add the filter to the root logger and all its active handlers to catch leaks
-    root_logger = logging.getLogger()
-    root_logger.addFilter(MuteScriptRunContext())
-    for handler in root_logger.handlers:
-        handler.addFilter(MuteScriptRunContext())
 
 def get_page_image_data(pdf_path, page_num_1_based):
     doc = fitz.open(pdf_path)
