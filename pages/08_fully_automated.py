@@ -429,8 +429,14 @@ if start_btn:
         # --- UI SETUP FOR BATCH LOGGING ---
         batch_placeholders = {}
         
-        for i in range(num_batches):
-            with st.expander(f"Batch {i+1} Status", expanded=True):
+        for i in range(len(batches)):
+            start_pg = batches[i][0]
+            end_pg = batches[i][-1]
+            
+            # Format cleanly if a batch happens to only have 1 page
+            page_label = f"pg {start_pg}" if start_pg == end_pg else f"pgs {start_pg}-{end_pg}"
+            
+            with st.expander(f"Batch {i+1} Status ({page_label})", expanded=True):
                 batch_placeholders[i] = st.empty()
 
         # --- NEW: MULTIPROCESSING SETUP ---
@@ -439,7 +445,7 @@ if start_btn:
         with Manager() as manager:
             # Create a managed dictionary to hold managed lists for each batch
             shared_logs = manager.dict()
-            for i in range(num_batches):
+            for i in range(len(batches)):
                 shared_logs[i] = manager.list()
 
             with st.spinner(f"Processing {short_name} in {len(batches)} parallel batches..."):
