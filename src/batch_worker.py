@@ -1,16 +1,26 @@
 import os
 import logging
 
-# 1. Force Streamlit's internal config to only log true errors in the background
+# 1. Aggressively monkey-patch the core logger to intercept the exact string BEFORE any imports
+_original_warning = logging.Logger.warning
+
+def _silenced_warning(self, msg, *args, **kwargs):
+    if isinstance(msg, str) and "missing ScriptRunContext" in msg:
+        return
+    _original_warning(self, msg, *args, **kwargs)
+
+logging.Logger.warning = _silenced_warning
+
+# 2. Force Streamlit error mode via environment variables
 os.environ["STREAMLIT_LOGGER_LEVEL"] = "error"
+os.environ["STREAMLIT_SERVER_HEADLESS"] = "true"
 
-# 2. Import Streamlit FIRST so it builds its default loggers, then permanently disable the noisy one
+# 3. Leave a dummy function so we don't break the executor call in 08_fully_automated.py
+def mute_streamlit_in_worker():
+    pass
+
+# 4. Now safely import Streamlit and the rest of your modules
 import streamlit as st
-noisy_logger = logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context")
-noisy_logger.setLevel(logging.ERROR)
-noisy_logger.disabled = True
-
-# 3. Now do the rest of the imports safely
 import json
 import io
 import time
