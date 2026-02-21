@@ -337,6 +337,7 @@ if __name__ == '__main__':
 
             # --- NEW: MULTIPROCESSING SETUP ---
             from multiprocessing import Manager
+            from src.batch_worker import mute_streamlit_in_worker
             
             os.environ["PYTHONPATH"] = project_root
             
@@ -347,22 +348,11 @@ if __name__ == '__main__':
                     shared_logs[i] = manager.list()
 
                 with st.spinner(f"Processing {short_name} in {len(batches)} parallel batches..."):
-                    # REMOVED the 'with' block so it doesn't trap the script on exit
-                    executor = concurrent.futures.ProcessPoolExecutor(max_workers=num_batches)
-                    futures = []
-                    for batch_id, page_list in enumerate(batches):
-                        futures.append(
-                            executor.submit(
-                                process_pdf_batch, 
-                                batch_id, 
-                                page_list, 
-                                pdf_path, 
-                                ocr_strategy, 
-                                short_name, 
-                                project_root,
-                                shared_logs[batch_id]
-                            )
-                        )
+                    # Pass the silencer directly into the workers as they boot up
+                    executor = concurrent.futures.ProcessPoolExecutor(
+                        max_workers=num_batches,
+                        initializer=mute_streamlit_in_worker
+                    )
 
                     # --- REAL-TIME POLLING LOOP ---
                     while True:
