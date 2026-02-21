@@ -23,11 +23,33 @@ def mute_streamlit_in_worker():
     """Runs the exact second a background process wakes up to permanently kill the Streamlit warning"""
     import logging
     import os
+    
     os.environ["STREAMLIT_LOGGER_LEVEL"] = "error"
-    logger = logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context")
-    logger.setLevel(logging.ERROR)
-    logger.disabled = True
-    logger.propagate = False
+    
+    class MuteScriptRunContext(logging.Filter):
+        def filter(self, record):
+            # Drop the log record completely if it contains the annoying string
+            return "missing ScriptRunContext" not in record.getMessage()
+
+    # 1. Target the specific Streamlit loggers
+    loggers_to_mute = [
+        "streamlit.runtime.scriptrunner_utils.script_run_context",
+        "streamlit",
+        "streamlit.runtime"
+    ]
+    
+    for logger_name in loggers_to_mute:
+        logger = logging.getLogger(logger_name)
+        logger.setLevel(logging.ERROR)
+        logger.disabled = True
+        logger.propagate = False
+        logger.addFilter(MuteScriptRunContext())
+
+    # 2. Add the filter to the root logger and all its active handlers to catch leaks
+    root_logger = logging.getLogger()
+    root_logger.addFilter(MuteScriptRunContext())
+    for handler in root_logger.handlers:
+        handler.addFilter(MuteScriptRunContext())
 
 def get_page_image_data(pdf_path, page_num_1_based):
     doc = fitz.open(pdf_path)
