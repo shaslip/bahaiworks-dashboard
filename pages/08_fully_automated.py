@@ -47,6 +47,31 @@ st.set_page_config(page_title="Fully Automated Proofreader", page_icon="🤖", l
 # ==============================================================================
 # 1. HELPER FUNCTIONS
 # ==============================================================================
+def find_and_fix_tag_by_page_num(wikitext, pdf_filename, pdf_page_num, correct_label):
+    """
+    Robustly finds {{page|...|file=...|page=X}} regardless of the existing label.
+    Replaces the ENTIRE tag block (including any trailing {{ocr}}) with the correct clean tag.
+    """
+    tags = list(re.finditer(r'(\{\{page\|(.*?)\}\})(\s*\{\{ocr\}\})?', wikitext, re.IGNORECASE | re.DOTALL))
+    
+    for match in tags:
+        full_tag_block = match.group(0) 
+        params = match.group(2)         
+        
+        file_check = re.search(r'file\s*=\s*([^|}\n]+)', params, re.IGNORECASE)
+        page_check = re.search(r'page\s*=\s*(\d+)', params, re.IGNORECASE)
+        
+        if file_check and page_check:
+            found_filename = file_check.group(1).strip()
+            
+            if int(page_check.group(1)) == pdf_page_num and \
+               os.path.basename(found_filename).lower() == os.path.basename(pdf_filename).lower():
+                
+                new_tag = f"{{{{page|{correct_label}|file={pdf_filename}|page={pdf_page_num}}}}}"
+                return wikitext.replace(full_tag_block, new_tag)
+                
+    return wikitext
+
 def int_to_roman(num):
     """Converts an integer to a lowercase roman numeral (1 -> i, 5 -> v)."""
     val = [1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1]
@@ -521,6 +546,9 @@ if __name__ == '__main__':
                 
                 # Calculate correct label (Roman numeral vs integer)
                 correct_label = calculate_page_label(page_num, anchor_pdf_page)
+                
+                # Force update the label in the wikitext (e.g. change -1 to i) so the injector can find it
+                current_wikitext = find_and_fix_tag_by_page_num(current_wikitext, short_name, page_num, correct_label)
                 
                 # Inject Content (Use correct_label instead of page_num)
                 final_wikitext, inject_error = inject_text_into_page(current_wikitext, correct_label, final_text, short_name)
