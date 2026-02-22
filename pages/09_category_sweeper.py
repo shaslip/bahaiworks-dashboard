@@ -17,7 +17,7 @@ if project_root not in sys.path:
 
 # --- Imports ---
 from src.gemini_processor import proofread_with_formatting, transcribe_with_document_ai, reformat_raw_text
-from src.mediawiki_uploader import upload_to_bahaiworks, API_URL, fetch_wikitext, inject_text_into_page
+from src.mediawiki_uploader import upload_to_bahaiworks, API_URL, fetch_wikitext, inject_text_into_page, get_csrf_token
 
 # --- Configuration ---
 if 'GEMINI_API_KEY' not in os.environ:
@@ -146,7 +146,7 @@ def find_anchor_offset(wikitext):
                 return pdf_page - book_page + 1
     return None
 
-def fetch_parent_author(subpage_title):
+def fetch_parent_author(subpage_title, session=None):
     """
     If title is 'Book/Text', fetches 'Book' and extracts the author from its header.
     Returns the author string or empty string if not found.
@@ -159,7 +159,7 @@ def fetch_parent_author(subpage_title):
     
     # 2. Fetch Parent Text
     # We use the existing fetch_wikitext function imported from src.mediawiki_uploader
-    parent_text, err = fetch_wikitext(parent_title)
+    parent_text, err = fetch_wikitext(parent_title, session=session)
     
     if err or not parent_text:
         return ""
@@ -202,7 +202,7 @@ def get_processing_bounds(wikitext, total_pdf_pages, is_text_subpage):
         
     return 1, total_pdf_pages
 
-def process_header(wikitext, wiki_title):
+def process_header(wikitext, wiki_title, session=None):
     """
     Updates existing header OR creates a new one.
     - Enforces {{ps|1}} in 'notes'.
@@ -219,7 +219,7 @@ def process_header(wikitext, wiki_title):
     def get_author_fill():
         nonlocal parent_author
         if parent_author is None:
-            parent_author = fetch_parent_author(wiki_title)
+            parent_author = fetch_parent_author(wiki_title, session=session)
         return parent_author
 
     # 1. Check for Existing Header
@@ -353,7 +353,7 @@ def build_pdf_index(root_folder):
                 
     return pdf_index
 
-def get_category_members(category_name, limit=5000):
+def get_category_members(category_name, limit=5000, session=None):
     """
     Fetches pages belonging to a specific category.
     Handles pagination to get all members.
@@ -368,10 +368,11 @@ def get_category_members(category_name, limit=5000):
     }
     
     headers = {"User-Agent": "BahaiWorksSweeper/1.0"}
+    req_obj = session if session else requests
     
     while True:
         try:
-            response = requests.get(API_URL, params=params, headers=headers, timeout=30)
+            response = req_obj.get(API_URL, params=params, headers=headers, timeout=30)
             data = response.json()
             
             if 'error' in data:
@@ -480,7 +481,7 @@ if not os.path.exists(input_folder):
 tab_auto, tab_manual = st.tabs(["🤖 Auto Category Sweeper", "🎯 Manual Target"])
 
 # ==============================================================================
-# TAB 1: AUTO SWEEPER (Exact Original Code)
+# TAB 1: AUTO SWEEPER
 # ==============================================================================
 with tab_auto:
     # Layout
@@ -494,6 +495,16 @@ with tab_auto:
     log_area = st.empty()
 
     if start_btn:
+        # 1. SETUP SHARED SESSION
+        session = requests.Session()
+        try:
+            with st.spinner("🔐 Authenticating with MediaWiki..."):
+                get_csrf_token(session)
+                st.success("Authenticated successfully!")
+        except Exception as e:
+            st.error(f"Authentication Failed: {e}")
+            st.stop()
+
         # --- UI Setup ---
         progress_bar = st.progress(0)
         current_status_line = st.empty() # For transient updates (like exclusions)
@@ -505,7 +516,7 @@ with tab_auto:
             
         # 2. Fetch Category
         with st.spinner("Fetching Wiki Category Members..."):
-            members = get_category_members("Category:Pages_needing_proofreading")
+            members = get_category_members("Category:Pages_needing_proofreading", session=session)
             st.info(f"Found {len(members)} pages needing proofreading.")
 
         # 3. Resume Logic
@@ -528,13 +539,13 @@ with tab_auto:
             log_small(f"📚 ({i+1}/{len(members)}) Processing: <b>{wiki_title}</b>", color="#444")
 
             # A. Fetch Wikitext
-            current_text, err = fetch_wikitext(wiki_title)
+            current_text, err = fetch_wikitext(wiki_title, session=session)
             if err:
                 log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Error fetching text: {err}", color="red")
                 continue
 
             # B. Header Processing
-            current_text = process_header(current_text, wiki_title)
+            current_text = process_header(current_text, wiki_title, session=session)
 
             # C. Identify PDF Filename
             file_match = re.search(r'file\s*=\s*([^|}\n]+)', current_text, re.IGNORECASE)
@@ -603,7 +614,7 @@ with tab_auto:
 
                 # 2. TAG FIXING
                 if pdf_page > start_pdf_page:
-                    current_text, _ = fetch_wikitext(wiki_title)
+                    current_text, _ = fetch_wikitext(wiki_title, session=session)
                 
                 current_text = find_and_fix_tag_by_page_num(current_text, pdf_filename, pdf_page, correct_label)
 
@@ -693,7 +704,7 @@ with tab_auto:
                         new_wikitext += "\n__NOTOC__"
                     
                     # Upload
-                    res = upload_to_bahaiworks(wiki_title, new_wikitext, f"Bot: Proofread {correct_label} (PDF {pdf_page})")
+                    res = upload_to_bahaiworks(wiki_title, new_wikitext, f"Bot: Proofread {correct_label} (PDF {pdf_page})", session=session)
                     
                     if res.get('edit', {}).get('result') == 'Success':
                         save_state(i, pdf_page + 1, wiki_title)
@@ -736,12 +747,22 @@ with tab_manual:
     with c1:
         manual_title = st.text_input("Wiki Page Title", placeholder="e.g. Star of the West/Volume 1/Issue 1")
     with c2:
-        manual_range = st.text_input("Book Page Range (e.g. 46-63 or frontmatter)", placeholder="e.g. 46-63, 70")
+        manual_range = st.text_input("Book Page Range (e.g. 46-63)", placeholder="e.g. 46-63, 70")
     
     start_manual_btn = st.button("🎯 Process Range", type="primary")
     manual_stop_btn = st.button("🛑 Stop Manual Process")
 
     if start_manual_btn and manual_title and manual_range:
+        # 1. SETUP SHARED SESSION
+        session = requests.Session()
+        try:
+            with st.spinner("🔐 Authenticating with MediaWiki..."):
+                get_csrf_token(session)
+                st.success("Authenticated successfully!")
+        except Exception as e:
+            st.error(f"Authentication Failed: {e}")
+            st.stop()
+
         is_frontmatter = manual_range.strip().lower() == "frontmatter"
         
         if not is_frontmatter:
@@ -758,7 +779,7 @@ with tab_manual:
             
         # 2. Fetch Text & Prep
         log_small(f"🔍 Fetching: <b>{manual_title}</b>", color="#444")
-        current_text, err = fetch_wikitext(manual_title)
+        current_text, err = fetch_wikitext(manual_title, session=session)
         
         if err:
             st.error(f"Could not fetch {manual_title}: {err}")
@@ -827,7 +848,7 @@ with tab_manual:
                 continue
 
             # B. Refresh Text & Fix Tags
-            if idx > 0: current_text, _ = fetch_wikitext(manual_title)
+            if idx > 0: current_text, _ = fetch_wikitext(manual_title, session=session)
             current_text = find_and_fix_tag_by_page_num(current_text, pdf_filename, pdf_page, correct_label)
             
             # C. AI Processing
@@ -904,7 +925,7 @@ with tab_manual:
                         new_wikitext += "\n__NOTOC__"
                         log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;🧹 Appended __NOTOC__ (End of Document)", color="blue")
 
-                res = upload_to_bahaiworks(manual_title, new_wikitext, f"Bot: Manual Proofread {correct_label}")
+                res = upload_to_bahaiworks(manual_title, new_wikitext, f"Bot: Manual Proofread {correct_label}", session=session)
                 
                 if res.get('edit', {}).get('result') == 'Success':
                     log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;✅ Uploaded Page {correct_label}", color="green")
