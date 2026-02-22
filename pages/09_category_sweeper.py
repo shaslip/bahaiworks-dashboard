@@ -742,11 +742,14 @@ with tab_manual:
     manual_stop_btn = st.button("🛑 Stop Manual Process")
 
     if start_manual_btn and manual_title and manual_range:
-        target_labels = parse_page_range(manual_range)
-        if not target_labels:
-            st.error("Invalid page range.")
-            st.stop()
-            
+        is_frontmatter = manual_range.strip().lower() == "frontmatter"
+        
+        if not is_frontmatter:
+            target_labels = parse_page_range(manual_range)
+            if not target_labels:
+                st.error("Invalid page range.")
+                st.stop()
+                
         current_status_line = st.empty()
         
         # 1. Index PDFs
@@ -790,6 +793,16 @@ with tab_manual:
         
         log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;📏 Document ends at PDF Page: {scope_end}", color="#444")
 
+        # Route target pages based on input
+        if is_frontmatter:
+            if anchor_pdf_page <= 1:
+                st.error("No frontmatter detected (Anchor is PDF page 1).")
+                st.stop()
+            pdf_targets = list(range(1, anchor_pdf_page))
+        else:
+            # Convert book pages to PDF pages for a unified loop
+            pdf_targets = [bp + anchor_pdf_page - 1 for bp in target_labels]
+
         # Variables for Error Handling
         gemini_consecutive_failures = 0
         docai_cooldown_pages = 0
@@ -798,14 +811,12 @@ with tab_manual:
         progress_bar = st.progress(0)
         
         # --- LOOP ---
-        for idx, book_page_num in enumerate(target_labels):
+        for idx, pdf_page in enumerate(pdf_targets):
             if manual_stop_btn: 
                 st.warning("Stopping...")
                 break
             
-            # Calculate PDF Page
-            pdf_page = book_page_num + anchor_pdf_page - 1
-            correct_label = str(book_page_num)
+            correct_label = calculate_page_label(pdf_page, anchor_pdf_page)
             
             current_status_line.text(f"Processing: Book Page {correct_label}")
             
@@ -904,7 +915,7 @@ with tab_manual:
             except Exception as e:
                 log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Exception: {e}", color="red")
             
-            progress_bar.progress((idx + 1) / len(target_labels))
+            progress_bar.progress((idx + 1) / len(pdf_targets))
             time.sleep(1)
             
         st.success("Manual Range Complete!")
