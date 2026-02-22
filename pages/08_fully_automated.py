@@ -110,12 +110,12 @@ def find_and_fix_tag_by_page_num(wikitext, pdf_filename, pdf_page_num, correct_l
     return wikitext
 
 def get_all_pdf_files(root_folder):
-    """Recursively finds all PDF files, ignoring those marked as '-old', and sorts them naturally."""
+    """Recursively finds all PDF files, ignoring those marked as '-old', 'scan', and sorts them naturally."""
     pdf_files = []
     for dirpath, _, filenames in os.walk(root_folder):
         for f in filenames:
-            # Check if it is a PDF and NOT an 'old' version
-            if f.lower().endswith(".pdf") and "-old" not in f.lower():
+            # Check if it is a PDF, NOT an 'old' version, and does NOT start with 'scan'
+            if f.lower().endswith(".pdf") and "-old" not in f.lower() and not f.lower().startswith("scan"):
                 full_path = os.path.join(dirpath, f)
                 pdf_files.append(full_path)
     
