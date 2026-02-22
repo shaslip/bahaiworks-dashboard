@@ -271,32 +271,58 @@ if __name__ == '__main__':
                 st.error(f"Could not determine Wiki Title for {pdf_path}. Skipping.")
                 continue
 
+            # --- NEW: Fetch wikitext FIRST to extract the expected PDF filename ---
+            log_area.text(f"🌐 Fetching live text from {wiki_title} to determine the correct PDF...")
+            max_retries = 3
+            for attempt in range(max_retries):
+                current_wikitext, error = fetch_wikitext(wiki_title, session=session)
+                if not error:
+                    break
+                if attempt < max_retries - 1:
+                    time.sleep(30)
+                    
+            if error:
+                st.error(f"CRITICAL ERROR: Could not fetch '{wiki_title}'. Error: {error}")
+                st.stop()
+
+            # Find the actual PDF filename used on the wiki page
+            file_match = re.search(r'\{\{page\|.*?file\s*=\s*([^|{}]+?\.pdf)', current_wikitext, re.IGNORECASE)
+            
+            if file_match:
+                expected_pdf = file_match.group(1).strip()
+                # Normalize spaces and underscores to match accurately
+                normalized_expected = expected_pdf.replace(" ", "_")
+                
+                matched_local_path = None
+                for p in pdf_files:
+                    if os.path.basename(p).replace(" ", "_") == normalized_expected:
+                        matched_local_path = p
+                        break
+                        
+                if matched_local_path:
+                    pdf_path = matched_local_path
+                else:
+                    st.error(f"Could not find local PDF matching '{expected_pdf}' for {wiki_title}. Skipping.")
+                    continue
+            else:
+                log_area.text(f"⚠️ Could not find 'file=' parameter in {wiki_title}. Proceeding with default matched file.")
+
             short_name = os.path.basename(pdf_path)
             
             status_container.markdown(f"### 🔨 Processing File {i+1}/{total_files}: `{short_name}`")
             status_container.caption(f"Target Wiki Page: `{wiki_title}`")
 
-            # --- NEW: Local Working Copy Setup ---
+            # --- Local Working Copy Setup ---
             wip_file_path = os.path.join(project_root, f"wip_{short_name}.txt")
             
             if not os.path.exists(wip_file_path):
-                log_area.text(f"🌐 Fetching live text from {wiki_title} to start local editing...")
-                max_retries = 3
-                for attempt in range(max_retries):
-                    current_wikitext, error = fetch_wikitext(wiki_title, session=session)
-                    if not error:
-                        break
-                    if attempt < max_retries - 1:
-                        time.sleep(30)
-                if error:
-                    st.error(f"CRITICAL ERROR: Could not fetch '{wiki_title}'. Error: {error}")
-                    st.stop()
-                
                 # Save the initial fetch to our local working file
                 with open(wip_file_path, "w", encoding="utf-8") as f:
                     f.write(current_wikitext)
             else:
                 log_area.text(f"📂 Resuming from local working copy for {short_name}...")
+                with open(wip_file_path, "r", encoding="utf-8") as f:
+                    current_wikitext = f.read()
 
             # 4c. Parallel Batch Processing
             doc = fitz.open(pdf_path)
