@@ -52,25 +52,56 @@ def find_and_fix_tag_by_page_num(wikitext, pdf_filename, pdf_page_num, correct_l
     Robustly finds {{page|...|file=...|page=X}} regardless of the existing label.
     Replaces the ENTIRE tag block (including any trailing {{ocr}}) with the correct clean tag.
     """
+    # 1. Find all {{page}} tags in the text
+    # Group 1: The full {{page}} tag
+    # Group 2: The inner content of {{page}}
+    # Group 3: The optional {{ocr}} tag following it
     tags = list(re.finditer(r'(\{\{page\|(.*?)\}\})(\s*\{\{ocr\}\})?', wikitext, re.IGNORECASE | re.DOTALL))
     
     for match in tags:
-        full_tag_block = match.group(0) 
-        params = match.group(2)         
+        full_tag_block = match.group(0) # Includes {{ocr}} if present
+        params = match.group(2)         # Content inside {{page|...}}
         
+        # Check if this tag belongs to our file and page
         file_check = re.search(r'file\s*=\s*([^|}\n]+)', params, re.IGNORECASE)
         page_check = re.search(r'page\s*=\s*(\d+)', params, re.IGNORECASE)
         
         if file_check and page_check:
             found_filename = file_check.group(1).strip()
             
+            # Simple filename match (ignore case/paths)
             if int(page_check.group(1)) == pdf_page_num and \
                os.path.basename(found_filename).lower() == os.path.basename(pdf_filename).lower():
                 
+                # Found it. Create clean new tag with correct label.
+                # Note: We do NOT append {{ocr}}. 
+                # This effectively deletes {{ocr}} from the page if it was in 'full_tag_block'.
                 new_tag = f"{{{{page|{correct_label}|file={pdf_filename}|page={pdf_page_num}}}}}"
-                return wikitext.replace(full_tag_block, new_tag)
+                
+                # Replace the entire old block with the new tag
+                wikitext = wikitext.replace(full_tag_block, new_tag)
+                
+                st.toast(f"Fixed Tag: PDF {pdf_page_num} -> {correct_label}", icon="🔧")
+                return wikitext
                 
     return wikitext
+
+def calculate_page_label(pdf_page_num, anchor_pdf_page):
+    """
+    Determines if a page should be Roman (i, ii) or Arabic (1, 2).
+    anchor_pdf_page: The PDF page number that corresponds to Book Page 1.
+    """
+    if anchor_pdf_page is None:
+        # No anchor found, assume PDF page 1 = Book page 1
+        return str(pdf_page_num)
+        
+    if pdf_page_num < anchor_pdf_page:
+        # Front matter (before Page 1) -> Roman Numerals based on PDF page
+        return int_to_roman(pdf_page_num)
+    else:
+        # Main content -> Offset Calculation
+        # Ex: PDF 10 is Page 1. So PDF 10 - 10 + 1 = 1.
+        return str(pdf_page_num - anchor_pdf_page + 1)
 
 def int_to_roman(num):
     """Converts an integer to a lowercase roman numeral (1 -> i, 5 -> v)."""
