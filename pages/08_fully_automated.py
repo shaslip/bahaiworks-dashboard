@@ -147,10 +147,10 @@ def get_wiki_title(local_path, root_folder, base_wiki_title):
         return f"{target_base}/Issue_{issue_identifier}/Text"
 
     # --- STRATEGY 1: Explicit Filename (Vol 1 No 1) ---
-    vol_issue_match = re.search(r'(?:Vol|Volume)[\W_]*(\d+)[\W_]*(?:No|Issue|Number)[\W_]*(\d+)', filename, re.IGNORECASE)
+    vol_issue_match = re.search(r'(?:Vol|Volume)[\W_]*(\d+)[\W_]*(?:No|Issue|Number)[\W_]*(\d+(?:-\d+)?)', filename, re.IGNORECASE)
     if vol_issue_match:
         vol = int(vol_issue_match.group(1))
-        issue = int(vol_issue_match.group(2))
+        issue = vol_issue_match.group(2)
         return f"{base_wiki_title}/Volume_{vol}/Issue_{issue}/Text"
 
     # --- STRATEGY 2: Folder Structure (Volume 1/...) ---
