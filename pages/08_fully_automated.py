@@ -558,6 +558,9 @@ if __name__ == '__main__':
                     log_area.text(f"🧹 Running final seam cleanup on {short_name}...")
                     cleaned_text = cleanup_page_seams(current_wikitext)
                     
+                    # Convert short youtu.be links to full youtube.com URLs to bypass spam filter
+                    cleaned_text = re.sub(r'https?://(?:www\.)?youtu\.be/([a-zA-Z0-9_-]+)', r'https://www.youtube.com/watch?v=\1', cleaned_text)
+                    
                     log_area.text(f"🚀 Uploading completed issue to Bahai.works...")
                     summary = f"Automated Proofread: {short_name} (Full Issue)"
                     res = upload_to_bahaiworks(wiki_title, cleaned_text, summary, session=session)
