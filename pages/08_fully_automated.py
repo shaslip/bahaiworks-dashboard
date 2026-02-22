@@ -47,6 +47,67 @@ st.set_page_config(page_title="Fully Automated Proofreader", page_icon="🤖", l
 # ==============================================================================
 # 1. HELPER FUNCTIONS
 # ==============================================================================
+def int_to_roman(num):
+    """Converts an integer to a lowercase roman numeral (1 -> i, 5 -> v)."""
+    val = [1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1]
+    syb = ["m", "cm", "d", "cd", "c", "xc", "l", "xl", "x", "ix", "v", "iv", "i"]
+    roman_num = ''
+    i = 0
+    num = abs(num)
+    if num == 0: return "i" 
+
+    while num > 0:
+        for _ in range(num // val[i]):
+            roman_num += syb[i]
+            num -= val[i]
+        i += 1
+    return roman_num
+
+def calculate_page_label(pdf_page_num, anchor_pdf_page):
+    """Determines if a page should be Roman (i, ii) or Arabic (1, 2)."""
+    if anchor_pdf_page is None:
+        return str(pdf_page_num)
+        
+    if pdf_page_num < anchor_pdf_page:
+        return int_to_roman(pdf_page_num)
+    else:
+        return str(pdf_page_num - anchor_pdf_page + 1)
+
+def find_anchor_offset(wikitext):
+    """Scans for any {{page|N|...|page=X}} where N is an integer to establish the offset."""
+    tags = re.finditer(r'\{\{page\|(.*?)\}\}', wikitext, re.IGNORECASE | re.DOTALL)
+    
+    for match in tags:
+        params = match.group(1)
+        label = params.split('|')[0].strip()
+        
+        if label.isdigit():
+            page_match = re.search(r'page\s*=\s*(\d+)', params, re.IGNORECASE)
+            if page_match:
+                book_page = int(label)
+                pdf_page = int(page_match.group(1))
+                return pdf_page - book_page + 1
+    return None
+
+def find_and_fix_tag_by_page_num(wikitext, pdf_filename, pdf_page_num, correct_label):
+    """Robustly finds {{page|...|file=...|page=X}} regardless of the existing label."""
+    tags = list(re.finditer(r'(\{\{page\|(.*?)\}\})(\s*\{\{ocr\}\})?', wikitext, re.IGNORECASE | re.DOTALL))
+    
+    for match in tags:
+        full_tag_block = match.group(0)
+        params = match.group(2)
+        
+        file_check = re.search(r'file\s*=\s*([^|}\n]+)', params, re.IGNORECASE)
+        page_check = re.search(r'page\s*=\s*(\d+)', params, re.IGNORECASE)
+        
+        if file_check and page_check:
+            found_filename = file_check.group(1).strip()
+            if int(page_check.group(1)) == pdf_page_num and \
+               os.path.basename(found_filename).lower() == os.path.basename(pdf_filename).lower():
+                new_tag = f"{{{{page|{correct_label}|file={pdf_filename}|page={pdf_page_num}}}}}"
+                wikitext = wikitext.replace(full_tag_block, new_tag)
+                return wikitext
+    return wikitext
 
 def get_all_pdf_files(root_folder):
     """Recursively finds all PDF files, ignoring those marked as '-old', and sorts them naturally."""
@@ -412,6 +473,9 @@ if __name__ == '__main__':
             with open(wip_file_path, "r", encoding="utf-8") as f:
                 current_wikitext = f.read()
 
+            # --- Calculate the anchor offset for Roman Numeral logic ---
+            anchor_pdf_page = find_anchor_offset(current_wikitext)
+
             save_state(i, pages_to_process[0], "merging", last_file_path=short_name)
 
             for page_num in pages_to_process:
@@ -422,6 +486,10 @@ if __name__ == '__main__':
                 final_text = all_extracted_text.get(page_num, "")
                 is_last_page = (page_num == total_pages)
                 
+                # --- Calculate label and fix tags before injection ---
+                correct_label = calculate_page_label(page_num, anchor_pdf_page)
+                current_wikitext = find_and_fix_tag_by_page_num(current_wikitext, short_name, page_num, correct_label)
+
                 if not final_text:
                     log_area.text(f"⚠️ Page {page_num} was empty or failed. Skipping injection.")
                     # We still need to trigger the final upload if this skipped page was the last page
@@ -473,7 +541,7 @@ if __name__ == '__main__':
                     current_wikitext = update_header_ps_tag(current_wikitext)
                 
                 # Inject Content
-                final_wikitext, inject_error = inject_text_into_page(current_wikitext, page_num, final_text, short_name)
+                final_wikitext, inject_error = inject_text_into_page(current_wikitext, correct_label, final_text, short_name)
                 
                 if inject_error:
                     st.error(f"CRITICAL ERROR injecting {short_name} Page {page_num}: {inject_error}")
