@@ -47,6 +47,46 @@ st.set_page_config(page_title="Fully Automated Proofreader", page_icon="🤖", l
 # ==============================================================================
 # 1. HELPER FUNCTIONS
 # ==============================================================================
+def int_to_roman(num):
+    """Converts an integer to a lowercase roman numeral (1 -> i, 5 -> v)."""
+    val = [1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1]
+    syb = ["m", "cm", "d", "cd", "c", "xc", "l", "xl", "x", "ix", "v", "iv", "i"]
+    roman_num = ''
+    i = 0
+    num = abs(num)
+    if num == 0: return "i" 
+    while num > 0:
+        for _ in range(num // val[i]):
+            roman_num += syb[i]
+            num -= val[i]
+        i += 1
+    return roman_num
+
+def find_anchor_offset(wikitext):
+    """
+    Scans for any {{page|N|...|page=X}} where N is an integer to establish the offset.
+    Returns X (the PDF page number) corresponding to Book Page 1.
+    """
+    tags = re.finditer(r'\{\{page\|(.*?)\}\}', wikitext, re.IGNORECASE | re.DOTALL)
+    for match in tags:
+        params = match.group(1)
+        label = params.split('|')[0].strip()
+        if label.isdigit():
+            page_match = re.search(r'page\s*=\s*(\d+)', params, re.IGNORECASE)
+            if page_match:
+                book_page = int(label)
+                pdf_page = int(page_match.group(1))
+                return pdf_page - book_page + 1
+    return None
+
+def calculate_page_label(pdf_page_num, anchor_pdf_page):
+    """Determines if a page should be Roman (i, ii) or Arabic (1, 2)."""
+    if anchor_pdf_page is None:
+        return str(pdf_page_num)
+    if pdf_page_num < anchor_pdf_page:
+        return int_to_roman(pdf_page_num)
+    else:
+        return str(pdf_page_num - anchor_pdf_page + 1)
 
 def get_all_pdf_files(root_folder):
     """Recursively finds all PDF files, ignoring those marked as '-old', and sorts them naturally."""
@@ -86,10 +126,11 @@ def get_wiki_title(local_path, root_folder, base_wiki_title):
         return f"{target_base}/Issue_{issue_identifier}/Text"
 
     # --- STRATEGY 1: Explicit Filename (Vol 1 No 1) ---
-    vol_issue_match = re.search(r'(?:Vol|Volume)[\W_]*(\d+)[\W_]*(?:No|Issue|Number)[\W_]*(\d+)', filename, re.IGNORECASE)
+    vol_issue_match = re.search(r'(?:Vol|Volume)[\W_]*(\d+)[\W_]*(?:No|Issue|Number)[\W_]*(\d+(?:-\d+)?)', filename, re.IGNORECASE)
+    
     if vol_issue_match:
         vol = int(vol_issue_match.group(1))
-        issue = int(vol_issue_match.group(2))
+        issue = vol_issue_match.group(2)
         return f"{base_wiki_title}/Volume_{vol}/Issue_{issue}/Text"
 
     # --- STRATEGY 2: Folder Structure (Volume 1/...) ---
@@ -297,6 +338,12 @@ if __name__ == '__main__':
                     f.write(current_wikitext)
             else:
                 log_area.text(f"📂 Resuming from local working copy for {short_name}...")
+                # Read the wip file so we have current_wikitext for the anchor calculation
+                with open(wip_file_path, "r", encoding="utf-8") as f:
+                    current_wikitext = f.read()
+
+            # NEW: Calculate the anchor offset before processing pages
+            anchor_pdf_page = find_anchor_offset(current_wikitext)
 
             # 4c. Parallel Batch Processing
             doc = fitz.open(pdf_path)
@@ -472,11 +519,14 @@ if __name__ == '__main__':
                 else:
                     current_wikitext = update_header_ps_tag(current_wikitext)
                 
-                # Inject Content
-                final_wikitext, inject_error = inject_text_into_page(current_wikitext, page_num, final_text, short_name)
+                # Calculate correct label (Roman numeral vs integer)
+                correct_label = calculate_page_label(page_num, anchor_pdf_page)
+                
+                # Inject Content (Use correct_label instead of page_num)
+                final_wikitext, inject_error = inject_text_into_page(current_wikitext, correct_label, final_text, short_name)
                 
                 if inject_error:
-                    st.error(f"CRITICAL ERROR injecting {short_name} Page {page_num}: {inject_error}")
+                    st.error(f"CRITICAL ERROR injecting {short_name} Page {correct_label}: {inject_error}")
                     st.stop()
                     
                 current_wikitext = final_wikitext
