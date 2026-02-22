@@ -576,12 +576,16 @@ if __name__ == '__main__':
                     current_wikitext = update_header_ps_tag(current_wikitext)
                 
                 # Calculate correct label (Roman numeral vs integer)
-                correct_label = calculate_page_label(page_num, anchor_pdf_page)
+                correct_label = calculate_page_label(page_num, anchor_pdf_page=1) 
                 
-                # Force update the label in the wikitext (e.g. change -1 to i) so the injector can find it
-                current_wikitext = find_and_fix_tag_by_page_num(current_wikitext, short_name, page_num, correct_label)
-                
-                # Inject Content (Use correct_label instead of page_num)
+                current_wikitext = find_and_fix_tag_by_page_num(
+                    current_wikitext, 
+                    short_name, 
+                    page_num, 
+                    correct_label
+                )
+
+                # Inject Content
                 final_wikitext, inject_error = inject_text_into_page(current_wikitext, correct_label, final_text, short_name)
                 
                 if inject_error:
