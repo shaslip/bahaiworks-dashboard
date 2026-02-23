@@ -213,13 +213,15 @@ def get_wiki_title(local_path, root_folder, base_wiki_title):
 def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, 'r') as f:
-            return json.load(f)
-    return {"current_file_index": 0, "current_page_num": 1, "status": "idle", "last_processed": None}
+            state = json.load(f)
+            if 'current_page_num' in state:
+                del state['current_page_num']
+            return state
+    return {"current_file_index": 0, "status": "idle", "last_processed": None}
 
-def save_state(file_index, page_num, status, last_file_path=None):
+def save_state(file_index, status, last_file_path=None):
     state = {
         "current_file_index": file_index,
-        "current_page_num": page_num,
         "status": status,
         "last_processed": last_file_path
     }
@@ -229,7 +231,7 @@ def save_state(file_index, page_num, status, last_file_path=None):
 def reset_state():
     if os.path.exists(STATE_FILE):
         os.remove(STATE_FILE)
-    return {"current_file_index": 0, "current_page_num": 1, "status": "idle", "last_processed": None}
+    return {"current_file_index": 0, "status": "idle", "last_processed": None}
 
 # ==============================================================================
 # 3. UI & MAIN LOGIC
@@ -262,17 +264,16 @@ if __name__ == '__main__':
         st.rerun()
 
     state_display = st.sidebar.empty()
-    state_display.markdown(f"**Current State:**\n- File Index: `{state['current_file_index']}`\n- Page: `{state['current_page_num']}`")
+    state_display.markdown(f"**Current State:**\n- File Index: `{state['current_file_index']}`")
 
     # --- Manual State Modification ---
     with st.sidebar.expander("🔧 Modify Position"):
         # Input fields initialized with current state values
         new_file_index = st.number_input("File Index (0-based)", min_value=0, value=state['current_file_index'])
-        new_page_num = st.number_input("Page Number", min_value=1, value=state['current_page_num'])
         
         if st.button("Update State"):
             # Update the JSON file with your manual values
-            save_state(new_file_index, new_page_num, "manual_override", last_file_path=state.get('last_processed'))
+            save_state(new_file_index, "manual_override", last_file_path=state.get('last_processed'))
             st.sidebar.success("State updated!")
             time.sleep(0.5) 
             st.rerun()
@@ -295,9 +296,8 @@ if __name__ == '__main__':
     if state['current_file_index'] >= total_files:
         st.warning(f"⚠️ Saved index ({state['current_file_index']}) is larger than total files ({total_files}). Resetting start position to 0.")
         state['current_file_index'] = 0
-        state['current_page_num'] = 1
         # Save the corrected state immediately
-        save_state(0, 1, "auto_reset")
+        save_state(0, "auto_reset")
 
     st.info(f"📂 Found {total_files} PDF files in `{input_folder}`")
 
@@ -347,12 +347,6 @@ if __name__ == '__main__':
 
             # --- NEW: Local Working Copy Setup ---
             wip_file_path = os.path.join(project_root, f"wip_{short_name}.txt")
-            
-            # Determine starting page before saving state
-            if i == state['current_file_index']:
-                start_page = state['current_page_num']
-            else:
-                start_page = 1
 
             if not os.path.exists(wip_file_path):
                 log_area.text(f"🌐 Fetching live text from {wiki_title} to start local editing...")
@@ -371,9 +365,8 @@ if __name__ == '__main__':
                 with open(wip_file_path, "w", encoding="utf-8") as f:
                     f.write(current_wikitext)
 
-                # Changed page_num to start_page here
-                save_state(i, start_page, "merging", last_file_path=short_name)
-                state_display.markdown(f"**Current State:**\n- File Index: `{i}`\n- Page: `{start_page}`")
+                save_state(i, "merging", last_file_path=short_name)
+                state_display.markdown(f"**Current State:**\n- File Index: `{i}`")
 
             else:
                 log_area.text(f"📂 Resuming from local working copy for {short_name}...")
@@ -383,7 +376,8 @@ if __name__ == '__main__':
             total_pages = len(doc)
             doc.close()
 
-            pages_to_process = list(range(start_page, total_pages + 1))
+            # Process all pages; batch_worker will skip the ones that are already done
+            pages_to_process = list(range(1, total_pages + 1))
             
             if not pages_to_process:
                 log_area.text(f"No pages left to process for {short_name}.")
@@ -489,7 +483,7 @@ if __name__ == '__main__':
             # --- Calculate the anchor offset for Roman Numeral logic ---
             anchor_pdf_page = find_anchor_offset(current_wikitext)
 
-            save_state(i, pages_to_process[0], "merging", last_file_path=short_name)
+            save_state(i, "merging", last_file_path=short_name)
 
             for page_num in pages_to_process:
                 if stop_info:
@@ -509,8 +503,8 @@ if __name__ == '__main__':
                     if is_last_page:
                         pass # Let it fall through to the cleanup phase below
                     else:
-                        save_state(i, page_num + 1, "merging", last_file_path=short_name)
-                        continue 
+                        save_state(i, "merging", last_file_path=short_name)
+                        continue
 
                 if is_last_page and final_text:
                     final_text += "\n__NOTOC__"
@@ -592,8 +586,8 @@ if __name__ == '__main__':
                             os.remove(batch_file_path)
 
             # Update State (Success for entire file)
-            save_state(i + 1, 1, "running", last_file_path=short_name)
-            state_display.markdown(f"**Current State:**\n- File Index: `{i + 1}`\n- Page: `1`")
+            save_state(i + 1, "running", last_file_path=short_name)
+            state_display.markdown(f"**Current State:**\n- File Index: `{i + 1}`")
             with status_container:
                 st.success(f"✅ Finished Document: {short_name}")
 
@@ -602,6 +596,6 @@ if __name__ == '__main__':
 
         # End of Loop
         st.success("🎉 Batch Processing Complete!")
-        save_state(end_idx, 1, "done", last_file_path=short_name)
+        save_state(end_idx, "done", last_file_path=short_name)
         if 'short_name' in locals():
-            state_display.markdown(f"**Current State:**\n- File Index: `{end_idx}`\n- Page: `1`")
+            state_display.markdown(f"**Current State:**\n- File Index: `{end_idx}`")
