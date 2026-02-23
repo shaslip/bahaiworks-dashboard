@@ -348,6 +348,12 @@ if __name__ == '__main__':
             # --- NEW: Local Working Copy Setup ---
             wip_file_path = os.path.join(project_root, f"wip_{short_name}.txt")
             
+            # Determine starting page before saving state
+            if i == state['current_file_index']:
+                start_page = state['current_page_num']
+            else:
+                start_page = 1
+
             if not os.path.exists(wip_file_path):
                 log_area.text(f"🌐 Fetching live text from {wiki_title} to start local editing...")
                 max_retries = 3
@@ -365,8 +371,9 @@ if __name__ == '__main__':
                 with open(wip_file_path, "w", encoding="utf-8") as f:
                     f.write(current_wikitext)
 
-                save_state(i, page_num, "merging", last_file_path=short_name)
-                state_display.markdown(f"**Current State:**\n- File Index: `{i}`\n- Page: `{page_num}`")
+                # Changed page_num to start_page here
+                save_state(i, start_page, "merging", last_file_path=short_name)
+                state_display.markdown(f"**Current State:**\n- File Index: `{i}`\n- Page: `{start_page}`")
 
             else:
                 log_area.text(f"📂 Resuming from local working copy for {short_name}...")
@@ -375,12 +382,6 @@ if __name__ == '__main__':
             doc = fitz.open(pdf_path)
             total_pages = len(doc)
             doc.close()
-
-            # --- Check state for starting page ---
-            if i == state['current_file_index']:
-                start_page = state['current_page_num']
-            else:
-                start_page = 1
 
             pages_to_process = list(range(start_page, total_pages + 1))
             
