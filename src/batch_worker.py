@@ -46,7 +46,16 @@ def process_pdf_batch(batch_id, page_list, pdf_path, ocr_strategy, short_name, p
         force_docai = (ocr_strategy == "DocAI Only") or permanent_docai or (docai_cooldown_pages > 0)
 
         if force_docai:
-            mode_label = "Permanent DocAI" if permanent_docai else f"Cooldown DocAI ({docai_cooldown_pages} left)"
+            if ocr_strategy == "DocAI Only":
+                mode_label = "DocAI Only Mode"
+            elif permanent_docai:
+                mode_label = "Permanent DocAI Fallback"
+            else:
+                mode_label = f"Cooldown DocAI ({docai_cooldown_pages} left)"
+                docai_cooldown_pages -= 1
+                if docai_cooldown_pages == 0:
+                    shared_log_list.append(f"🟢 Cooldown complete. Re-enabling Gemini for next page.")
+            
             shared_log_list.append(f"🤖 [{mode_label}] Processing Page {page_num}...")
             
             raw_ocr = transcribe_with_document_ai(img)
@@ -63,11 +72,6 @@ def process_pdf_batch(batch_id, page_list, pdf_path, ocr_strategy, short_name, p
                         final_text = raw_ocr + "\n\n"
                     else:
                         final_text = rescue_text
-
-        if docai_cooldown_pages > 0:
-            docai_cooldown_pages -= 1
-            if docai_cooldown_pages == 0:
-                shared_log_list.append(f"🟢 Cooldown complete. Re-enabling Gemini.")
 
         else:
             final_text = proofread_with_formatting(img)
