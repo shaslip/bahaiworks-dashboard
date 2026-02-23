@@ -114,8 +114,15 @@ def get_all_pdf_files(root_folder):
     pdf_files = []
     for dirpath, _, filenames in os.walk(root_folder):
         for f in filenames:
-            # Check if it is a PDF, NOT an 'old' version, and does NOT start with 'scan'
-            if f.lower().endswith(".pdf") and "-old" not in f.lower() and not f.lower().startswith("scan"):
+            # Define substrings to exclude
+            blacklist = ["-old", "-full"]
+            
+            # Check if it is a PDF, doesn't start with 'scan', and doesn't contain blacklisted strings
+            filename_lower = f.lower()
+            if (filename_lower.endswith(".pdf") and 
+                not filename_lower.startswith("scan") and 
+                not any(x in filename_lower for x in blacklist)):
+                
                 full_path = os.path.join(dirpath, f)
                 pdf_files.append(full_path)
     
