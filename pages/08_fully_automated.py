@@ -254,7 +254,8 @@ if __name__ == '__main__':
         st.sidebar.success("State cleared.")
         st.rerun()
 
-    st.sidebar.markdown(f"**Current State:**\n- File Index: `{state['current_file_index']}`\n- Page: `{state['current_page_num']}`")
+    state_display = st.sidebar.empty()
+    state_display.markdown(f"**Current State:**\n- File Index: `{state['current_file_index']}`\n- Page: `{state['current_page_num']}`")
 
     # --- Manual State Modification ---
     with st.sidebar.expander("🔧 Modify Position"):
@@ -356,6 +357,10 @@ if __name__ == '__main__':
                 # Save the initial fetch to our local working file
                 with open(wip_file_path, "w", encoding="utf-8") as f:
                     f.write(current_wikitext)
+
+                save_state(i, page_num, "merging", last_file_path=short_name)
+                state_display.markdown(f"**Current State:**\n- File Index: `{i}`\n- Page: `{page_num}`")
+
             else:
                 log_area.text(f"📂 Resuming from local working copy for {short_name}...")
 
@@ -580,6 +585,7 @@ if __name__ == '__main__':
 
             # Update State (Success for entire file)
             save_state(i + 1, 1, "running", last_file_path=short_name)
+            state_display.markdown(f"**Current State:**\n- File Index: `{i + 1}`\n- Page: `1`")
             with status_container:
                 st.success(f"✅ Finished Document: {short_name}")
 
@@ -589,3 +595,5 @@ if __name__ == '__main__':
         # End of Loop
         st.success("🎉 Batch Processing Complete!")
         save_state(end_idx, 1, "done", last_file_path=short_name)
+        if 'short_name' in locals():
+            state_display.markdown(f"**Current State:**\n- File Index: `{end_idx}`\n- Page: `1`")
