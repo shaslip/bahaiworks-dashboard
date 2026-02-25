@@ -67,6 +67,63 @@ st.set_page_config(page_title="Category Sweeper", page_icon="🧹", layout="wide
 # ==============================================================================
 # 1. HELPER FUNCTIONS
 # ==============================================================================
+# --- CUSTOM TEMPLATE CONFIGURATION ---
+CUSTOM_PAGE_CONFIGS = {
+    "swpage": {
+        "module_title": "Module:SotW",
+        "file_format": "SW_Volume{vol}.pdf",
+        "offset_map_name": "pdfOffset_map"
+    },
+    "bwpage": {
+        "module_title": "Module:BahaiWorld", 
+        "file_format": "BW_Volume{vol}.pdf", 
+        "offset_map_name": "pdfOffset_map"
+    }
+}
+
+def get_module_offsets(module_title, map_name, session):
+    """Fetches the Lua module and extracts the offset map into a Python dict."""
+    wikitext, error = fetch_wikitext(module_title, session=session)
+    if error:
+        st.error(f"Failed to fetch {module_title}: {error}")
+        return {}
+
+    offsets = {}
+    table_match = re.search(fr'local\s+{map_name}\s*=\s*\{{([^}}]+)\}}', wikitext, re.IGNORECASE)
+    if table_match:
+        table_content = table_match.group(1)
+        pairs = re.finditer(r'\[(\d+)\]\s*=\s*["\']?(-?\d+)["\']?', table_content)
+        for p in pairs:
+            offsets[int(p.group(1))] = int(p.group(2))
+    return offsets
+
+def normalize_page_templates(wikitext, session):
+    """Finds custom templates and converts them to standard {{page|...}} tags."""
+    offset_caches = {}
+
+    for template_name, config in CUSTOM_PAGE_CONFIGS.items():
+        pattern = fr'\{{\{{\s*{template_name}\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\}}\}}'
+
+        def repl(match):
+            vol = int(match.group(1))
+            page = int(match.group(2))
+
+            if template_name not in offset_caches:
+                offset_caches[template_name] = get_module_offsets(
+                    config["module_title"],
+                    config["offset_map_name"],
+                    session
+                )
+
+            offset = offset_caches[template_name].get(vol, 0)
+            pdf_page = page + offset
+            filename = config["file_format"].format(vol=vol)
+
+            return f"{{{{page|{page}|file={filename}|page={pdf_page}}}}}"
+
+        wikitext = re.sub(pattern, repl, wikitext, flags=re.IGNORECASE)
+
+    return wikitext
 
 def int_to_roman(num):
     """Converts an integer to a lowercase roman numeral (1 -> i, 5 -> v)."""
@@ -543,6 +600,9 @@ with tab_auto:
             if err:
                 log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Error fetching text: {err}", color="red")
                 continue
+            
+            # --- Normalize custom templates ---
+            current_text = normalize_page_templates(current_text, session)
 
             # B. Header Processing
             current_text = process_header(current_text, wiki_title, session=session)
@@ -615,6 +675,8 @@ with tab_auto:
                 # 2. TAG FIXING
                 if pdf_page > start_pdf_page:
                     current_text, _ = fetch_wikitext(wiki_title, session=session)
+                    # --- Normalize refreshed text ---
+                    current_text = normalize_page_templates(current_text, session)
                 
                 current_text = find_and_fix_tag_by_page_num(current_text, pdf_filename, pdf_page, correct_label)
 
@@ -785,6 +847,9 @@ with tab_manual:
             st.error(f"Could not fetch {manual_title}: {err}")
             st.stop()
             
+        # --- Normalize custom templates ---
+        current_text = normalize_page_templates(current_text, session)
+            
         # 3. Find File
         file_match = re.search(r'file\s*=\s*([^|}\n]+)', current_text, re.IGNORECASE)
         if not file_match:
@@ -848,7 +913,11 @@ with tab_manual:
                 continue
 
             # B. Refresh Text & Fix Tags
-            if idx > 0: current_text, _ = fetch_wikitext(manual_title, session=session)
+            if idx > 0: 
+                current_text, _ = fetch_wikitext(manual_title, session=session)
+                # --- Normalize refreshed text ---
+                current_text = normalize_page_templates(current_text, session)
+                
             current_text = find_and_fix_tag_by_page_num(current_text, pdf_filename, pdf_page, correct_label)
             
             # C. AI Processing
