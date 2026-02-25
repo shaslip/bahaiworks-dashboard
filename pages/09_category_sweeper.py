@@ -36,7 +36,6 @@ EXCLUDED_TITLES = [
     "Bahá’í Canada",
     "Bahá’í Journal",
     "Bahá’í News Bulletin",
-    "Bahá’í World",
     "Bahá’í Youth Bulletin",
     "Brilliant Star",
     "Bulletin",
