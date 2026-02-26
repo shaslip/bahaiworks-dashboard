@@ -118,7 +118,7 @@ def extract_page_content(wikitext, pdf_page_num):
             return content
     return ""
 
-def build_sequential_route_map(subpages, session):
+def build_sequential_route_map(subpages, session, input_folder):
     route_map = {}
     master_pdf_filename = None
     wikitext_cache = {}
@@ -154,10 +154,37 @@ def build_sequential_route_map(subpages, session):
                 old_text = extract_page_content(text, pdf_num)
                 route_map[title]["old_texts"][pdf_num] = old_text
 
+    # --- Resolve Duplicate Pages ---
+    pdf_to_chapters = {}
+    for ch in subpages:
+        if ch not in route_map: continue
+        for p in route_map[ch]["pdf_pages"]:
+            pdf_num = p["pdf_num"]
+            if pdf_num not in pdf_to_chapters:
+                pdf_to_chapters[pdf_num] = []
+            pdf_to_chapters[pdf_num].append(ch)
+            
+    for pdf_num, chapters in pdf_to_chapters.items():
+        if len(chapters) > 1:
+            # Sort by number of mapped pages ascending (standalone pages win over multi-page spans)
+            chapters.sort(key=lambda c: len(route_map[c]["pdf_pages"]))
+            winner = chapters[0]
+            losers = chapters[1:]
+            
+            for loser in losers:
+                # Remove from the route_map
+                route_map[loser]["pdf_pages"] = [p for p in route_map[loser]["pdf_pages"] if p["pdf_num"] != pdf_num]
+                route_map[loser]["old_texts"].pop(pdf_num, None)
+                
+                # Remove the {{page|...}} tag from local wikitext copy
+                pattern = re.compile(rf'\{{\{{page\|[^}}]*?page\s*=\s*{pdf_num}[^}}]*\}}\}}\s*', re.IGNORECASE)
+                wikitext_cache[loser] = pattern.sub('', wikitext_cache[loser])
+
     # --- Re-sort subpages strictly by their lowest PDF page number ---
     sorted_subpages = []
     for sp in subpages:
-        pages = route_map.get(sp, {}).get("pdf_pages", [])
+        if sp not in route_map: continue
+        pages = route_map[sp].get("pdf_pages", [])
         if pages:
             min_page = min(p["pdf_num"] for p in pages)
             sorted_subpages.append((min_page, sp))
@@ -166,6 +193,18 @@ def build_sequential_route_map(subpages, session):
 
     sorted_subpages.sort(key=lambda x: x[0])
     ordered_subpages = [sp for _, sp in sorted_subpages]
+
+    # --- Save a text file per chapter in the local PDF directory ---
+    if master_pdf_filename:
+        # Relies on find_local_pdf already being defined in the file
+        local_pdf_path = find_local_pdf(master_pdf_filename, input_folder)
+        if local_pdf_path:
+            pdf_dir = os.path.dirname(local_pdf_path)
+            for sp in ordered_subpages:
+                safe_sp = sp.replace("/", "_")
+                ch_file_path = os.path.join(pdf_dir, f"{safe_sp}.txt")
+                with open(ch_file_path, "w", encoding="utf-8") as f:
+                    f.write(wikitext_cache.get(sp, ""))
 
     return route_map, master_pdf_filename, wikitext_cache, ordered_subpages
 
