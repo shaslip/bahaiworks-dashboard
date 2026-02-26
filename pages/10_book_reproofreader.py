@@ -297,7 +297,7 @@ if not state.get("subpages"):
         with st.spinner("🔍 Scanning wiki subpages and building route map..."):
             subpages = get_all_subpages(target_book, session)
             # Unpack the new ordered_subpages list
-            route_map, master_pdf_filename, wikitext_cache, ordered_subpages = build_sequential_route_map(subpages, session)
+            route_map, master_pdf_filename, wikitext_cache, ordered_subpages = build_sequential_route_map(subpages, session, input_folder)
             
             if not route_map or not master_pdf_filename:
                 st.error(f"Could not find any {{page}} tags or PDF references for {target_book}.")
@@ -362,6 +362,9 @@ if st.session_state.get('processing_active') == active_chapter:
         st.error(f"Local PDF not found for '{state['master_pdf']}'")
         st.session_state.pop('processing_active', None)
         st.stop()
+        
+    # --- Get the directory of the PDF for temp files ---
+    pdf_dir = os.path.dirname(local_pdf_path)
 
     page_data = state["route_map"].get(active_chapter, {})
     pdf_targets = page_data.get("pdf_pages", [])
@@ -404,7 +407,7 @@ if st.session_state.get('processing_active') == active_chapter:
             future = executor.submit(
                 process_pdf_batch,
                 batch_id, batch_pages, local_pdf_path, ocr_strategy, 
-                state["master_pdf"], project_root, shared_logs[batch_id]
+                state["master_pdf"], pdf_dir, shared_logs[batch_id]
             )
             futures.append(future)
 
@@ -427,7 +430,7 @@ if st.session_state.get('processing_active') == active_chapter:
     log_container.write("🔄 Assembling pages and applying split logic...")
     all_extracted_text = {}
     for batch_id in range(len(batches)):
-        batch_file_path = os.path.join(project_root, f"temp_{state['master_pdf']}_batch_{batch_id}.json")
+        batch_file_path = os.path.join(pdf_dir, f"temp_{state['master_pdf']}_batch_{batch_id}.json")
         if os.path.exists(batch_file_path):
             with open(batch_file_path, "r", encoding="utf-8") as f:
                 batch_data = json.load(f)
