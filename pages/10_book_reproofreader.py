@@ -131,11 +131,6 @@ def build_sequential_route_map(subpages, session, input_folder):
         wikitext_cache[title] = text
         route_map[title] = {"pdf_pages": [], "old_texts": {}, "needs_split": False}
         
-        # --- Detection for Split Logic ---
-        stripped_text = text.lstrip()
-        if stripped_text and not stripped_text.lower().startswith("{{page|"):
-            route_map[title]["needs_split"] = True
-        
         tags = list(re.finditer(r'(\{\{page\|(.*?)\}\})', text, re.IGNORECASE))
         
         for match in tags:
@@ -184,6 +179,13 @@ def build_sequential_route_map(subpages, session, input_folder):
                 # Remove the {{page|...}} tag from local wikitext copy
                 pattern = re.compile(rf'\{{\{{page\|[^}}]*?page\s*=\s*{pdf_num}[^}}]*\}}\}}\s*', re.IGNORECASE)
                 wikitext_cache[loser] = pattern.sub('', wikitext_cache[loser])
+
+    # --- Evaluate Split Logic AFTER Duplicate Resolution ---
+    for ch in route_map:
+        text = wikitext_cache.get(ch, "")
+        stripped_text = text.lstrip()
+        if stripped_text and not stripped_text.lower().startswith("{{page|"):
+            route_map[ch]["needs_split"] = True
 
     # --- Re-sort subpages strictly by their lowest PDF page number ---
     sorted_subpages = []
