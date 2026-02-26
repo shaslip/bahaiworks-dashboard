@@ -129,7 +129,12 @@ def build_sequential_route_map(subpages, session, input_folder):
             continue
             
         wikitext_cache[title] = text
-        route_map[title] = {"pdf_pages": [], "old_texts": {}}
+        route_map[title] = {"pdf_pages": [], "old_texts": {}, "needs_split": False}
+        
+        # --- Detection for Split Logic ---
+        stripped_text = text.lstrip()
+        if stripped_text and not stripped_text.lower().startswith("{{page|"):
+            route_map[title]["needs_split"] = True
         
         tags = list(re.finditer(r'(\{\{page\|(.*?)\}\})', text, re.IGNORECASE))
         
@@ -281,6 +286,20 @@ with col2:
     if st.button("🗑️ Reset Book State", use_container_width=True, help="Deletes the local map cache so you can re-process a completed book."):
         safe_title = target_book.replace("/", "_")
         state_file = os.path.join(CACHE_DIR, f"{safe_title}_state.json")
+        
+        # --- Clean up chapter .txt files ---
+        state_to_delete = load_book_state(safe_title)
+        master_pdf = state_to_delete.get("master_pdf")
+        if master_pdf:
+            local_pdf_path = find_local_pdf(master_pdf, input_folder)
+            if local_pdf_path:
+                pdf_dir = os.path.dirname(local_pdf_path)
+                for sp in state_to_delete.get("subpages", []):
+                    safe_sp = sp.replace("/", "_")
+                    ch_file_path = os.path.join(pdf_dir, f"{safe_sp}.txt")
+                    if os.path.exists(ch_file_path):
+                        os.remove(ch_file_path)
+                        
         if os.path.exists(state_file):
             os.remove(state_file)
         queue_data[target_book]["status"] = "PENDING"
@@ -317,9 +336,12 @@ map_display = []
 for sp in state["subpages"]:
     pdf_pages = state["route_map"].get(sp, {}).get("pdf_pages", [])
     page_labels = [str(p["pdf_num"]) for p in pdf_pages]
+    needs_split = state["route_map"].get(sp, {}).get("needs_split", False)
+    
     map_display.append({
         "Wiki Subpage": sp,
-        "Mapped PDF Pages": ", ".join(page_labels) if page_labels else "None"
+        "Mapped PDF Pages": ", ".join(page_labels) if page_labels else "None",
+        "Needs Split Logic": "Yes" if needs_split else "No"
     })
 st.dataframe(map_display, use_container_width=True, hide_index=True)
 
