@@ -205,6 +205,10 @@ def reformat_raw_text(raw_text):
     Step 2 of Fallback: Use Gemini to format the raw OCR text.
     This bypasses the image-based copyright filter by processing text-to-text.
     """
+    # Fast-fail: If DocAI returned nothing, it's a blank page. Save the API call.
+    if not raw_text or not raw_text.strip():
+        return "--BLANK--"
+
     model = genai.GenerativeModel(MODEL_NAME)
     
     prompt = """
@@ -219,6 +223,8 @@ def reformat_raw_text(raw_text):
     4.  **FORMATTING:**
         - Use `== Header ==` for section headers.
     5.  Preserve paragraph breaks.
+    6.  **BLANK PAGES:** If the text provided contains no meaningful content, or if after removing headers/page numbers there is no main content left, return ONLY the string: --BLANK--
+    7.  **NO CONVERSATION:** Output ONLY the formatted wikitext or --BLANK--. Do not include any conversational filler like "Here is the text" or "I am ready".
     
     RAW TEXT START:
     """
