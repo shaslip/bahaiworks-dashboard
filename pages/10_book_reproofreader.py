@@ -36,6 +36,11 @@ CACHE_DIR = os.path.join(project_root, "book_cache")
 if not os.path.exists(CACHE_DIR):
     os.makedirs(CACHE_DIR)
 
+# --- Human-readable offline proofs ---
+OFFLINE_DIR = os.path.join(project_root, "offline_proofs")
+if not os.path.exists(OFFLINE_DIR):
+    os.makedirs(OFFLINE_DIR)
+
 st.set_page_config(page_title="Book Re-Proofreader", page_icon="📚", layout="wide")
 
 # ==============================================================================
@@ -439,6 +444,14 @@ if 'running_book' in st.session_state and st.session_state['running_book']:
                                     
                             extracted_cache[pdf_num] = new_text
                             save_extracted_cache(safe_title, extracted_cache)
+                            
+                            # --- Save human-readable offline copy ---
+                            book_offline_dir = os.path.join(OFFLINE_DIR, safe_title)
+                            if not os.path.exists(book_offline_dir):
+                                os.makedirs(book_offline_dir)
+                                
+                            with open(os.path.join(book_offline_dir, f"Page_{pdf_num}.txt"), "w", encoding="utf-8") as text_file:
+                                text_file.write(new_text)
                         else:
                             extracted_cache[pdf_num] = ""
                             
