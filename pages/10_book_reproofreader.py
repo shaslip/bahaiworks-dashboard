@@ -154,7 +154,20 @@ def build_sequential_route_map(subpages, session):
                 old_text = extract_page_content(text, pdf_num)
                 route_map[title]["old_texts"][pdf_num] = old_text
 
-    return route_map, master_pdf_filename, wikitext_cache
+    # --- Re-sort subpages strictly by their lowest PDF page number ---
+    sorted_subpages = []
+    for sp in subpages:
+        pages = route_map.get(sp, {}).get("pdf_pages", [])
+        if pages:
+            min_page = min(p["pdf_num"] for p in pages)
+            sorted_subpages.append((min_page, sp))
+        else:
+            sorted_subpages.append((999999, sp)) # Push unmapped pages to the end
+
+    sorted_subpages.sort(key=lambda x: x[0])
+    ordered_subpages = [sp for _, sp in sorted_subpages]
+
+    return route_map, master_pdf_filename, wikitext_cache, ordered_subpages
 
 def find_local_pdf(filename, root_folder):
     for dirpath, _, filenames in os.walk(root_folder):
@@ -244,13 +257,14 @@ if not state.get("subpages"):
     if st.button("🛠️ Generate Chapter Map", type="primary"):
         with st.spinner("🔍 Scanning wiki subpages and building route map..."):
             subpages = get_all_subpages(target_book, session)
-            route_map, master_pdf_filename, wikitext_cache = build_sequential_route_map(subpages, session)
+            # Unpack the new ordered_subpages list
+            route_map, master_pdf_filename, wikitext_cache, ordered_subpages = build_sequential_route_map(subpages, session)
             
             if not route_map or not master_pdf_filename:
                 st.error(f"Could not find any {{page}} tags or PDF references for {target_book}.")
                 st.stop()
                 
-            state["subpages"] = subpages
+            state["subpages"] = ordered_subpages
             state["route_map"] = route_map
             state["master_pdf"] = master_pdf_filename
             state["wikitext_cache"] = wikitext_cache
@@ -259,19 +273,14 @@ if not state.get("subpages"):
     st.stop() # Halts all execution until authorized
 
 # Display Map
-st.subheader(f"📖 Chapter Map: {target_book}")
+st.subheader(f"📖 Map: {target_book}")
 map_display = []
 for sp in state["subpages"]:
     pdf_pages = state["route_map"].get(sp, {}).get("pdf_pages", [])
     page_labels = [str(p["pdf_num"]) for p in pdf_pages]
-    
-    # Calculate simple status based on completed array
-    status = "✅ Done" if sp in state.get("completed_subpages", []) else "⏳ Pending"
-    
     map_display.append({
         "Wiki Subpage": sp,
-        "Mapped PDF Pages": ", ".join(page_labels) if page_labels else "None",
-        "Status": status
+        "Mapped PDF Pages": ", ".join(page_labels) if page_labels else "None"
     })
 st.dataframe(map_display, use_container_width=True, hide_index=True)
 
@@ -279,7 +288,7 @@ st.dataframe(map_display, use_container_width=True, hide_index=True)
 subpages_to_process = [sp for sp in state["subpages"] if sp not in state.get("completed_subpages", [])]
 
 if not subpages_to_process:
-    st.success(f"✅ All chapters for {target_book} completed!")
+    st.success(f"✅ All sections for {target_book} completed!")
     queue_data[target_book]["status"] = "COMPLETED"
     save_queue(queue_data)
     st.stop()
@@ -290,9 +299,21 @@ next_chapter = state["subpages"][active_chapter_idx + 1] if active_chapter_idx +
 
 st.divider()
 st.subheader("Action Required")
-st.info(f"Next task: Processing **{active_chapter}**")
+st.info(f"Next task: Processing section **{active_chapter}**")
 
-if st.button("🚀 Yes, Process This Chapter", type="primary"):
+col_start, col_stop = st.columns([1, 1])
+with col_start:
+    if st.button("🚀 Yes, Process This Section", type="primary", use_container_width=True):
+        st.session_state['processing_active'] = active_chapter
+        st.rerun()
+with col_stop:
+    if st.button("🛑 Stop Execution", use_container_width=True):
+        st.session_state.pop('processing_active', None)
+        st.warning("Execution stopped.")
+        st.stop()
+
+# Execution bound to session state so it doesn't vanish
+if st.session_state.get('processing_active') == active_chapter:
     
     log_container = st.container(border=True)
     log_container.write(f"Starting parallel processing for {active_chapter}...")
@@ -300,15 +321,17 @@ if st.button("🚀 Yes, Process This Chapter", type="primary"):
     local_pdf_path = find_local_pdf(state["master_pdf"], input_folder)
     if not local_pdf_path:
         st.error(f"Local PDF not found for '{state['master_pdf']}'")
+        st.session_state.pop('processing_active', None)
         st.stop()
 
     page_data = state["route_map"].get(active_chapter, {})
     pdf_targets = page_data.get("pdf_pages", [])
     
     if not pdf_targets:
-        log_container.write("No PDF pages mapped. Skipping chapter.")
+        log_container.write("No PDF pages mapped. Skipping section.")
         state["completed_subpages"].append(active_chapter)
         save_book_state(safe_title, state)
+        st.session_state.pop('processing_active', None)
         st.rerun()
 
     pages_to_process = [t["pdf_num"] for t in pdf_targets]
@@ -320,6 +343,7 @@ if st.button("🚀 Yes, Process This Chapter", type="primary"):
 
     batch_placeholders = {}
     for i in range(len(batches)):
+        if not batches[i]: continue
         start_pg, end_pg = batches[i][0], batches[i][-1]
         page_label = f"pg {start_pg}" if start_pg == end_pg else f"pgs {start_pg}-{end_pg}"
         with log_container.expander(f"Batch {i+1} Status ({page_label})", expanded=True):
@@ -337,6 +361,7 @@ if st.button("🚀 Yes, Process This Chapter", type="primary"):
         executor = concurrent.futures.ProcessPoolExecutor(max_workers=num_batches)
         futures = []
         for batch_id, batch_pages in enumerate(batches):
+            if not batch_pages: continue
             future = executor.submit(
                 process_pdf_batch,
                 batch_id, batch_pages, local_pdf_path, ocr_strategy, 
@@ -348,8 +373,8 @@ if st.button("🚀 Yes, Process This Chapter", type="primary"):
         while True:
             all_done = True
             for batch_id, future in enumerate(futures):
-                current_logs = list(shared_logs[batch_id])
-                if current_logs:
+                current_logs = list(shared_logs.get(batch_id, []))
+                if current_logs and batch_id in batch_placeholders:
                     batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
                 if not future.done():
                     all_done = False
@@ -373,14 +398,13 @@ if st.button("🚀 Yes, Process This Chapter", type="primary"):
 
     current_wikitext = state["wikitext_cache"].get(active_chapter, "")
 
-    # Look-ahead logic for the last page of current chapter
     last_page_num = pages_to_process[-1]
     last_page_ai_text = all_extracted_text.get(last_page_num, "")
 
     if next_chapter:
         next_pages = state["route_map"].get(next_chapter, {}).get("pdf_pages", [])
         if next_pages and next_pages[0]["pdf_num"] == last_page_num:
-            log_container.write(f"✂️ Split boundary detected on Page {last_page_num} with next chapter.")
+            log_container.write(f"✂️ Split boundary detected on Page {last_page_num} with next section.")
             
             old_curr_chapter_snippet = page_data["old_texts"].get(last_page_num, "")
             old_next_chapter_snippet = state["route_map"][next_chapter]["old_texts"].get(last_page_num, "")
@@ -407,15 +431,17 @@ if st.button("🚀 Yes, Process This Chapter", type="primary"):
 
     # Final Cleanup & Upload
     final_wikitext = cleanup_page_seams(current_wikitext)
-    log_container.write("🚀 Uploading chapter to wiki...")
+    log_container.write("🚀 Uploading section to wiki...")
     
     res = upload_to_bahaiworks(active_chapter, final_wikitext, "Bot: Parallel Batch Reproofread", session=session)
     
     if res.get('edit', {}).get('result') == 'Success':
         state["completed_subpages"].append(active_chapter)
         save_book_state(safe_title, state)
+        st.session_state.pop('processing_active', None)
         st.success(f"Upload complete for {active_chapter}!")
         time.sleep(1)
         st.rerun()
     else:
         st.error(f"❌ Upload failed: {res}")
+        st.session_state.pop('processing_active', None)
