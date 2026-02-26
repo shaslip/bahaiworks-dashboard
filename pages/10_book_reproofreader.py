@@ -175,6 +175,9 @@ def build_sequential_route_map(subpages, session):
     
     current_pdf_page = None
     current_label = None
+    
+    # --- NEW: Track globally seen pages to catch duplicates ---
+    seen_pdf_pages = set()
 
     for title in subpages:
         text, err = fetch_wikitext(title, session=session)
@@ -184,7 +187,8 @@ def build_sequential_route_map(subpages, session):
         wikitext_cache[title] = text
         route_map[title] = {"pdf_pages": [], "old_texts": {}}
         
-        tags = list(re.finditer(r'\{\{page\|(.*?)\}\}', text, re.IGNORECASE | re.DOTALL))
+        # --- CHANGED: Capture full block including optional {{ocr}} for clean deletion ---
+        tags = list(re.finditer(r'(\{\{page\|(.*?)\}\})(\s*\{\{ocr\}\})?', text, re.IGNORECASE | re.DOTALL))
         
         if not tags and current_pdf_page is not None:
             # Inherits the physical page from the previous subpage
@@ -197,7 +201,9 @@ def build_sequential_route_map(subpages, session):
             continue
             
         for match in tags:
-            params = match.group(1)
+            full_tag_block = match.group(0)
+            params = match.group(2)
+            
             label = params.split('|')[0].strip()
             page_check = re.search(r'page\s*=\s*(\d+)', params, re.IGNORECASE)
             file_check = re.search(r'file\s*=\s*([^|}\n]+)', params, re.IGNORECASE)
@@ -208,7 +214,25 @@ def build_sequential_route_map(subpages, session):
                 
                 if not master_pdf_filename:
                     master_pdf_filename = filename
+                    
+                # --- Duplicate Tag Removal Logic ---
+                if pdf_num in seen_pdf_pages:
+                    # Strip the duplicate tag from the text entirely
+                    text = text.replace(full_tag_block, "")
+                    wikitext_cache[title] = text
+                    
+                    # Treat it as inherited overflow from the previous page
+                    route_map[title]["pdf_pages"].append({
+                        "pdf_num": pdf_num,
+                        "label": label,
+                        "inherited": True
+                    })
+                    
+                    # Re-extract what's left as the old text
+                    route_map[title]["old_texts"][pdf_num] = text.strip()
+                    continue
                 
+                seen_pdf_pages.add(pdf_num)
                 current_pdf_page = pdf_num
                 current_label = label
                 
