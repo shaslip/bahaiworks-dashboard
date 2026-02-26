@@ -5,16 +5,8 @@ import json
 import re
 import time
 import requests
-import fitz  # PyMuPDF
+import difflib
 import math
-import concurrent.futures
-import multiprocessing
-
-# --- Force spawn to prevent gRPC crashes in background processes ---
-try:
-    multiprocessing.set_start_method('spawn', force=True)
-except RuntimeError:
-    pass
 
 # --- Path Setup ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -23,7 +15,7 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 # --- Imports ---
-from src.batch_worker import process_pdf_batch, get_page_image_data
+from src.gemini_processor import proofread_with_formatting, transcribe_with_document_ai, reformat_raw_text
 from src.mediawiki_uploader import (
     upload_to_bahaiworks, 
     API_URL, 
@@ -38,7 +30,11 @@ if 'GEMINI_API_KEY' not in os.environ:
     st.error("GEMINI_API_KEY not found. Check your .env file.")
     st.stop()
 
-STATE_FILE = os.path.join(project_root, "book_sweeper_state.json")
+QUEUE_FILE = os.path.join(project_root, "book_sweeper_queue.json")
+CACHE_DIR = os.path.join(project_root, "book_cache")
+
+if not os.path.exists(CACHE_DIR):
+    os.makedirs(CACHE_DIR)
 
 st.set_page_config(page_title="Book Re-Proofreader", page_icon="📚", layout="wide")
 
@@ -47,17 +43,40 @@ st.set_page_config(page_title="Book Re-Proofreader", page_icon="📚", layout="w
 # ==============================================================================
 
 def load_queue():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, 'r') as f:
+    if os.path.exists(QUEUE_FILE):
+        with open(QUEUE_FILE, 'r') as f:
             return json.load(f)
     return {}
 
 def save_queue(queue_data):
-    with open(STATE_FILE, 'w') as f:
+    with open(QUEUE_FILE, 'w') as f:
         json.dump(queue_data, f, indent=4)
 
+def load_book_state(safe_title):
+    state_file = os.path.join(CACHE_DIR, f"{safe_title}_state.json")
+    if os.path.exists(state_file):
+        with open(state_file, 'r') as f:
+            return json.load(f)
+    return {"completed_subpages": [], "route_map": {}, "subpages": [], "master_pdf": None}
+
+def save_book_state(safe_title, state):
+    state_file = os.path.join(CACHE_DIR, f"{safe_title}_state.json")
+    with open(state_file, 'w') as f:
+        json.dump(state, f, indent=4)
+
+def load_extracted_cache(safe_title):
+    cache_file = os.path.join(CACHE_DIR, f"{safe_title}_extracted.json")
+    if os.path.exists(cache_file):
+        with open(cache_file, 'r') as f:
+            return {int(k): v for k, v in json.load(f).items()}
+    return {}
+
+def save_extracted_cache(safe_title, cache_data):
+    cache_file = os.path.join(CACHE_DIR, f"{safe_title}_extracted.json")
+    with open(cache_file, 'w') as f:
+        json.dump(cache_data, f, indent=4)
+
 def fetch_category_books(session):
-    """Fetches all root pages in Category:Books."""
     books = []
     params = {
         "action": "query",
@@ -88,7 +107,6 @@ def fetch_category_books(session):
     return books
 
 def sync_queue(session):
-    """Syncs the local state with the live category."""
     current_queue = load_queue()
     live_books = fetch_category_books(session)
     
@@ -106,7 +124,6 @@ def sync_queue(session):
 # ==============================================================================
 
 def get_all_subpages(root_title, session):
-    """Finds all subpages for a book, including the root page itself."""
     pages = [root_title]
     params = {
         "action": "query",
@@ -130,10 +147,11 @@ def get_all_subpages(root_title, session):
             st.error(f"Network Error fetching subpages: {e}")
             break
             
+    # Natural sort
+    pages.sort(key=lambda x: [int(c) if c.isdigit() else c.lower() for c in re.split(r'(\d+)', x)])
     return pages
 
 def extract_page_content(wikitext, pdf_page_num):
-    """Extracts the existing text content inside the {{page|...}} tag for splitting calculations."""
     tags = re.finditer(r'(\{\{page\|(.*?)\}\})(.*?)(?=\{\{page\||\Z)', wikitext, re.IGNORECASE | re.DOTALL)
     for match in tags:
         params = match.group(2)
@@ -141,32 +159,40 @@ def extract_page_content(wikitext, pdf_page_num):
         
         page_check = re.search(r'page\s*=\s*(\d+)', params, re.IGNORECASE)
         if page_check and int(page_check.group(1)) == pdf_page_num:
-            # Strip trailing {{ocr}} if present in the content block
             content = re.sub(r'\{\{ocr\}\}\s*\Z', '', content, flags=re.IGNORECASE).strip()
             return content
     return ""
 
-def build_route_map(subpages, session):
-    """
-    Builds a dictionary mapping physical PDF pages to the wiki subpages they appear on.
-    Returns: map, pdf_filename, wikitext_cache
-    """
+def build_sequential_route_map(subpages, session):
     route_map = {}
-    wikitext_cache = {}
     master_pdf_filename = None
+    wikitext_cache = {}
     
+    current_pdf_page = None
+    current_label = None
+
     for title in subpages:
         text, err = fetch_wikitext(title, session=session)
         if err or not text:
             continue
             
         wikitext_cache[title] = text
+        route_map[title] = {"pdf_pages": [], "old_texts": {}}
         
-        # Find all page tags on this subpage
-        tags = re.finditer(r'\{\{page\|(.*?)\}\}', text, re.IGNORECASE | re.DOTALL)
+        tags = list(re.finditer(r'\{\{page\|(.*?)\}\}', text, re.IGNORECASE | re.DOTALL))
+        
+        if not tags and current_pdf_page is not None:
+            # Inherits the physical page from the previous subpage
+            route_map[title]["pdf_pages"].append({
+                "pdf_num": current_pdf_page,
+                "label": current_label,
+                "inherited": True
+            })
+            route_map[title]["old_texts"][current_pdf_page] = text.strip()
+            continue
+            
         for match in tags:
             params = match.group(1)
-            
             label = params.split('|')[0].strip()
             page_check = re.search(r'page\s*=\s*(\d+)', params, re.IGNORECASE)
             file_check = re.search(r'file\s*=\s*([^|}\n]+)', params, re.IGNORECASE)
@@ -177,58 +203,74 @@ def build_route_map(subpages, session):
                 
                 if not master_pdf_filename:
                     master_pdf_filename = filename
-                    
-                if pdf_num not in route_map:
-                    route_map[pdf_num] = []
-                    
-                old_text = extract_page_content(text, pdf_num)
                 
-                route_map[pdf_num].append({
-                    "subpage": title,
+                current_pdf_page = pdf_num
+                current_label = label
+                
+                route_map[title]["pdf_pages"].append({
+                    "pdf_num": pdf_num,
                     "label": label,
-                    "old_text": old_text
+                    "inherited": False
                 })
                 
+                old_text = extract_page_content(text, pdf_num)
+                route_map[title]["old_texts"][pdf_num] = old_text
+
     return route_map, master_pdf_filename, wikitext_cache
 
-def slice_text_for_split_pages(new_text, old_texts):
+def fuzzy_slice(ai_text, old_text_snippet):
     """
-    Slices newly generated AI text proportionally based on the lengths of the old text segments.
+    Attempts to find the boundaries of the old_text_snippet within the new ai_text.
+    Uses difflib to find the best matching block.
     """
-    if not new_text:
-        return [""] * len(old_texts)
-    if len(old_texts) <= 1:
-        return [new_text]
-
-    total_old_len = sum(len(t) for t in old_texts)
-    if total_old_len == 0:
-        # Fallback: equal split
-        avg = len(new_text) // len(old_texts)
-        return [new_text[i*avg:(i+1)*avg] for i in range(len(old_texts))]
-
-    slices = []
-    current_idx = 0
+    if not ai_text or not old_text_snippet:
+        return ""
     
-    for i in range(len(old_texts) - 1):
-        target_len = int(len(new_text) * (len(old_texts[i]) / total_old_len))
-        split_point = current_idx + target_len
+    # Clean up for comparison
+    clean_ai = re.sub(r'\s+', ' ', ai_text).strip()
+    clean_old = re.sub(r'\s+', ' ', old_text_snippet).strip()
+    
+    matcher = difflib.SequenceMatcher(None, clean_ai, clean_old)
+    match = matcher.find_longest_match(0, len(clean_ai), 0, len(clean_old))
+    
+    if match.size > 0:
+        # We found a match in the cleaned string. We need to map this back to the original ai_text with newlines.
+        # This is an approximation. A robust implementation would map indices exactly.
+        # For safety, if fuzzy fails, we return the ai_text and let the injection logic handle it if possible, 
+        # or rely on proportional slicing as a fallback.
+        
+        # Simple proportional fallback if difflib gets too complex with formatting:
+        start_ratio = match.a / len(clean_ai)
+        end_ratio = (match.a + match.size) / len(clean_ai)
+        
+        start_idx = int(start_ratio * len(ai_text))
+        end_idx = int(end_ratio * len(ai_text))
+        
+        # Snap to nearest word boundaries
+        while start_idx > 0 and ai_text[start_idx-1] not in [' ', '\n']:
+            start_idx -= 1
+        while end_idx < len(ai_text) and ai_text[end_idx] not in [' ', '\n']:
+            end_idx += 1
+            
+        return ai_text[start_idx:end_idx].strip()
+        
+    return ai_text
 
-        # Try to snap to the nearest newline to avoid breaking sentences
-        nearest_nl = new_text.find('\n', max(current_idx, split_point - 100), min(len(new_text), split_point + 100))
-        if nearest_nl != -1:
-            split_point = nearest_nl + 1
-        else:
-            # Fallback to nearest space
-            nearest_space = new_text.find(' ', max(current_idx, split_point - 50), min(len(new_text), split_point + 50))
-            if nearest_space != -1:
-                split_point = nearest_space + 1
-
-        slices.append(new_text[current_idx:split_point].strip())
-        current_idx = split_point
-
-    # Last slice gets the remainder
-    slices.append(new_text[current_idx:].strip())
-    return slices
+def get_page_image_local(pdf_path, page_num):
+    from PIL import Image
+    import io
+    try:
+        doc = fitz.open(pdf_path)
+        if page_num > len(doc) or page_num < 1:
+            doc.close()
+            return None
+        page = doc.load_page(page_num - 1)
+        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+        img = Image.open(io.BytesIO(pix.tobytes("png")))
+        doc.close()
+        return img
+    except Exception:
+        return None
 
 def find_local_pdf(filename, root_folder):
     for dirpath, _, filenames in os.walk(root_folder):
@@ -241,8 +283,8 @@ def find_local_pdf(filename, root_folder):
 # 3. UI & MAIN LOGIC
 # ==============================================================================
 
-st.title("📚 Book Re-Proofreader (Cross-Chapter)")
-st.markdown("Re-processes existing books mapped via `Category:Books`, handling text that splits across chapters seamlessly.")
+st.title("📚 Book Re-Proofreader (Sequential)")
+st.markdown("Sequentially processes book subpages, handling split-page content seamlessly with local caching.")
 
 st.sidebar.header("Configuration")
 input_folder = st.sidebar.text_input("Local PDF Root Folder", value="/home/sarah/Desktop/Projects/Bahai.works/English/")
@@ -253,8 +295,7 @@ st.sidebar.divider()
 
 session = requests.Session()
 try:
-    with st.spinner("Authenticating with MediaWiki..."):
-        get_csrf_token(session)
+    get_csrf_token(session)
 except Exception as e:
     st.error(f"Authentication Failed: {e}")
     st.stop()
@@ -272,157 +313,175 @@ if not queue_data:
     st.warning("Queue is empty. Click 'Sync Category:Books' in the sidebar to populate it.")
     st.stop()
 
-# Build Queue DataFrame
-df = []
-for title, data in queue_data.items():
-    df.append({"Book Title": title, "Status": data.get("status", "UNKNOWN")})
-
+df = [{"Book Title": title, "Status": data.get("status", "UNKNOWN")} for title, data in queue_data.items()]
 st.subheader("📋 Processing Queue")
 st.dataframe(df, use_container_width=True, hide_index=True)
 
-# Determine Target
 pending_books = [t for t, d in queue_data.items() if d.get("status") in ["PENDING", "ERROR"]]
 
-col1, col2 = st.columns([2, 1])
+col1, col2, col3 = st.columns([2, 1, 1])
 with col1:
-    target_book = st.selectbox("Select Target Book (Test Mode)", ["--- Auto Select Next ---"] + pending_books)
+    target_book = st.selectbox("Select Target Book", ["--- Auto Select Next ---"] + pending_books)
 with col2:
-    st.write("") # Spacer
+    st.write("") 
     st.write("")
     start_btn = st.button("🚀 Start Processing", type="primary", use_container_width=True)
+with col3:
+    st.write("")
+    st.write("")
+    stop_btn = st.button("🛑 Stop Process", use_container_width=True)
 
 if start_btn:
+    st.session_state['running_book'] = True
+
+if 'running_book' in st.session_state and st.session_state['running_book']:
+    
+    if stop_btn:
+        st.warning("🛑 Stop requested! Halting execution. Progress has been saved.")
+        st.session_state.pop('running_book', None)
+        st.stop()
+
     if not pending_books:
         st.success("All books in queue are completed!")
+        st.session_state.pop('running_book', None)
         st.stop()
 
     book_list = [target_book] if target_book != "--- Auto Select Next ---" else pending_books
-    
     if run_mode.startswith("Test"):
         book_list = book_list[:1]
 
     for book_title in book_list:
-        st.markdown(f"### ⚙️ Processing: `{book_title}`")
-        log_area = st.empty()
+        safe_title = book_title.replace("/", "_")
+        state = load_book_state(safe_title)
         
-        # 1. Subpage Discovery
-        log_area.text("🔍 Discovering subpages...")
-        subpages = get_all_subpages(book_title, session)
+        status_box = st.container(border=True)
+        status_box.markdown(f"### ⚙️ Processing: `{book_title}`")
+        log_area = status_box.empty()
         
-        # 2. Build Route Map
-        log_area.text(f"🗺️ Building cross-chapter route map across {len(subpages)} wiki pages...")
-        route_map, master_pdf_filename, wikitext_cache = build_route_map(subpages, session)
-        
-        if not route_map or not master_pdf_filename:
-            st.error(f"Could not find any {{page}} tags or PDF references for {book_title}.")
-            queue_data[book_title]["status"] = "ERROR"
-            save_queue(queue_data)
-            continue
+        # 1. Pre-Scan & Route Mapping (Only if not already done)
+        if not state.get("subpages"):
+            log_area.text("🔍 Pre-Scanning subpages and building route map...")
+            subpages = get_all_subpages(book_title, session)
+            route_map, master_pdf_filename, wikitext_cache = build_sequential_route_map(subpages, session)
             
-        # 3. Locate PDF
+            if not route_map or not master_pdf_filename:
+                st.error(f"Could not find any {{page}} tags or PDF references for {book_title}.")
+                queue_data[book_title]["status"] = "ERROR"
+                save_queue(queue_data)
+                continue
+                
+            state["subpages"] = subpages
+            state["route_map"] = route_map
+            state["master_pdf"] = master_pdf_filename
+            state["wikitext_cache"] = wikitext_cache
+            save_book_state(safe_title, state)
+        
+        master_pdf_filename = state["master_pdf"]
         local_pdf_path = find_local_pdf(master_pdf_filename, input_folder)
+        
         if not local_pdf_path:
             st.error(f"Local PDF not found for '{master_pdf_filename}'")
             queue_data[book_title]["status"] = "ERROR"
             save_queue(queue_data)
             continue
-            
-        unique_pdf_pages = sorted(list(route_map.keys()))
-        log_area.text(f"🚀 Found {len(unique_pdf_pages)} unique physical pages to process.")
 
-        # 4. Parallel Batch OCR
-        num_batches = 5
-        batch_size = math.ceil(len(unique_pdf_pages) / num_batches)
-        batches = [unique_pdf_pages[j:j + batch_size] for j in range(0, len(unique_pdf_pages), batch_size)]
+        extracted_cache = load_extracted_cache(safe_title)
         
-        all_extracted_text = {}
+        subpages_to_process = [sp for sp in state["subpages"] if sp not in state["completed_subpages"]]
         
-        from multiprocessing import Manager
-        with Manager() as manager:
-            shared_logs = manager.dict()
-            for i in range(len(batches)):
-                shared_logs[i] = manager.list()
+        if not subpages_to_process:
+            log_area.text("✅ All subpages already processed.")
+        else:
+            progress_bar = status_box.progress(0)
+            
+            # 2. Sequential Execution Loop
+            for idx, subpage_title in enumerate(subpages_to_process):
                 
-            with st.spinner("Running AI Document Extraction..."):
-                executor = concurrent.futures.ProcessPoolExecutor(max_workers=num_batches)
-                futures = []
-                for batch_id, batch_pages in enumerate(batches):
-                    future = executor.submit(
-                        process_pdf_batch,
-                        batch_id, batch_pages, local_pdf_path, ocr_strategy, 
-                        master_pdf_filename, project_root, shared_logs[batch_id]
-                    )
-                    futures.append(future)
+                if stop_btn: # Double check inside loop
+                    st.warning("🛑 Stop requested! Progress saved.")
+                    st.session_state.pop('running_book', None)
+                    st.stop()
+                    
+                log_area.text(f"📝 Processing Subpage ({idx+1}/{len(subpages_to_process)}): {subpage_title}")
+                
+                page_data = state["route_map"].get(subpage_title, {})
+                pdf_targets = page_data.get("pdf_pages", [])
+                
+                if not pdf_targets:
+                    log_area.text(f"⏭️ No PDF pages mapped to {subpage_title}. Skipping.")
+                    state["completed_subpages"].append(subpage_title)
+                    save_book_state(safe_title, state)
+                    continue
 
-                # Polling loop omitted for brevity, waiting for completion
-                concurrent.futures.wait(futures)
-                executor.shutdown(wait=False, cancel_futures=True)
+                # Refresh wikitext to get latest version before injection
+                current_wikitext, _ = fetch_wikitext(subpage_title, session=session)
+                if not current_wikitext:
+                    current_wikitext = state["wikitext_cache"].get(subpage_title, "")
 
-        # 5. Load Results
-        for batch_id in range(len(batches)):
-            batch_file = os.path.join(project_root, f"temp_{master_pdf_filename}_batch_{batch_id}.json")
-            if os.path.exists(batch_file):
-                with open(batch_file, "r", encoding="utf-8") as f:
-                    batch_data = json.load(f)
-                    for p_num_str, text in batch_data.items():
-                        all_extracted_text[int(p_num_str)] = text
-                os.remove(batch_file)
+                # 3. Extract & Cache Check
+                for target in pdf_targets:
+                    pdf_num = target["pdf_num"]
+                    label = target["label"]
+                    is_inherited = target["inherited"]
+                    
+                    if pdf_num not in extracted_cache:
+                        log_area.text(f"   ➔ OCR Extraction for PDF Page {pdf_num}...")
+                        img = get_page_image_local(local_pdf_path, pdf_num)
+                        
+                        if img:
+                            if ocr_strategy == "DocAI Only":
+                                raw_ocr = transcribe_with_document_ai(img)
+                                new_text = reformat_raw_text(raw_ocr) if raw_ocr else ""
+                            else:
+                                new_text = proofread_with_formatting(img)
+                                if "GEMINI_ERROR" in new_text:
+                                    new_text = reformat_raw_text(transcribe_with_document_ai(img))
+                                    
+                            extracted_cache[pdf_num] = new_text
+                            save_extracted_cache(safe_title, extracted_cache)
+                        else:
+                            extracted_cache[pdf_num] = ""
+                            
+                    full_ai_text = extracted_cache[pdf_num]
+                    
+                    if not full_ai_text:
+                        continue
+                        
+                    # 4. Fuzzy Slice for Split Pages
+                    old_snippet = page_data["old_texts"].get(str(pdf_num), "")
+                    if old_snippet and len(old_snippet) < len(full_ai_text) * 0.8:
+                        # Significant split detected, attempt to slice
+                        log_area.text(f"   ➔ Slicing chunk for page {pdf_num}...")
+                        chunk_to_inject = fuzzy_slice(full_ai_text, old_snippet)
+                    else:
+                        chunk_to_inject = full_ai_text
 
-        # 6. Slice and Assign Text to Subpages
-        log_area.text("✂️ Slicing text for split chapters...")
-        injection_queue = {sp: wikitext_cache[sp] for sp in subpages}
+                    # 5. Injection
+                    if is_inherited:
+                        # No {{page}} tag exists. Replace the body of the text.
+                        # This is risky if it's mixed with other content, but we append/replace based on old text
+                        if old_snippet and old_snippet in current_wikitext:
+                            current_wikitext = current_wikitext.replace(old_snippet, chunk_to_inject)
+                    else:
+                        current_wikitext, err = inject_text_into_page(current_wikitext, label, chunk_to_inject, master_pdf_filename)
+                        
+                # 6. Upload Subpage
+                final_wikitext = cleanup_page_seams(current_wikitext)
+                res = upload_to_bahaiworks(subpage_title, final_wikitext, "Bot: Sequential Reproofread", session=session)
+                
+                if res.get('edit', {}).get('result') == 'Success':
+                    state["completed_subpages"].append(subpage_title)
+                    save_book_state(safe_title, state)
+                else:
+                    log_area.text(f"❌ Upload failed for {subpage_title}: {res}")
+                    
+                progress_bar.progress((idx + 1) / len(subpages_to_process))
+                time.sleep(1) # Rate limit protection
 
-        for pdf_page in unique_pdf_pages:
-            new_text = all_extracted_text.get(pdf_page, "")
-            if not new_text or "GEMINI_ERROR" in new_text or "DOCAI_ERROR" in new_text:
-                st.warning(f"Failed extraction on page {pdf_page}. Skipping.")
-                continue
-
-            targets = route_map[pdf_page]
-            old_texts = [t["old_text"] for t in targets]
-            
-            # Slice the new text based on the lengths of the old texts
-            sliced_texts = slice_text_for_split_pages(new_text, old_texts)
-
-            for idx, target in enumerate(targets):
-                subpage_title = target["subpage"]
-                label = target["label"]
-                chunk = sliced_texts[idx]
-
-                # Update the working wikitext in memory
-                updated_text, err = inject_text_into_page(
-                    injection_queue[subpage_title], 
-                    label, 
-                    chunk, 
-                    master_pdf_filename
-                )
-                if not err:
-                    injection_queue[subpage_title] = updated_text
-
-        # 7. Upload Subpages Sequentially
-        log_area.text("☁️ Uploading updated subpages...")
-        upload_progress = st.progress(0)
-        
-        for idx, subpage_title in enumerate(subpages):
-            final_wikitext = cleanup_page_seams(injection_queue[subpage_title])
-            
-            res = upload_to_bahaiworks(
-                subpage_title, 
-                final_wikitext, 
-                "Bot: Cross-chapter book reproofread", 
-                session=session
-            )
-            
-            if res.get('edit', {}).get('result') != 'Success':
-                st.error(f"Upload failed for {subpage_title}: {res}")
-            
-            upload_progress.progress((idx + 1) / len(subpages))
-            time.sleep(1) # Rate limit protection
-
-        # 8. Mark Complete
+        # End of Book Cleanup
         queue_data[book_title]["status"] = "COMPLETED"
         queue_data[book_title]["last_updated"] = time.time()
         save_queue(queue_data)
-        st.success(f"✅ Finished: {book_title}")
+        st.success(f"✅ Finished Book: {book_title}")
 
-    st.balloons()
+    st.session_state.pop('running_book', None)
