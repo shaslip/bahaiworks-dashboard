@@ -204,42 +204,74 @@ except Exception as e:
     st.error(f"Authentication Failed: {e}")
     st.stop()
 
+# --- RESTORED: Master Queue Display ---
 queue_data = load_queue()
-pending_books = [t for t, d in queue_data.items() if d.get("status") in ["PENDING", "ERROR"]]
 
-if not pending_books:
-    st.success("No pending books in queue.")
+if queue_data:
+    df = [{"Book Title": title, "Status": data.get("status", "UNKNOWN")} for title, data in queue_data.items()]
+    st.subheader("📋 Processing Queue")
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+all_books = list(queue_data.keys())
+if not all_books:
+    st.warning("Queue is empty. Check your queue JSON file.")
     st.stop()
 
-target_book = st.selectbox("Select Target Book", pending_books)
+st.divider()
+
+# --- UNLOCKED: Select Any Book & Reset State ---
+col1, col2 = st.columns([3, 1])
+with col1:
+    target_book = st.selectbox("Select Target Book (All Statuses Available)", all_books)
+with col2:
+    st.write("")
+    st.write("")
+    if st.button("🗑️ Reset Book State", use_container_width=True, help="Deletes the local map cache so you can re-process a completed book."):
+        safe_title = target_book.replace("/", "_")
+        state_file = os.path.join(CACHE_DIR, f"{safe_title}_state.json")
+        if os.path.exists(state_file):
+            os.remove(state_file)
+        queue_data[target_book]["status"] = "PENDING"
+        save_queue(queue_data)
+        st.rerun()
+
 safe_title = target_book.replace("/", "_")
 state = load_book_state(safe_title)
 
-# --- STEP 1: ROUTE MAPPING ---
+# --- STEP 1: EXPLICIT AUTHORIZATION FOR ROUTE MAPPING ---
 if not state.get("subpages"):
-    with st.spinner("🔍 Scanning wiki subpages and building route map..."):
-        subpages = get_all_subpages(target_book, session)
-        route_map, master_pdf_filename, wikitext_cache = build_sequential_route_map(subpages, session)
-        
-        if not route_map or not master_pdf_filename:
-            st.error(f"Could not find any {{page}} tags or PDF references for {target_book}.")
-            st.stop()
+    st.info(f"Route map is missing or has been reset for **{target_book}**.")
+    if st.button("🛠️ Generate Chapter Map", type="primary"):
+        with st.spinner("🔍 Scanning wiki subpages and building route map..."):
+            subpages = get_all_subpages(target_book, session)
+            route_map, master_pdf_filename, wikitext_cache = build_sequential_route_map(subpages, session)
             
-        state["subpages"] = subpages
-        state["route_map"] = route_map
-        state["master_pdf"] = master_pdf_filename
-        state["wikitext_cache"] = wikitext_cache
-        save_book_state(safe_title, state)
+            if not route_map or not master_pdf_filename:
+                st.error(f"Could not find any {{page}} tags or PDF references for {target_book}.")
+                st.stop()
+                
+            state["subpages"] = subpages
+            state["route_map"] = route_map
+            state["master_pdf"] = master_pdf_filename
+            state["wikitext_cache"] = wikitext_cache
+            save_book_state(safe_title, state)
+            st.rerun()
+    st.stop() # Halts all execution until authorized
 
-# Display Map (No Status Tracking)
+# Display Map
 st.subheader(f"📖 Chapter Map: {target_book}")
 map_display = []
 for sp in state["subpages"]:
     pdf_pages = state["route_map"].get(sp, {}).get("pdf_pages", [])
     page_labels = [str(p["pdf_num"]) for p in pdf_pages]
+    
+    # Calculate simple status based on completed array
+    status = "✅ Done" if sp in state.get("completed_subpages", []) else "⏳ Pending"
+    
     map_display.append({
         "Wiki Subpage": sp,
-        "Mapped PDF Pages": ", ".join(page_labels) if page_labels else "None"
+        "Mapped PDF Pages": ", ".join(page_labels) if page_labels else "None",
+        "Status": status
     })
 st.dataframe(map_display, use_container_width=True, hide_index=True)
 
@@ -337,40 +369,32 @@ if st.button("🚀 Yes, Process This Chapter", type="primary"):
                 batch_data = json.load(f)
                 for p_num_str, text in batch_data.items():
                     all_extracted_text[int(p_num_str)] = text
-            os.remove(batch_file_path) # Cleanup
+            os.remove(batch_file_path)
 
     current_wikitext = state["wikitext_cache"].get(active_chapter, "")
 
     # Look-ahead logic for the last page of current chapter
     last_page_num = pages_to_process[-1]
     last_page_ai_text = all_extracted_text.get(last_page_num, "")
-    split_occurred = False
 
     if next_chapter:
         next_pages = state["route_map"].get(next_chapter, {}).get("pdf_pages", [])
         if next_pages and next_pages[0]["pdf_num"] == last_page_num:
-            # Overlap detected.
             log_container.write(f"✂️ Split boundary detected on Page {last_page_num} with next chapter.")
             
-            # Fetch old snippets to determine proportional ratio
             old_curr_chapter_snippet = page_data["old_texts"].get(last_page_num, "")
             old_next_chapter_snippet = state["route_map"][next_chapter]["old_texts"].get(last_page_num, "")
             
             part_current, part_next = apply_proportional_split(last_page_ai_text, old_curr_chapter_snippet, old_next_chapter_snippet)
             
-            # Reassign text for current chapter injection
             all_extracted_text[last_page_num] = part_current
             
-            # Update next chapter's cached old text so we don't re-extract it later
             next_wikitext = state["wikitext_cache"].get(next_chapter, "")
             state["route_map"][next_chapter]["old_texts"][last_page_num] = part_next
             
-            # Strip the duplicate page tag from the next chapter's wikitext since we are handling it now
             next_wikitext = re.sub(rf'\{{\{{page\|.*?page={last_page_num}\}}\}}\s*\{{\{{ocr.*?\}}\}}?\n?', '', next_wikitext, flags=re.IGNORECASE)
             
-            # Pre-inject the second half into the top of the next chapter's cache
             state["wikitext_cache"][next_chapter] = part_next + "\n\n" + next_wikitext.lstrip()
-            split_occurred = True
 
     # Inject Current Chapter
     for target in pdf_targets:
