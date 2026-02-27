@@ -603,8 +603,7 @@ if start_batch:
             if combined_text:
                 log_container.write("💾 Saving unmapped middle section locally...")
                 
-                # --- Apply cleanup and header formatting ---
-                combined_text = cleanup_page_seams(combined_text)
+                # --- Apply cleanup, header formatting, and NOTOC ---
                 combined_text = apply_final_formatting(combined_text, active_chapter, found_year)
                 
                 safe_sp = active_chapter.replace("/", "_")
@@ -681,7 +680,7 @@ if start_batch:
                 current_wikitext, err = inject_text_into_page(current_wikitext, label, chunk_to_inject, state["master_pdf"])
 
         # Final Cleanup & Local Save (NO WIKI UPLOAD)
-        final_wikitext = cleanup_page_seams(current_wikitext)
+        final_wikitext = current_wikitext
         
         # Clear legacy unproofread text before the first {{page| template
         if pdf_targets:
@@ -697,7 +696,7 @@ if start_batch:
         if overflow:
             final_wikitext = f"{overflow}\n\n{final_wikitext}".strip()
             
-        # --- Apply Header & OCR Cleanup ---
+        # --- Apply Header, Seam Cleanup, NOTOC, & OCR Cleanup ---
         final_wikitext = apply_final_formatting(final_wikitext, active_chapter, found_year)
             
         log_container.write(f"💾 Saving {active_chapter} to local txt file...")
