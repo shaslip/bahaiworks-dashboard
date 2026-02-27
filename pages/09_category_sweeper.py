@@ -8,6 +8,15 @@ import requests
 import fitz  # PyMuPDF
 from PIL import Image
 import io
+import concurrent.futures
+import math
+import multiprocessing
+
+# --- Force spawn to prevent gRPC crashes in background processes ---
+try:
+    multiprocessing.set_start_method('spawn', force=True)
+except RuntimeError:
+    pass
 
 # --- Path Setup ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -16,8 +25,8 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 # --- Imports ---
-from src.gemini_processor import proofread_with_formatting, transcribe_with_document_ai, reformat_raw_text
-from src.mediawiki_uploader import upload_to_bahaiworks, API_URL, fetch_wikitext, inject_text_into_page, get_csrf_token
+from src.batch_worker import process_pdf_batch
+from src.mediawiki_uploader import upload_to_bahaiworks, API_URL, fetch_wikitext, inject_text_into_page, get_csrf_token, cleanup_page_seams
 
 # --- Configuration ---
 if 'GEMINI_API_KEY' not in os.environ:
@@ -563,7 +572,7 @@ with tab_auto:
 
         # --- UI Setup ---
         progress_bar = st.progress(0)
-        current_status_line = st.empty() # For transient updates (like exclusions)
+        current_status_line = st.empty() 
         
         # 1. Index PDFs
         with st.spinner("Indexing Local PDFs..."):
@@ -586,30 +595,35 @@ with tab_auto:
             
             # --- Check Exclusions ---
             if any(wiki_title.startswith(exclude) for exclude in EXCLUDED_TITLES):
-                # Transient update (overwrites itself) to prevent spamming the log
                 current_status_line.text(f"Scanning {i}/{len(members)}: Skipping excluded '{wiki_title}'...")
                 save_state(i + 1, 1, wiki_title)
                 continue
             
-            # --- Log Processing Start ---
             log_small(f"📚 ({i+1}/{len(members)}) Processing: <b>{wiki_title}</b>", color="#444")
 
             # A. Fetch Wikitext
-            current_text, err = fetch_wikitext(wiki_title, session=session)
-            if err:
-                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Error fetching text: {err}", color="red")
-                continue
-            
-            # --- Normalize custom templates ---
-            current_text = normalize_page_templates(current_text, session)
+            wip_file_path = os.path.join(project_root, f"wip_{wiki_title.replace('/', '_')}.txt")
+            if not os.path.exists(wip_file_path):
+                current_text, err = fetch_wikitext(wiki_title, session=session)
+                if err:
+                    log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Error fetching text: {err}", color="red")
+                    continue
+                
+                # --- Normalize custom templates ---
+                current_text = normalize_page_templates(current_text, session)
+                # B. Header Processing
+                current_text = process_header(current_text, wiki_title, session=session)
 
-            # B. Header Processing
-            current_text = process_header(current_text, wiki_title, session=session)
+                with open(wip_file_path, "w", encoding="utf-8") as f:
+                    f.write(current_text)
+            else:
+                with open(wip_file_path, "r", encoding="utf-8") as f:
+                    current_text = f.read()
 
             # C. Identify PDF Filename
             file_match = re.search(r'file\s*=\s*([^|}\n]+)', current_text, re.IGNORECASE)
             if not file_match:
-                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ 'file=' parameter not found in wikitext. Skipping.", color="#d97706") # Orange
+                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ 'file=' parameter not found in wikitext. Skipping.", color="#d97706")
                 save_state(i + 1, 1, wiki_title) 
                 continue
                 
@@ -642,154 +656,141 @@ with tab_auto:
                 start_pdf_page = max(state['pdf_page_num'], scope_start)
             else:
                 start_pdf_page = scope_start
-                
-            # Reset Gemini failure counter for this book
-            gemini_failures = 0
 
-            # --- INNER LOOP: Pages ---
-            # --- Processing State ---
-            gemini_consecutive_failures = 0
-            docai_cooldown_pages = 0
-            permanent_docai = False
-            pdf_page = None
+            pages_to_process = list(range(start_pdf_page, scope_end + 1))
+            
+            if not pages_to_process:
+                log_area.text(f"No pages left to process for {pdf_filename}.")
+                save_state(i + 1, 1, wiki_title)
+                continue
 
-            # --- INNER LOOP: Pages ---
-            for pdf_page in range(start_pdf_page, scope_end + 1):
-                
-                # Stop Check
+            # --- PARALLEL BATCH PROCESSING ---
+            num_batches = 5
+            batch_size = math.ceil(len(pages_to_process) / num_batches)
+            batches = [pages_to_process[j:j + batch_size] for j in range(0, len(pages_to_process), batch_size)]
+
+            log_area.write(f"🚀 Starting parallel processing: {len(pages_to_process)} pages across {len(batches)} batches.")
+
+            batch_placeholders = {}
+            for b_idx in range(len(batches)):
+                start_pg = batches[b_idx][0]
+                end_pg = batches[b_idx][-1]
+                page_label = f"pg {start_pg}" if start_pg == end_pg else f"pgs {start_pg}-{end_pg}"
+                with st.expander(f"Batch {b_idx+1} Status ({page_label})", expanded=True):
+                    batch_placeholders[b_idx] = st.empty()
+
+            from multiprocessing import Manager
+            os.environ["PYTHONPATH"] = project_root
+            
+            with Manager() as manager:
+                shared_logs = manager.dict()
+                for b_idx in range(len(batches)):
+                    shared_logs[b_idx] = manager.list()
+
+                with st.spinner(f"Processing {pdf_filename} in parallel batches..."):
+                    executor = concurrent.futures.ProcessPoolExecutor(max_workers=num_batches)
+                    futures = []
+                    for batch_id, batch_pages in enumerate(batches):
+                        future = executor.submit(
+                            process_pdf_batch,
+                            batch_id,
+                            batch_pages,
+                            local_path,
+                            ocr_strategy,
+                            pdf_filename,
+                            project_root,
+                            shared_logs[batch_id]
+                        )
+                        futures.append(future)
+
+                    # Polling
+                    while True:
+                        all_done = True
+                        for batch_id, future in enumerate(futures):
+                            current_logs = list(shared_logs[batch_id])
+                            if current_logs:
+                                batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
+                            if not future.done():
+                                all_done = False
+                        if all_done:
+                            break
+                        time.sleep(1)
+
+                executor.shutdown(wait=False, cancel_futures=True)
+                import os as os_mod, signal
+                if hasattr(executor, '_processes') and executor._processes is not None:
+                    for pid in executor._processes.keys():
+                        try:
+                            os_mod.kill(pid, signal.SIGKILL)
+                        except OSError:
+                            pass
+
+            # --- SEQUENTIAL MERGE ---
+            log_area.text(f"🔄 Merging parallel batches and injecting wikitext for {pdf_filename}...")
+            all_extracted_text = {}
+            for batch_id in range(len(batches)):
+                batch_file_path = os.path.join(project_root, f"temp_{pdf_filename}_batch_{batch_id}.json")
+                if os.path.exists(batch_file_path):
+                    with open(batch_file_path, "r", encoding="utf-8") as f:
+                        batch_data = json.load(f)
+                        for p_num_str, text in batch_data.items():
+                            all_extracted_text[int(p_num_str)] = text
+
+            for page_num in pages_to_process:
                 if stop_btn:
-                    st.warning("Stopping requested...")
-                    break 
-                
-                correct_label = calculate_page_label(pdf_page, anchor_pdf_page)
-                # Transient status update
-                current_status_line.text(f"Working on: {wiki_title} | Page {correct_label}")
+                    st.warning("Stopping requested... finishing current document.")
+                    break
 
-                # 1. Get Image
-                img = get_page_image_data(local_path, pdf_page)
-                if not img:
-                    log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Image Error (Page {correct_label})", color="red")
+                final_text = all_extracted_text.get(page_num, "")
+                is_last_page = (page_num == scope_end)
+                correct_label = calculate_page_label(page_num, anchor_pdf_page)
+                
+                current_text = find_and_fix_tag_by_page_num(current_text, pdf_filename, page_num, correct_label)
+
+                if not final_text:
+                    log_area.text(f"⚠️ Page {page_num} was empty or failed. Skipping injection.")
+                    if not is_last_page:
+                        continue
+
+                if is_last_page and final_text:
+                    if "__NOTOC__" not in current_text:
+                        final_text += "\n__NOTOC__"
+
+                final_wikitext, inject_error = inject_text_into_page(current_text, correct_label, final_text, pdf_filename)
+                
+                if inject_error:
+                    log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Injection Error ({correct_label}): {inject_error}", color="red")
                     continue
-
-                # 2. TAG FIXING
-                if pdf_page > start_pdf_page:
-                    current_text, _ = fetch_wikitext(wiki_title, session=session)
-                    # --- Normalize refreshed text ---
-                    current_text = normalize_page_templates(current_text, session)
+                    
+                current_text = final_wikitext
                 
-                current_text = find_and_fix_tag_by_page_num(current_text, pdf_filename, pdf_page, correct_label)
+                with open(wip_file_path, "w", encoding="utf-8") as f:
+                    f.write(current_text)
 
-                # 3. AI Processing
-                final_text = ""
-                try:
-                    # --- Determine Strategy ---
-                    # We force DocAI if:
-                    # 1. User selected "DocAI Only"
-                    # 2. We are permanently locked out of Gemini (3rd strike)
-                    # 3. We are in a "cooldown" period (2 failures triggered 5 pages of DocAI)
-                    force_docai = (ocr_strategy == "DocAI Only") or permanent_docai or (docai_cooldown_pages > 0)
-
-                    if force_docai:
-                        # --- DocAI Path ---
-                        raw_ocr = transcribe_with_document_ai(img)
-                        # Check for specific DOCAI_ERROR
-                        if not raw_ocr or "DOCAI_ERROR" in raw_ocr:
-                            # Fallback for DocAI failure (rare)
-                            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ DocAI failed on {correct_label}. Trying Gemini fallback.", color="#d97706")
-                            final_text = proofread_with_formatting(img)
-                        else:
-                            # --- CHANGED: Formatting Fallback Logic ---
-                            formatted_text = reformat_raw_text(raw_ocr)
-                            if "FORMATTING_ERROR" in formatted_text:
-                                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ Formatting failed. Saving RAW OCR.", color="#d97706")
-                                final_text = raw_ocr + "\n\n"
-                            else:
-                                final_text = formatted_text
-                        
-                        # Decrement Cooldown if active
-                        if docai_cooldown_pages > 0:
-                            docai_cooldown_pages -= 1
-                            if docai_cooldown_pages == 0:
-                                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;🟢 Cooldown complete. Re-enabling Gemini next page.", color="green")
-                    else:
-                        # --- Gemini Path ---
-                        final_text = proofread_with_formatting(img)
-                        
-                        if final_text and "GEMINI_ERROR" in final_text:
-                            gemini_consecutive_failures += 1
-                            
-                            # Handle Failure Logic
-                            if gemini_consecutive_failures == 2:
-                                docai_cooldown_pages = 5
-                                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ 2 Consecutive Failures on {correct_label}. Switching to DocAI for 5 pages.", color="#d97706")
-                            
-                            elif gemini_consecutive_failures >= 3:
-                                permanent_docai = True
-                                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⛔ 3rd Strike (Retry Failed) on page {correct_label}. Switching to DocAI for remainder of book.", color="red")
-                            
-                            else:
-                                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ Gemini Error on page {correct_label} ({gemini_consecutive_failures}/2). Fallback to DocAI.", color="#d97706")
-
-                            # Immediate Fallback for THIS page
-                            raw_ocr = transcribe_with_document_ai(img)
-                            
-                            if "DOCAI_ERROR" in raw_ocr:
-                                final_text = "DOCAI_ERROR" # Let the safety check catch this
-                            else:
-                                # --- CHANGED: Formatting Fallback Logic ---
-                                formatted_text = reformat_raw_text(raw_ocr)
-                                if "FORMATTING_ERROR" in formatted_text:
-                                    log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ Formatting failed. Saving RAW OCR.", color="#d97706")
-                                    final_text = raw_ocr + "\n\n"
-                                else:
-                                    final_text = formatted_text
-                        
-                        else:
-                            # Success! Reset consecutive counter.
-                            gemini_consecutive_failures = 0
-
-                    system_error_flags = ["GEMINI_ERROR", "DOCAI_ERROR", "FORMATTING_ERROR"]
-                    if not final_text or any(flag in final_text for flag in system_error_flags):
-                        log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Processing failed for Page {correct_label}", color="red")
-                        continue
-
-                    # 4. Inject & Upload
-                    new_wikitext, inject_err = inject_text_into_page(current_text, correct_label, final_text, pdf_filename)
+                if is_last_page:
+                    log_area.text(f"🧹 Running final seam cleanup...")
+                    cleaned_text = cleanup_page_seams(current_text)
+                    cleaned_text = re.sub(r'https?://(?:www\.)?youtu\.be/([a-zA-Z0-9_-]+)', r'https://www.youtube.com/watch?v=\1', cleaned_text)
                     
-                    if inject_err:
-                        log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Injection Error ({correct_label}): {inject_err}", color="red")
-                        continue
-                    
-                    # 5. Check for __NOTOC__
-                    if pdf_page == scope_end and "__NOTOC__" not in new_wikitext:
-                        new_wikitext += "\n__NOTOC__"
-                    
-                    # Upload
-                    res = upload_to_bahaiworks(wiki_title, new_wikitext, f"Bot: Proofread {correct_label} (PDF {pdf_page})", session=session)
+                    res = upload_to_bahaiworks(wiki_title, cleaned_text, f"Bot: Auto Proofread Full Range (Ended PDF {page_num})", session=session)
                     
                     if res.get('edit', {}).get('result') == 'Success':
-                        save_state(i, pdf_page + 1, wiki_title)
-                        current_text = new_wikitext 
+                        save_state(i + 1, 1, wiki_title)
                     else:
-                        log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Upload API Error ({correct_label}): {res}", color="red")
-                        break 
-                
-                except Exception as e:
-                    log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Exception ({correct_label}): {e}", color="red")
-                    break 
+                        log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Upload API Error: {res}", color="red")
+                        break
                     
-                time.sleep(1)
+                    if os.path.exists(wip_file_path):
+                        os.remove(wip_file_path)
+                    
+                    for batch_id in range(len(batches)):
+                        b_path = os.path.join(project_root, f"temp_{pdf_filename}_batch_{batch_id}.json")
+                        if os.path.exists(b_path):
+                            os.remove(b_path)
 
             if stop_btn:
                 break 
 
-            # Book Completed
-            # If the loop finished (pdf_page reached scope_end) OR 
-            # if the loop was skipped because start > end (meaning book was already done)
-            if (pdf_page is not None and pdf_page == scope_end) or (start_pdf_page > scope_end):
-                save_state(i + 1, 1, wiki_title)
-
-            # Update UI
             progress_bar.progress((i + 1 - start_idx) / (len(members) - start_idx))
             
             if run_mode.startswith("Test"):
@@ -862,7 +863,7 @@ with tab_manual:
             st.error(f"PDF '{pdf_filename}' not found locally.")
             st.stop()
             
-        # 4. Get Bounds & Anchor (Needed for scope_end cleanup check)
+        # 4. Get Bounds & Anchor
         try:
             with fitz.open(local_path) as doc:
                 total_pdf_pages = len(doc)
@@ -885,126 +886,128 @@ with tab_manual:
                 st.stop()
             pdf_targets = list(range(1, anchor_pdf_page))
         else:
-            # Convert book pages to PDF pages for a unified loop
             pdf_targets = [bp + anchor_pdf_page - 1 for bp in target_labels]
 
-        # Variables for Error Handling
-        gemini_consecutive_failures = 0
-        docai_cooldown_pages = 0
-        permanent_docai = False
-        
         progress_bar = st.progress(0)
         
-        # --- LOOP ---
+        # --- PARALLEL BATCH PROCESSING ---
+        num_batches = 5
+        batch_size = math.ceil(len(pdf_targets) / num_batches)
+        batches = [pdf_targets[j:j + batch_size] for j in range(0, len(pdf_targets), batch_size)]
+
+        st.write(f"🚀 Starting parallel processing: {len(pdf_targets)} pages across {len(batches)} batches.")
+
+        batch_placeholders = {}
+        for i in range(len(batches)):
+            start_pg = batches[i][0]
+            end_pg = batches[i][-1]
+            page_label = f"pg {start_pg}" if start_pg == end_pg else f"pgs {start_pg}-{end_pg}"
+            with st.expander(f"Batch {i+1} Status ({page_label})", expanded=True):
+                batch_placeholders[i] = st.empty()
+
+        from multiprocessing import Manager
+        os.environ["PYTHONPATH"] = project_root
+        
+        with Manager() as manager:
+            shared_logs = manager.dict()
+            for i in range(len(batches)):
+                shared_logs[i] = manager.list()
+
+            with st.spinner(f"Processing manual range in parallel batches..."):
+                executor = concurrent.futures.ProcessPoolExecutor(max_workers=num_batches)
+                futures = []
+                for batch_id, batch_pages in enumerate(batches):
+                    future = executor.submit(
+                        process_pdf_batch,
+                        batch_id,
+                        batch_pages,
+                        local_path,
+                        ocr_strategy,
+                        pdf_filename,
+                        project_root,
+                        shared_logs[batch_id]
+                    )
+                    futures.append(future)
+
+                # Polling
+                while True:
+                    if manual_stop_btn: 
+                        st.warning("Stopping parallel jobs...")
+                        break
+                    all_done = True
+                    for batch_id, future in enumerate(futures):
+                        current_logs = list(shared_logs[batch_id])
+                        if current_logs:
+                            batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
+                        if not future.done():
+                            all_done = False
+                    if all_done:
+                        break
+                    time.sleep(1)
+
+            executor.shutdown(wait=False, cancel_futures=True)
+            import os as os_mod, signal
+            if hasattr(executor, '_processes') and executor._processes is not None:
+                for pid in executor._processes.keys():
+                    try:
+                        os_mod.kill(pid, signal.SIGKILL)
+                    except OSError:
+                        pass
+
+        # --- SEQUENTIAL MERGE ---
+        st.write("🔄 Merging parallel batches and injecting wikitext...")
+        all_extracted_text = {}
+        for batch_id in range(len(batches)):
+            batch_file_path = os.path.join(project_root, f"temp_{pdf_filename}_batch_{batch_id}.json")
+            if os.path.exists(batch_file_path):
+                with open(batch_file_path, "r", encoding="utf-8") as f:
+                    batch_data = json.load(f)
+                    for p_num_str, text in batch_data.items():
+                        all_extracted_text[int(p_num_str)] = text
+
         for idx, pdf_page in enumerate(pdf_targets):
-            if manual_stop_btn: 
-                st.warning("Stopping...")
-                break
-            
             correct_label = calculate_page_label(pdf_page, anchor_pdf_page)
+            current_status_line.text(f"Merging: Book Page {correct_label}")
             
-            current_status_line.text(f"Processing: Book Page {correct_label}")
-            
-            # A. Get Image
-            img = get_page_image_data(local_path, pdf_page)
-            if not img:
-                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Image Error", color="red")
+            final_text = all_extracted_text.get(pdf_page, "")
+            current_text = find_and_fix_tag_by_page_num(current_text, pdf_filename, pdf_page, correct_label)
+
+            if not final_text:
+                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Processing failed for Page {correct_label}", color="red")
                 continue
 
-            # B. Refresh Text & Fix Tags
-            if idx > 0: 
-                current_text, _ = fetch_wikitext(manual_title, session=session)
-                # --- Normalize refreshed text ---
-                current_text = normalize_page_templates(current_text, session)
+            # Inject & Replace Locally
+            final_wikitext, inject_err = inject_text_into_page(current_text, correct_label, final_text, pdf_filename)
+            if inject_err:
+                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Injection Failed: {inject_err}", color="red")
+                continue
                 
-            current_text = find_and_fix_tag_by_page_num(current_text, pdf_filename, pdf_page, correct_label)
+            current_text = final_wikitext
             
-            # C. AI Processing
-            final_text = ""
-            try:
-                # --- Determine Strategy ---
-                force_docai = (ocr_strategy == "DocAI Only") or permanent_docai or (docai_cooldown_pages > 0)
-
-                if force_docai:
-                    # --- DocAI Path ---
-                    raw_ocr = transcribe_with_document_ai(img)
-                    if not raw_ocr or "DOCAI_ERROR" in raw_ocr:
-                        log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ DocAI failed on {correct_label}. Trying Gemini fallback.", color="#d97706")
-                        final_text = proofread_with_formatting(img)
-                    else:
-                        formatted_text = reformat_raw_text(raw_ocr)
-                        if "FORMATTING_ERROR" in formatted_text:
-                            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ Formatting failed. Saving RAW OCR.", color="#d97706")
-                            final_text = raw_ocr + "\n\n"
-                        else:
-                            final_text = formatted_text
-                    
-                    if docai_cooldown_pages > 0:
-                        docai_cooldown_pages -= 1
-                        if docai_cooldown_pages == 0:
-                            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;🟢 Cooldown complete. Re-enabling Gemini next page.", color="green")
-                else:
-                    # --- Gemini Path ---
-                    final_text = proofread_with_formatting(img)
-                    
-                    if final_text and "GEMINI_ERROR" in final_text:
-                        gemini_consecutive_failures += 1
-                        
-                        if gemini_consecutive_failures == 2:
-                            docai_cooldown_pages = 5
-                            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ 2 Consecutive Failures on {correct_label}. Switching to DocAI for 5 pages.", color="#d97706")
-                        
-                        elif gemini_consecutive_failures >= 3:
-                            permanent_docai = True
-                            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⛔ 3rd Strike (Retry Failed) on page {correct_label}. Switching to DocAI for remainder of book.", color="red")
-                        
-                        else:
-                            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ Gemini Error on page {correct_label} ({gemini_consecutive_failures}/2). Fallback to DocAI.", color="#d97706")
-
-                        raw_ocr = transcribe_with_document_ai(img)
-                        
-                        if "DOCAI_ERROR" in raw_ocr:
-                            final_text = "DOCAI_ERROR" 
-                        else:
-                            formatted_text = reformat_raw_text(raw_ocr)
-                            if "FORMATTING_ERROR" in formatted_text:
-                                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;⚠️ Formatting failed. Saving RAW OCR.", color="#d97706")
-                                final_text = raw_ocr + "\n\n"
-                            else:
-                                final_text = formatted_text
-                    
-                    else:
-                        gemini_consecutive_failures = 0
-
-                system_error_flags = ["GEMINI_ERROR", "DOCAI_ERROR", "FORMATTING_ERROR"]
-                if not final_text or any(flag in final_text for flag in system_error_flags):
-                    log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Processing failed for Page {correct_label}", color="red")
-                    continue
-
-                # D. Inject & Upload
-                new_wikitext, inject_err = inject_text_into_page(current_text, correct_label, final_text, pdf_filename)
-                if inject_err:
-                    log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Injection Failed: {inject_err}", color="red")
-                    continue
-                
-                # [CLEANUP] Compare current PDF page to scope_end
-                if pdf_page == scope_end:
-                    if "__NOTOC__" not in new_wikitext:
-                        new_wikitext += "\n__NOTOC__"
-                        log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;🧹 Appended __NOTOC__ (End of Document)", color="blue")
-
-                res = upload_to_bahaiworks(manual_title, new_wikitext, f"Bot: Manual Proofread {correct_label}", session=session)
-                
-                if res.get('edit', {}).get('result') == 'Success':
-                    log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;✅ Uploaded Page {correct_label}", color="green")
-                    current_text = new_wikitext 
-                else:
-                    log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Upload Failed: {res}", color="red")
-                    
-            except Exception as e:
-                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Exception: {e}", color="red")
+            # [CLEANUP] Compare current PDF page to scope_end
+            if pdf_page == scope_end:
+                if "__NOTOC__" not in current_text:
+                    current_text += "\n__NOTOC__"
+                    log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;🧹 Appended __NOTOC__ (End of Document)", color="blue")
             
             progress_bar.progress((idx + 1) / len(pdf_targets))
-            time.sleep(1)
             
+        # FINAL UPLOAD
+        st.write("🚀 Uploading completed manual range to Bahai.works...")
+        cleaned_text = cleanup_page_seams(current_text)
+        cleaned_text = re.sub(r'https?://(?:www\.)?youtu\.be/([a-zA-Z0-9_-]+)', r'https://www.youtube.com/watch?v=\1', cleaned_text)
+        
+        res = upload_to_bahaiworks(manual_title, cleaned_text, f"Bot: Manual Proofread Range ({manual_range})", session=session)
+        
+        if res.get('edit', {}).get('result') == 'Success':
+            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;✅ Uploaded successfully.", color="green")
+        else:
+            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Upload Failed: {res}", color="red")
+
+        # Clean temp batch files
+        for batch_id in range(len(batches)):
+            b_path = os.path.join(project_root, f"temp_{pdf_filename}_batch_{batch_id}.json")
+            if os.path.exists(b_path):
+                os.remove(b_path)
+                
         st.success("Manual Range Complete!")
