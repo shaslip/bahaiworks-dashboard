@@ -3,6 +3,7 @@ import json
 import re
 import time
 import io
+import json_repair
 import google.generativeai as genai
 from google.cloud import documentai
 from google.api_core.client_options import ClientOptions
@@ -331,3 +332,66 @@ def proofread_with_formatting(image):
                 time.sleep(15)
             else:
                 return f"GEMINI_ERROR: {str(e)}"
+
+def get_chapter_split_indices(page_text, target_chapter, unmapped_chapters, custom_instruction):
+    """
+    Chunks page text into paragraphs and asks Gemini to identify the starting index for specific chapters.
+    """
+    model = genai.GenerativeModel(MODEL_NAME)
+    
+    # Chunk the page text by natural paragraph breaks
+    blocks = [b.strip() for b in re.split(r'\n{2,}', page_text) if b.strip()]
+    blocks_dict = {str(i): block for i, block in enumerate(blocks)}
+    blocks_json = json.dumps(blocks_dict, indent=2)
+    
+    chapters_to_find = [target_chapter] + unmapped_chapters
+    
+    prompt = f"""
+    You are a text processing assistant. I have a single page of text that has been chunked into numbered blocks.
+    
+    Context: {custom_instruction}
+    
+    Your task is to identify which block index marks the START of the following chapters/sections:
+    {json.dumps(chapters_to_find)}
+    
+    Here are the text blocks:
+    {blocks_json}
+    
+    Return ONLY a valid JSON object where the keys are the chapter names found, and the values are the integer block index where that chapter starts. 
+    If a chapter is not found on this page, do not include it in the JSON.
+    Do not output any markdown formatting or backticks, just the raw JSON.
+    Example: {{"{target_chapter}": 4, "Another Chapter": 7}}
+    """
+    
+    try:
+        response = model.generate_content(prompt)
+        result = json_repair.loads(response.text)
+        return result, blocks
+    except Exception as e:
+        print(f"LLM split identification failed: {e}")
+        return {}, blocks
+
+def apply_chunked_split(page_text, target_chapter, unmapped_chapters, custom_instruction):
+    """
+    Divides a single page of text into multiple chapter chunks based on LLM-identified indices.
+    """
+    indices, blocks = get_chapter_split_indices(page_text, target_chapter, unmapped_chapters, custom_instruction)
+    
+    if not indices or target_chapter not in indices:
+        return {"_previous_": page_text} # Fallback if LLM fails
+        
+    # Sort the found chapters by their starting block index ascending
+    sorted_splits = sorted(indices.items(), key=lambda x: int(x[1]))
+    results = {}
+    
+    # Everything before the very first split belongs to the previous chapter/page
+    first_split_idx = int(sorted_splits[0][1])
+    results["_previous_"] = "\n\n".join(blocks[:first_split_idx])
+    
+    # Extract text for each identified chapter based on the boundaries
+    for i, (chap_name, start_idx) in enumerate(sorted_splits):
+        start_idx = int(start_idx)
+        end_idx = int(sorted_splits[i+1][1]) if i + 1 < len(sorted_splits) else len(blocks)
+        results[chap_name] = "\n\n".join(blocks[start_idx:end_idx])
+        
+    return results
