@@ -113,7 +113,7 @@ def save_book_state(safe_title, state):
 # ==============================================================================
 
 def get_all_subpages(root_title, session):
-    pages = [root_title]
+    pages = []
     params = {
         "action": "query",
         "list": "allpages",
