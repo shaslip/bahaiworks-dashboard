@@ -760,3 +760,4 @@ if start_batch:
     # After loop finishes
     progress_bar.progress(1.0)
     st.success("✅ All chapters processed and saved locally!")
+    st.rerun()
