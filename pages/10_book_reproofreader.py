@@ -253,9 +253,9 @@ except Exception as e:
 queue_data = load_queue()
 
 if queue_data:
-    df = [{"Book Title": title, "Status": data.get("status", "UNKNOWN")} for title, data in queue_data.items()]
-    st.subheader("📋 Processing Queue")
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    with st.expander("📋 Processing Queue", expanded=False):
+        df = [{"Book Title": title, "Status": data.get("status", "UNKNOWN")} for title, data in queue_data.items()]
+        st.dataframe(df, use_container_width=True, hide_index=True)
 
 all_books = list(queue_data.keys())
 if not all_books:
