@@ -296,7 +296,7 @@ queue_data = load_queue()
 if queue_data:
     with st.expander("📋 Processing Queue", expanded=False):
         df = [{"Book Title": title, "Status": data.get("status", "UNKNOWN")} for title, data in queue_data.items()]
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.dataframe(df, width='stretch', hide_index=True)
 
 all_books = list(queue_data.keys())
 if not all_books:
@@ -312,7 +312,7 @@ with col1:
 with col2:
     st.write("")
     st.write("")
-    if st.button("🗑️ Reset Book State", use_container_width=True, help="Deletes the local map cache so you can re-process a completed book."):
+    if st.button("🗑️ Reset Book State", width='stretch', help="Deletes the local map cache so you can re-process a completed book."):
         safe_title = target_book.replace("/", "_")
         state_file = os.path.join(CACHE_DIR, f"{safe_title}_state.json")
         
@@ -371,7 +371,7 @@ for sp in state["subpages"]:
         "Mapped PDF Pages": ", ".join(page_labels) if page_labels else "None",
         "Needs Split Logic": "Yes" if needs_split else "No"
     })
-st.dataframe(map_display, use_container_width=True, hide_index=True)
+st.dataframe(map_display, width='stretch', hide_index=True)
 
 # ==============================================================================
 # STEP 3: MASTER JSON GENERATION
@@ -495,7 +495,7 @@ if not subpages_to_process:
     st.subheader("Step 5: Wiki Upload Phase")
     st.info(f"Ready to upload {len(subpages_to_upload)} sections to the wiki.")
     
-    if st.button("🌐 Upload All Chapters to Wiki", type="primary", use_container_width=True):
+    if st.button("🌐 Upload All Chapters to Wiki", type="primary", width='stretch'):
         progress_bar = st.progress(0)
         status_text = st.empty()
         log_container = st.container(border=True)
@@ -548,9 +548,9 @@ st.info(f"Ready to process {len(subpages_to_process)} remaining sections locally
 
 col_start, col_stop = st.columns([1, 1])
 with col_start:
-    start_batch = st.button("🚀 Start Processing All Chapters", type="primary", use_container_width=True)
+    start_batch = st.button("🚀 Start Processing All Chapters", type="primary", width='stretch')
 with col_stop:
-    if st.button("🛑 Stop Execution", use_container_width=True):
+    if st.button("🛑 Stop Execution", width='stretch'):
         st.warning("Execution stopped.")
         st.stop()
 
