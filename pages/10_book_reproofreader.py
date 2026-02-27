@@ -226,7 +226,12 @@ def build_sequential_route_map(subpages, session, input_folder):
     for ch in route_map:
         text = wikitext_cache.get(ch, "")
         stripped_text = text.lstrip()
-        if stripped_text and not stripped_text.lower().startswith("{{page|"):
+        
+        # Ignore common leading tags that shouldn't trigger a split
+        prefix_pattern = r'^(?:<accesscontrol>.*?</accesscontrol>\s*|\{\{(?:header|Publicationinfo)[^}]*\}\}\s*)*'
+        clean_text = re.sub(prefix_pattern, '', stripped_text, flags=re.IGNORECASE | re.DOTALL)
+        
+        if clean_text and not clean_text.lower().startswith("{{page|"):
             route_map[ch]["needs_split"] = True
 
     # --- Re-sort subpages strictly by their lowest PDF page number ---
@@ -686,7 +691,21 @@ if start_batch:
         if pdf_targets:
             match = re.search(r'\{\{page\|', final_wikitext, flags=re.IGNORECASE)
             if match:
-                final_wikitext = final_wikitext[match.start():]
+                leading_text = final_wikitext[:match.start()]
+                
+                # Explicitly preserve accesscontrol and Publicationinfo tags
+                safe_tags = []
+                access_match = re.search(r'<accesscontrol>.*?</accesscontrol>', leading_text, flags=re.IGNORECASE | re.DOTALL)
+                if access_match:
+                    safe_tags.append(access_match.group(0))
+                    
+                pub_match = re.search(r'\{\{Publicationinfo\}\}', leading_text, flags=re.IGNORECASE)
+                if pub_match:
+                    safe_tags.append(pub_match.group(0))
+                    
+                preserved_prefix = "\n".join(safe_tags) + "\n" if safe_tags else ""
+                
+                final_wikitext = preserved_prefix + final_wikitext[match.start():]
             else:
                 # If no page template is found, delete the legacy content entirely
                 final_wikitext = ""
