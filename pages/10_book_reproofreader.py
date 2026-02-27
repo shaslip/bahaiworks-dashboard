@@ -285,6 +285,7 @@ def find_local_pdf(filename, root_folder):
 st.title("📚 Book Re-Proofreader (Parallel Batch)")
 
 st.sidebar.header("Configuration")
+execution_mode = st.sidebar.radio("Execution Mode", ["1 Book (Test)", "All Books (Production)"])
 input_folder = st.sidebar.text_input("Local PDF Root Folder", value="/home/sarah/Desktop/Projects/Bahai.works/English/")
 ocr_strategy = st.sidebar.radio("OCR Strategy", ["Gemini (Default)", "DocAI Only"])
 
@@ -308,6 +309,219 @@ if not all_books:
     st.warning("Queue is empty. Check your queue JSON file.")
     st.stop()
 
+# ==============================================================================
+# AUTOMATED PRODUCTION MODE (ALL BOOKS)
+# ==============================================================================
+if execution_mode == "All Books (Production)":
+    st.divider()
+    st.header("🤖 Automated Production Mode")
+    
+    pending_books = [b for b, d in queue_data.items() if d.get("status", "").upper() == "PENDING"]
+    
+    if not pending_books:
+        st.success("No 'PENDING' books found in the queue.")
+        st.stop()
+        
+    st.info(f"Found {len(pending_books)} book(s) marked as PENDING. The script will process Steps 1-3, mark them READY, and sleep for 2 hours between books.")
+    
+    if st.button("▶️ Start Automation Loop", type="primary", use_container_width=True):
+        overall_progress = st.progress(0)
+        overall_status = st.empty()
+        log_container = st.container(border=True)
+        
+        for idx, target_book in enumerate(pending_books):
+            overall_status.markdown(f"### Processing Book {idx+1}/{len(pending_books)}: `{target_book}`")
+            safe_title = target_book.replace("/", "_")
+            state = load_book_state(safe_title)
+            
+            # --- AUTO STEP 1: Generate Map ---
+            log_container.write(f"🔍 Generating Chapter Map for {target_book}...")
+            subpages = get_all_subpages(target_book, session)
+            route_map, master_pdf_filename, wikitext_cache, ordered_subpages = build_sequential_route_map(subpages, session, input_folder)
+            
+            if not route_map or not master_pdf_filename:
+                log_container.error(f"❌ Could not find PDF references for {target_book}. Marking ERROR and skipping.")
+                queue_data[target_book]["status"] = "ERROR: No Map"
+                save_queue(queue_data)
+                continue
+                
+            state["subpages"] = ordered_subpages
+            state["route_map"] = route_map
+            state["master_pdf"] = master_pdf_filename
+            state["wikitext_cache"] = wikitext_cache
+            save_book_state(safe_title, state)
+            
+            # --- AUTO STEP 2: Generate Master JSON ---
+            local_pdf_path = find_local_pdf(master_pdf_filename, input_folder)
+            if not local_pdf_path:
+                log_container.error(f"❌ Local PDF not found for '{master_pdf_filename}'. Marking ERROR and skipping.")
+                queue_data[target_book]["status"] = "ERROR: Missing PDF"
+                save_queue(queue_data)
+                continue
+                
+            pdf_dir = os.path.dirname(local_pdf_path)
+            master_json_path = os.path.join(pdf_dir, f"master_{master_pdf_filename}.json")
+            
+            if not os.path.exists(master_json_path):
+                log_container.write(f"⚙️ Generating Master JSON for {master_pdf_filename}...")
+                all_mapped_pages = set()
+                for ch, data in route_map.items():
+                    for p in data.get("pdf_pages", []):
+                        all_mapped_pages.add(p["pdf_num"])
+                pages_to_process = sorted(list(all_mapped_pages))
+                
+                num_batches = 20
+                batch_size = math.ceil(len(pages_to_process) / num_batches) if len(pages_to_process) > 0 else 1
+                batches = [pages_to_process[j:j + batch_size] for j in range(0, len(pages_to_process), batch_size)]
+                
+                from multiprocessing import Manager
+                os.environ["PYTHONPATH"] = project_root
+                
+                with Manager() as manager:
+                    shared_logs = manager.dict()
+                    for i in range(len(batches)): shared_logs[i] = manager.list()
+                    
+                    executor = concurrent.futures.ProcessPoolExecutor(max_workers=num_batches)
+                    futures = []
+                    for batch_id, batch_pages in enumerate(batches):
+                        if not batch_pages: continue
+                        future = executor.submit(
+                            process_pdf_batch, batch_id, batch_pages, local_pdf_path, ocr_strategy, 
+                            master_pdf_filename, pdf_dir, shared_logs[batch_id]
+                        )
+                        futures.append(future)
+                        
+                    # Wait for all batches to finish
+                    concurrent.futures.wait(futures)
+                    executor.shutdown(wait=False)
+                    
+                log_container.write("🔄 Assembling pages into Master JSON...")
+                master_data = {}
+                for batch_id in range(len(batches)):
+                    batch_file_path = os.path.join(pdf_dir, f"temp_{master_pdf_filename}_batch_{batch_id}.json")
+                    if os.path.exists(batch_file_path):
+                        with open(batch_file_path, "r", encoding="utf-8") as f:
+                            batch_data = json.load(f)
+                            for p_num_str, text in batch_data.items():
+                                master_data[p_num_str] = text
+                        os.remove(batch_file_path)
+                        
+                with open(master_json_path, 'w', encoding='utf-8') as f:
+                    json.dump(master_data, f, indent=4)
+            else:
+                log_container.write(f"📄 Master JSON already exists for {master_pdf_filename}.")
+                with open(master_json_path, 'r', encoding='utf-8') as f:
+                    master_data = json.load(f)
+                    
+            # --- AUTO STEP 3: Offline Batch Processing ---
+            log_container.write("💾 Processing subpages locally...")
+            subpages_to_process = [sp for sp in state["subpages"] if sp not in state.get("completed_subpages", [])]
+            if "overflow_cache" not in state: state["overflow_cache"] = {}
+            
+            for active_chapter in subpages_to_process:
+                active_chapter_idx = state["subpages"].index(active_chapter)
+                next_chapter = state["subpages"][active_chapter_idx + 1] if active_chapter_idx + 1 < len(state["subpages"]) else None
+                
+                current_wikitext_for_year = state["wikitext_cache"].get(active_chapter, "")
+                found_year = None
+                cat_match = re.search(r'\[\[Category:\s*(\d{4})\s*\]\]', current_wikitext_for_year, re.IGNORECASE)
+                if cat_match: found_year = cat_match.group(1)
+                
+                page_data = state["route_map"].get(active_chapter, {})
+                pdf_targets = page_data.get("pdf_pages", [])
+                
+                # Unmapped Chapter
+                if not pdf_targets:
+                    current_wikitext = state["wikitext_cache"].get(active_chapter, "")
+                    overflow = state.get("overflow_cache", {}).get(active_chapter, "")
+                    combined_text = overflow.strip() if overflow else current_wikitext.strip()
+                    
+                    if combined_text:
+                        combined_text = apply_final_formatting(combined_text, active_chapter, found_year)
+                        safe_sp = active_chapter.replace("/", "_")
+                        with open(os.path.join(pdf_dir, f"{safe_sp}.txt"), "w", encoding="utf-8") as f:
+                            f.write(combined_text)
+                    state["completed_subpages"].append(active_chapter)
+                    save_book_state(safe_title, state)
+                    continue
+                    
+                pages_to_process_ch = [t["pdf_num"] for t in pdf_targets]
+                all_extracted_text = {int(p): master_data[str(p)] for p in pages_to_process_ch if str(p) in master_data}
+                
+                # LLM Split logic
+                all_ghost_chapters = [ch for ch in state["subpages"] if not state["route_map"].get(ch, {}).get("pdf_pages")]
+                pending_ghosts = [ch for ch in all_ghost_chapters if ch not in state.get("completed_subpages", []) and ch not in state.get("overflow_cache", {}) and ch != active_chapter]
+                next_chapter_needs_split = state["route_map"].get(next_chapter, {}).get("needs_split", False) if next_chapter else False
+                
+                if pages_to_process_ch and (pending_ghosts or next_chapter_needs_split):
+                    last_page_num = pages_to_process_ch[-1]
+                    last_page_text = all_extracted_text.get(last_page_num, "")
+                    if last_page_text:
+                        unmapped_to_pass = [ch for ch in pending_ghosts if ch != next_chapter]
+                        # Uses default prompt since this runs headless
+                        split_results = apply_chunked_split(last_page_text, next_chapter, unmapped_to_pass, "Look for the start of a new section or chapter heading.")
+                        
+                        if "_previous_" in split_results:
+                            all_extracted_text[last_page_num] = split_results["_previous_"]
+                        for found_chap, text_content in split_results.items():
+                            if found_chap != "_previous_" and text_content.strip():
+                                existing_overflow = state["overflow_cache"].get(found_chap, "")
+                                if text_content.strip() not in existing_overflow:
+                                    state["overflow_cache"][found_chap] = f"{existing_overflow}\n\n{text_content}".strip()
+                                    
+                # Inject current chapter text
+                current_wikitext = state["wikitext_cache"].get(active_chapter, "")
+                for target in pdf_targets:
+                    if all_extracted_text.get(target["pdf_num"]):
+                        current_wikitext, _ = inject_text_into_page(current_wikitext, target["label"], all_extracted_text[target["pdf_num"]], master_pdf_filename)
+                        
+                final_wikitext = current_wikitext
+                match = re.search(r'\{\{page\|', final_wikitext, flags=re.IGNORECASE)
+                if match:
+                    leading_text = final_wikitext[:match.start()]
+                    safe_tags = []
+                    access_match = re.search(r'<accesscontrol>.*?</accesscontrol>', leading_text, flags=re.IGNORECASE | re.DOTALL)
+                    if access_match: safe_tags.append(access_match.group(0))
+                    preserved_prefix = "\n".join(safe_tags) + "\n" if safe_tags else ""
+                    final_wikitext = preserved_prefix + final_wikitext[match.start():]
+                else:
+                    final_wikitext = ""
+                    
+                overflow = state.get("overflow_cache", {}).get(active_chapter, "")
+                if overflow: final_wikitext = f"{overflow}\n\n{final_wikitext}".strip()
+                final_wikitext = apply_final_formatting(final_wikitext, active_chapter, found_year)
+                
+                safe_sp = active_chapter.replace("/", "_")
+                with open(os.path.join(pdf_dir, f"{safe_sp}.txt"), "w", encoding="utf-8") as f:
+                    f.write(final_wikitext)
+                    
+                state["completed_subpages"].append(active_chapter)
+                save_book_state(safe_title, state)
+                
+            # Finalize Book
+            queue_data[target_book]["status"] = "READY"
+            save_queue(queue_data)
+            log_container.success(f"✅ {target_book} is completely mapped and processed. Local .txt files are ready for upload.")
+            overall_progress.progress((idx + 1) / len(pending_books))
+            
+            # Sleep logic between books (if not the last book)
+            if idx < len(pending_books) - 1:
+                log_container.info("⏳ Sleeping for 2 hours before processing the next book...")
+                countdown = st.empty()
+                for remaining in range(7200, 0, -1):
+                    mins, secs = divmod(remaining, 60)
+                    hours, mins = divmod(mins, 60)
+                    countdown.code(f"Next book starts in: {hours:02d}:{mins:02d}:{secs:02d}")
+                    time.sleep(1)
+                countdown.empty()
+                
+        st.success("🎉 Automated queue complete! Switch back to '1 Book (Test)' to manually upload books marked as READY.")
+        
+    st.stop() # Stops execution so the manual UI doesn't render below
+
+# ==============================================================================
+# MANUAL MODE UI HERE
+# ==============================================================================
 st.divider()
 
 # --- Select Any Book & Reset State ---
