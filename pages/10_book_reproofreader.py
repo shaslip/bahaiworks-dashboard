@@ -605,10 +605,10 @@ if start_batch:
                     
                     # Store remainder safely in overflow cache
                     existing_overflow = state["overflow_cache"].get(found_chap, "")
-                    marker = f""
                     
-                    if marker not in existing_overflow:
-                        state["overflow_cache"][found_chap] = f"{existing_overflow}\n{marker}\n{text_content}\n".strip()
+                    # Prevent duplicates without using an empty string marker
+                    if text_content.strip() not in existing_overflow:
+                        state["overflow_cache"][found_chap] = f"{existing_overflow}\n\n{text_content}".strip()
 
         # Inject Current Chapter
         current_wikitext = state["wikitext_cache"].get(active_chapter, "")
@@ -622,6 +622,12 @@ if start_batch:
 
         # Final Cleanup & Local Save (NO WIKI UPLOAD)
         final_wikitext = cleanup_page_seams(current_wikitext)
+        
+        # Clear legacy unproofread text before the first {{page| template
+        if pdf_targets:
+            match = re.search(r'\{\{page\|', final_wikitext, flags=re.IGNORECASE)
+            if match:
+                final_wikitext = final_wikitext[match.start():]
         
         # Pull any overflow belonging to this chapter and prepend it right before saving
         overflow = state.get("overflow_cache", {}).get(active_chapter, "")
