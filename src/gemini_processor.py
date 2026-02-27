@@ -411,3 +411,43 @@ def apply_chunked_split(page_text, target_chapter, unmapped_chapters, custom_ins
         results[chap_name] = "\n\n".join(blocks[start_idx:end_idx])
         
     return results
+
+def extract_image_caption_and_filename(image, default_name="fallback_image.png"):
+    """
+    Sends a page image to Gemini to extract the caption and propose a filename.
+    """
+    model = genai.GenerativeModel(MODEL_NAME)
+    
+    prompt = """
+    Analyze this book page. 
+    1. Extract the text of the image caption. If there is no caption, return an empty string.
+    2. Propose a short, descriptive filename for this image based on its contents or caption (must end in .png). Use underscores instead of spaces.
+    
+    Return ONLY a valid JSON object in this format:
+    {
+        "caption": "extracted caption text here",
+        "filename": "proposed_filename.png"
+    }
+    """
+    
+    safety_settings = {
+        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+    }
+
+    try:
+        response = model.generate_content([prompt, image], safety_settings=safety_settings)
+        
+        match = re.search(r'\{.*\}', response.text, re.DOTALL)
+        if match:
+            data = json.loads(match.group(0))
+            if not data.get("filename", "").endswith(".png"):
+                data["filename"] = data.get("filename", "image").replace(" ", "_") + ".png"
+            return data
+            
+        return {"caption": "", "filename": default_name}
+    except Exception as e:
+        print(f"Debug: Caption extraction error: {e}")
+        return {"caption": "", "filename": default_name}
