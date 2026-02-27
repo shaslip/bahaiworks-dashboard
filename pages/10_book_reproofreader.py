@@ -721,52 +721,81 @@ if subpages_to_process:
 # ==============================================================================
 st.success(f"✅ Offline processing complete for {target_book}! Local txt files are ready for review.")
 
-if not subpages_to_upload:
-    st.success(f"🎉 All sections for {target_book} have been uploaded to the wiki!")
-    queue_data[target_book]["status"] = "COMPLETED"
-    save_queue(queue_data)
-    st.stop()
-    
-st.divider()
-st.subheader("Step 4: Wiki Upload Phase")
-st.info(f"Ready to upload {len(subpages_to_upload)} sections to the wiki.")
+if subpages_to_upload:
+    st.divider()
+    st.subheader("Step 4: Wiki Upload Phase")
+    st.info(f"Ready to upload {len(subpages_to_upload)} sections to the wiki.")
 
-if st.button("🌐 Upload All Chapters to Wiki", type="primary", width='stretch'):
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    log_container = st.container(border=True)
-    
-    local_pdf_path = find_local_pdf(state["master_pdf"], input_folder)
-    pdf_dir = os.path.dirname(local_pdf_path) if local_pdf_path else ""
-    
-    if "uploaded_subpages" not in state:
-        state["uploaded_subpages"] = []
+    if st.button("🌐 Upload All Chapters to Wiki", type="primary", width='stretch'):
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        log_container = st.container(border=True)
         
-    for idx, active_chapter in enumerate(subpages_to_upload):
-        status_text.markdown(f"**Uploading {idx+1}/{len(subpages_to_upload)}:** `{active_chapter}`")
-        progress_bar.progress(idx / len(subpages_to_upload))
+        local_pdf_path = find_local_pdf(state["master_pdf"], input_folder)
+        pdf_dir = os.path.dirname(local_pdf_path) if local_pdf_path else ""
         
-        safe_sp = active_chapter.replace("/", "_")
-        ch_file_path = os.path.join(pdf_dir, f"{safe_sp}.txt")
-        
-        if not os.path.exists(ch_file_path):
-            log_container.error(f"❌ Local file missing for {active_chapter}")
-            continue
+        if "uploaded_subpages" not in state:
+            state["uploaded_subpages"] = []
             
-        with open(ch_file_path, "r", encoding="utf-8") as f:
-            final_wikitext = f.read()
+        for idx, active_chapter in enumerate(subpages_to_upload):
+            status_text.markdown(f"**Uploading {idx+1}/{len(subpages_to_upload)}:** `{active_chapter}`")
+            progress_bar.progress(idx / len(subpages_to_upload))
             
-        res = upload_to_bahaiworks(active_chapter, final_wikitext, "Bot: Parallel Batch Reproofread", session=session)
+            safe_sp = active_chapter.replace("/", "_")
+            ch_file_path = os.path.join(pdf_dir, f"{safe_sp}.txt")
+            
+            if not os.path.exists(ch_file_path):
+                log_container.error(f"❌ Local file missing for {active_chapter}")
+                continue
+                
+            with open(ch_file_path, "r", encoding="utf-8") as f:
+                final_wikitext = f.read()
+                
+            res = upload_to_bahaiworks(active_chapter, final_wikitext, "Bot: Parallel Batch Reproofread", session=session)
+            
+            if res.get('edit', {}).get('result') == 'Success':
+                state["uploaded_subpages"].append(active_chapter)
+                save_book_state(safe_title, state)
+                log_container.write(f"✅ Success: {active_chapter}")
+            else:
+                log_container.error(f"❌ Upload failed: {res}")
+                st.stop()
+                
+        progress_bar.progress(1.0)
+        queue_data[target_book]["status"] = "COMPLETED"
+        save_queue(queue_data)
+        status_text.success("🎉 All chapters successfully uploaded to the wiki!")
+        time.sleep(1)
+        st.rerun()
+
+# ==============================================================================
+# STEP 5: CLEANUP PHASE
+# ==============================================================================
+else:
+    st.divider()
+    st.subheader("Step 5: Cleanup Phase")
+    st.success(f"🎉 All sections for {target_book} have been uploaded to the wiki!")
+    
+    if st.button("🧹 Finalize & Cleanup Local Text Files", type="primary", width='stretch'):
         
-        if res.get('edit', {}).get('result') == 'Success':
-            state["uploaded_subpages"].append(active_chapter)
-            save_book_state(safe_title, state)
-            log_container.write(f"✅ Success: {active_chapter}")
+        # Ensure the queue status is explicitly marked as COMPLETED
+        queue_data[target_book]["status"] = "COMPLETED"
+        save_queue(queue_data)
+        
+        # Locate the directory and delete the .txt files
+        local_pdf_path = find_local_pdf(state["master_pdf"], input_folder)
+        if local_pdf_path:
+            pdf_dir = os.path.dirname(local_pdf_path)
+            deleted_count = 0
+            
+            for sp in state.get("subpages", []):
+                safe_sp = sp.replace("/", "_")
+                ch_file_path = os.path.join(pdf_dir, f"{safe_sp}.txt")
+                
+                if os.path.exists(ch_file_path):
+                    os.remove(ch_file_path)
+                    deleted_count += 1
+            
+            st.success(f"✅ Cleanup complete! {deleted_count} local `.txt` files were removed. The Master JSON remains intact.")
         else:
-            log_container.error(f"❌ Upload failed: {res}")
-            st.stop()
-            
-    progress_bar.progress(1.0)
-    queue_data[target_book]["status"] = "COMPLETED"
-    save_queue(queue_data)
-    status_text.success("🎉 All chapters successfully uploaded to the wiki!")
+            st.error("❌ Could not locate the local PDF directory to perform cleanup.")
