@@ -30,7 +30,8 @@ from src.mediawiki_uploader import (
     fetch_wikitext, 
     inject_text_into_page, 
     get_csrf_token,
-    cleanup_page_seams
+    cleanup_page_seams,
+    update_header_ps_tag
 )
 from src.gemini_processor import apply_chunked_split
 
@@ -46,6 +47,25 @@ OFFLINE_DIR = os.path.join(project_root, "offline_proofs")
 for d in [CACHE_DIR, OFFLINE_DIR]:
     if not os.path.exists(d):
         os.makedirs(d)
+
+def apply_final_formatting(text, title, year):
+    """Deletes {{ocr}} and injects or updates the {{header}}."""
+    text = re.sub(r'\{\{ocr.*?\}\}\n?', '', text, flags=re.IGNORECASE)
+    
+    if "{{header" not in text.lower():
+        # Basic fallback header if completely missing
+        header = f"{{{{header\n | title = {title.split('/')[-1]}\n | author = \n | translator = \n | section = \n | previous = \n | next = \n | year = {year if year else ''}\n}}}}"
+        access_match = re.match(r'^\s*<accesscontrol>.*?</accesscontrol>\s*', text, re.DOTALL | re.IGNORECASE)
+        if access_match:
+            access_tag = access_match.group(0).strip()
+            remaining_body = text[access_match.end():].lstrip()
+            text = access_tag + "\n" + header + "\n" + remaining_body
+        else:
+            text = header + "\n" + text.lstrip()
+    else:
+        text = update_header_ps_tag(text)
+        
+    return text
 
 st.set_page_config(page_title="Book Re-Proofreader", page_icon="📚", layout="wide")
 
@@ -436,6 +456,13 @@ if start_batch:
         
         log_container.write(f"--- Starting {active_chapter} ---")
         
+        # --- Capture Year ---
+        current_wikitext_for_year = state["wikitext_cache"].get(active_chapter, "")
+        found_year = None
+        cat_match = re.search(r'\[\[Category:\s*(\d{4})\s*\]\]', current_wikitext_for_year, re.IGNORECASE)
+        if cat_match:
+            found_year = cat_match.group(1)
+        
         page_data = state["route_map"].get(active_chapter, {})
         pdf_targets = page_data.get("pdf_pages", [])
         
@@ -449,6 +476,11 @@ if start_batch:
             
             if combined_text:
                 log_container.write("💾 Saving unmapped middle section locally...")
+                
+                # --- Apply cleanup and header formatting ---
+                combined_text = cleanup_page_seams(combined_text)
+                combined_text = apply_final_formatting(combined_text, active_chapter, found_year)
+                
                 safe_sp = active_chapter.replace("/", "_")
                 ch_file_path = os.path.join(pdf_dir, f"{safe_sp}.txt")
                 with open(ch_file_path, "w", encoding="utf-8") as f:
@@ -582,6 +614,9 @@ if start_batch:
         overflow = state.get("overflow_cache", {}).get(active_chapter, "")
         if overflow:
             final_wikitext = f"{overflow}\n\n{final_wikitext}"
+            
+        # --- Apply Header & OCR Cleanup ---
+        final_wikitext = apply_final_formatting(final_wikitext, active_chapter, found_year)
             
         log_container.write(f"💾 Saving {active_chapter} to local txt file...")
         
