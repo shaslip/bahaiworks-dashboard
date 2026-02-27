@@ -336,7 +336,9 @@ st.dataframe(map_display, use_container_width=True, hide_index=True)
 subpages_to_process = [sp for sp in state["subpages"] if sp not in state.get("completed_subpages", [])]
 subpages_to_upload = [sp for sp in state["subpages"] if sp not in state.get("uploaded_subpages", [])]
 
-# If offline processing is completely finished, switch to Upload Mode
+# ==============================================================================
+# STEP 3: WIKI UPLOAD PHASE (Runs when Offline is complete)
+# ==============================================================================
 if not subpages_to_process:
     st.success(f"✅ Offline processing complete for {target_book}! Local txt files are ready for review.")
     
@@ -393,6 +395,10 @@ if not subpages_to_process:
         
     st.stop() # Halts execution here so the offline UI below is hidden
 
+
+# ==============================================================================
+# STEP 2: OFFLINE BATCH PROCESSING
+# ==============================================================================
 st.divider()
 st.subheader("Step 2: Offline Batch Processing")
 st.info(f"Ready to process {len(subpages_to_process)} remaining sections locally.")
@@ -409,6 +415,10 @@ if start_batch:
     progress_bar = st.progress(0)
     status_text = st.empty()
     log_container = st.container(border=True)
+    
+    # Initialize safe overflow cache
+    if "overflow_cache" not in state:
+        state["overflow_cache"] = {}
     
     local_pdf_path = find_local_pdf(state["master_pdf"], input_folder)
     if not local_pdf_path:
@@ -432,12 +442,17 @@ if start_batch:
         # --- UNMAPPED CHAPTER HANDLING ---
         if not pdf_targets:
             current_wikitext = state["wikitext_cache"].get(active_chapter, "")
-            if current_wikitext.strip():
+            overflow = state.get("overflow_cache", {}).get(active_chapter, "")
+            
+            # Combine safely bypassing any wiki-format strippers
+            combined_text = f"{overflow}\n\n{current_wikitext}".strip()
+            
+            if combined_text:
                 log_container.write("💾 Saving unmapped middle section locally...")
                 safe_sp = active_chapter.replace("/", "_")
                 ch_file_path = os.path.join(pdf_dir, f"{safe_sp}.txt")
                 with open(ch_file_path, "w", encoding="utf-8") as f:
-                    f.write(cleanup_page_seams(current_wikitext))
+                    f.write(cleanup_page_seams(combined_text))
                 
                 state["completed_subpages"].append(active_chapter)
                 save_book_state(safe_title, state)
@@ -543,11 +558,12 @@ if start_batch:
                     if found_chap == "_previous_" or not text_content.strip(): 
                         continue
                     
-                    existing_wikitext = state["wikitext_cache"].get(found_chap, "")
+                    # Store remainder safely in overflow cache
+                    existing_overflow = state["overflow_cache"].get(found_chap, "")
                     marker = f""
                     
-                    if marker not in existing_wikitext:
-                        state["wikitext_cache"][found_chap] = f"{marker}\n{text_content}\n\n{existing_wikitext}"
+                    if marker not in existing_overflow:
+                        state["overflow_cache"][found_chap] = f"{existing_overflow}\n{marker}\n{text_content}\n".strip()
 
         # Inject Current Chapter
         current_wikitext = state["wikitext_cache"].get(active_chapter, "")
@@ -561,6 +577,12 @@ if start_batch:
 
         # Final Cleanup & Local Save (NO WIKI UPLOAD)
         final_wikitext = cleanup_page_seams(current_wikitext)
+        
+        # Pull any overflow belonging to this chapter and prepend it right before saving
+        overflow = state.get("overflow_cache", {}).get(active_chapter, "")
+        if overflow:
+            final_wikitext = f"{overflow}\n\n{final_wikitext}"
+            
         log_container.write(f"💾 Saving {active_chapter} to local txt file...")
         
         safe_sp = active_chapter.replace("/", "_")
@@ -574,5 +596,3 @@ if start_batch:
     # After loop finishes
     progress_bar.progress(1.0)
     st.success("✅ All chapters processed and saved locally!")
-    queue_data[target_book]["status"] = "COMPLETED"
-    save_queue(queue_data)
