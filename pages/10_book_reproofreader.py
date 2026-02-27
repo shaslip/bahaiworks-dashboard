@@ -49,8 +49,14 @@ for d in [CACHE_DIR, OFFLINE_DIR]:
         os.makedirs(d)
 
 def apply_final_formatting(text, title, year):
-    """Deletes {{ocr}}, cleans seams, injects or updates the {{header}}, and appends __NOTOC__."""
+    """Deletes {{ocr}} and {{Publicationinfo}}, removes blank pages, cleans seams, injects or updates the {{header}}, and appends __NOTOC__."""
     text = re.sub(r'\{\{ocr.*?\}\}\n?', '', text, flags=re.IGNORECASE)
+    
+    # Delete {{Publicationinfo}}
+    text = re.sub(r'\{\{Publicationinfo.*?\}\}\n?', '', text, flags=re.IGNORECASE)
+    
+    # Delete blank pages including the {{page}} reference
+    text = re.sub(r'\{\{page\|[^}]*\}\}\s*--BLANK--\s*\n?', '', text, flags=re.IGNORECASE)
     
     # 1. Clean seams AFTER all text chunks (like overflow) have been combined
     text = cleanup_page_seams(text)
@@ -726,15 +732,11 @@ if start_batch:
             if match:
                 leading_text = final_wikitext[:match.start()]
                 
-                # Explicitly preserve accesscontrol and Publicationinfo tags
+                # Explicitly preserve accesscontrol tags
                 safe_tags = []
                 access_match = re.search(r'<accesscontrol>.*?</accesscontrol>', leading_text, flags=re.IGNORECASE | re.DOTALL)
                 if access_match:
                     safe_tags.append(access_match.group(0))
-                    
-                pub_match = re.search(r'\{\{Publicationinfo\}\}', leading_text, flags=re.IGNORECASE)
-                if pub_match:
-                    safe_tags.append(pub_match.group(0))
                     
                 preserved_prefix = "\n".join(safe_tags) + "\n" if safe_tags else ""
                 
