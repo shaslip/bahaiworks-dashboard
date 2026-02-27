@@ -49,9 +49,13 @@ for d in [CACHE_DIR, OFFLINE_DIR]:
         os.makedirs(d)
 
 def apply_final_formatting(text, title, year):
-    """Deletes {{ocr}} and injects or updates the {{header}}."""
+    """Deletes {{ocr}}, cleans seams, injects or updates the {{header}}, and appends __NOTOC__."""
     text = re.sub(r'\{\{ocr.*?\}\}\n?', '', text, flags=re.IGNORECASE)
     
+    # 1. Clean seams AFTER all text chunks (like overflow) have been combined
+    text = cleanup_page_seams(text)
+    
+    # 2. Header Logic
     if "{{header" not in text.lower():
         section_name = title.split('/')[-1]
         cat_str = year if year else ""
@@ -77,6 +81,10 @@ def apply_final_formatting(text, title, year):
             text = header + "\n" + text.lstrip()
     else:
         text = update_header_ps_tag(text)
+        
+    # 3. Ensure __NOTOC__ is at the bottom
+    if "__NOTOC__" not in text:
+        text += "\n__NOTOC__"
         
     return text
 
