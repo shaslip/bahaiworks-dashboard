@@ -414,20 +414,24 @@ def apply_chunked_split(page_text, target_chapter, unmapped_chapters, custom_ins
 
 def extract_image_caption_and_filename(image, default_name="fallback_image.png"):
     """
-    Sends a page image to Gemini to extract the caption and propose a filename.
+    Sends a page image to Gemini to extract captions and propose filenames for all images on the page.
     """
     model = genai.GenerativeModel(MODEL_NAME)
     
     prompt = """
     Analyze this book page. 
-    1. Extract the text of the image caption. If there is no caption, return an empty string.
-    2. Propose a short, descriptive filename for this image based on its contents or caption (must end in .png). Use underscores instead of spaces.
+    1. Identify all distinct images/illustrations on the page.
+    2. Extract the text of the image caption for each image. If there is no caption, return an empty string.
+    3. Propose a short, descriptive filename for each image based on its contents or caption (must end in .png). Use underscores instead of spaces.
     
-    Return ONLY a valid JSON object in this format:
-    {
-        "caption": "extracted caption text here",
-        "filename": "proposed_filename.png"
-    }
+    Return ONLY a valid JSON array of objects, one for each image, in this format:
+    [
+        {
+            "caption": "extracted caption text here",
+            "filename": "proposed_filename.png"
+        }
+    ]
+    If there are no images, return an empty array [].
     """
     
     safety_settings = {
@@ -440,14 +444,24 @@ def extract_image_caption_and_filename(image, default_name="fallback_image.png")
     try:
         response = model.generate_content([prompt, image], safety_settings=safety_settings)
         
-        match = re.search(r'\{.*\}', response.text, re.DOTALL)
-        if match:
-            data = json.loads(match.group(0))
-            if not data.get("filename", "").endswith(".png"):
-                data["filename"] = data.get("filename", "image").replace(" ", "_") + ".png"
+        # Try to match an array first
+        match_array = re.search(r'\[.*\]', response.text, re.DOTALL)
+        if match_array:
+            data = json.loads(match_array.group(0))
+            for i, item in enumerate(data):
+                if not item.get("filename", "").endswith(".png"):
+                    item["filename"] = item.get("filename", f"image_{i}").replace(" ", "_") + ".png"
             return data
             
-        return {"caption": "", "filename": default_name}
+        # Fallback if it returns a single object by mistake
+        match_obj = re.search(r'\{.*\}', response.text, re.DOTALL)
+        if match_obj:
+            data = json.loads(match_obj.group(0))
+            if not data.get("filename", "").endswith(".png"):
+                data["filename"] = data.get("filename", "image").replace(" ", "_") + ".png"
+            return [data]
+            
+        return [{"caption": "", "filename": default_name}]
     except Exception as e:
         print(f"Debug: Caption extraction error: {e}")
-        return {"caption": "", "filename": default_name}
+        return [{"caption": "", "filename": default_name}]
