@@ -395,10 +395,22 @@ elif master_json_exists:
     st.success(f"✅ Master JSON already exists for {state['master_pdf']}!")
     with st.expander("Re-generate Master JSON"):
         st.warning("Only do this if you need to re-OCR the entire document. This will overwrite the existing file.")
-        regenerate_master = st.button("🔄 Re-generate Master JSON")
+        col_gen, col_stop = st.columns([1, 1])
+        with col_gen:
+            regenerate_master = st.button("🔄 Re-generate Master JSON", use_container_width=True)
+        with col_stop:
+            if st.button("🛑 Stop Generation", key="stop_regen", use_container_width=True):
+                st.warning("Execution stopped.")
+                st.stop()
 else:
     st.info(f"Master JSON not found for {state['master_pdf']}. This step will OCR all mapped pages.")
-    regenerate_master = st.button("🚀 Generate Master JSON", type="primary")
+    col_gen, col_stop = st.columns([1, 1])
+    with col_gen:
+        regenerate_master = st.button("🚀 Generate Master JSON", type="primary", use_container_width=True)
+    with col_stop:
+        if st.button("🛑 Stop Generation", key="stop_gen", use_container_width=True):
+            st.warning("Execution stopped.")
+            st.stop()
 
 if master_json_path and (not master_json_exists and locals().get('regenerate_master', False) or locals().get('regenerate_master', False)):
     all_mapped_pages = set()
@@ -413,7 +425,7 @@ if master_json_path and (not master_json_exists and locals().get('regenerate_mas
         master_log = st.container(border=True)
         master_log.write(f"⚙️ Initiating full OCR processing for {len(pages_to_process)} pages...")
         
-        num_batches = 5
+        num_batches = 20
         batch_size = math.ceil(len(pages_to_process) / num_batches) if len(pages_to_process) > 0 else 1
         batches = [pages_to_process[j:j + batch_size] for j in range(0, len(pages_to_process), batch_size)]
 
