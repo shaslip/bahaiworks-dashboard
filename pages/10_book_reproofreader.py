@@ -664,25 +664,28 @@ if start_batch:
                 log_container.warning(f"⚠️ Page {p_num} missing from master JSON.")
 
         # --- TARGETED LLM SPLIT LOGIC ---
-        needs_split = page_data.get("needs_split", False)
-        next_chapter_unmapped = False
+        # 1. Identify if there are any pending "ghost chapters" (no mapped pages)
+        all_ghost_chapters = [ch for ch in state["subpages"] if not state["route_map"].get(ch, {}).get("pdf_pages")]
+        pending_ghosts = [
+            ch for ch in all_ghost_chapters 
+            if ch not in state.get("completed_subpages", []) and ch != active_chapter
+        ]
+        
+        # 2. Check if the NEXT chapter explicitly needs a split
+        next_chapter_needs_split = False
         if next_chapter:
-            next_chapter_unmapped = not state["route_map"].get(next_chapter, {}).get("pdf_pages")
+            next_chapter_needs_split = state["route_map"].get(next_chapter, {}).get("needs_split", False)
 
-        # Only trigger the LLM if the current chapter explicitly needs a split, 
-        # or if the next chapter has no mapped pages (meaning we need to find its start point).
-        if pages_to_process and next_chapter and (needs_split or next_chapter_unmapped):
+        # Trigger LLM if we are hunting for ghost chapters, OR if the next chapter starts on this chapter's last page
+        if pages_to_process and (pending_ghosts or next_chapter_needs_split):
             last_page_num = pages_to_process[-1]
             last_page_text = all_extracted_text.get(last_page_num, "")
             
             if last_page_text:
                 log_container.write(f"🧠 Asking LLM to check for chapter splits on page {last_page_num}...")
                 
-                ghost_chapters = [ch for ch in state["subpages"] if not state["route_map"].get(ch, {}).get("pdf_pages")]
-                if active_chapter in ghost_chapters:
-                    ghost_chapters.remove(active_chapter)
-                    
-                unmapped_to_pass = [ch for ch in ghost_chapters if ch != next_chapter]
+                # We want the LLM to look for the next chapter AND any pending ghost chapters
+                unmapped_to_pass = [ch for ch in pending_ghosts if ch != next_chapter]
                 
                 split_results = apply_chunked_split(last_page_text, next_chapter, unmapped_to_pass, split_prompt)
                 
@@ -696,7 +699,7 @@ if start_batch:
                     # Store remainder safely in overflow cache
                     existing_overflow = state["overflow_cache"].get(found_chap, "")
                     
-                    # Prevent duplicates without using an empty string marker
+                    # Prevent duplicates
                     if text_content.strip() not in existing_overflow:
                         state["overflow_cache"][found_chap] = f"{existing_overflow}\n\n{text_content}".strip()
 
