@@ -28,9 +28,8 @@ def find_local_pdf(filename, root_folder):
                 return os.path.join(dirpath, f)
     return None
 
-def crop_illustration(pil_img, output_path):
-    """Uses OpenCV to find the largest contour and crop out the text."""
-    # Convert PIL image to OpenCV format (RGB to BGR)
+def crop_illustrations(pil_img, expected_count=1):
+    """Uses OpenCV to find contours and crop out the illustrations. Returns a list of cropped images."""
     img = np.array(pil_img)
     img = img[:, :, ::-1].copy() 
     
@@ -46,22 +45,23 @@ def crop_illustration(pil_img, output_path):
     contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     if not contours:
-        return False
+        return []
         
-    # Assume the largest contour by area is the main illustration
-    largest_contour = max(contours, key=cv2.contourArea)
-    x, y, w, h = cv2.boundingRect(largest_contour)
+    # Sort by area descending and take the top `expected_count` contours
+    sorted_by_area = sorted(contours, key=cv2.contourArea, reverse=True)
+    top_contours = sorted_by_area[:expected_count]
     
-    # Add a small buffer around the crop
-    buffer = 20
-    y_start = max(0, y - buffer)
-    y_end = min(img.shape[0], y + h + buffer)
-    x_start = max(0, x - buffer)
-    x_end = min(img.shape[1], x + w + buffer)
+    # Sort those top contours from top-to-bottom so they match Gemini's reading order
+    top_contours = sorted(top_contours, key=lambda c: cv2.boundingRect(c)[1])
     
-    cropped = img[y_start:y_end, x_start:x_end]
-    cv2.imwrite(output_path, cropped)
-    return True
+    cropped_images = []
+    for c in top_contours:
+        x, y, w, h = cv2.boundingRect(c)
+        # Crop exactly to the bounding box, zero buffer
+        cropped = img[y:y+h, x:x+w]
+        cropped_images.append(cropped)
+        
+    return cropped_images
 
 def create_wiki_text_file(txt_path, caption, book_title):
     clean_title = re.sub(r'\.pdf$', '', book_title, flags=re.IGNORECASE).replace('_', ' ')
@@ -133,34 +133,46 @@ if st.button("🚀 Process Images", type="primary"):
             log_container.error(f"❌ Error converting page {page_num}: {e}")
             continue
             
-        # 2. Ask Gemini for Caption and Filename
-        log_container.write("🧠 Requesting caption and filename from Gemini...")
-        gemini_data = extract_image_caption_and_filename(pil_img, default_name=f"page_{page_num}_image.png")
+        # 2. Ask Gemini for Captions and Filenames
+        log_container.write("🧠 Requesting captions and filenames from Gemini...")
+        gemini_data_list = extract_image_caption_and_filename(pil_img, default_name=f"page_{page_num}_image.png")
         
-        caption = gemini_data.get("caption", "")
-        proposed_filename = gemini_data.get("filename", f"page_{page_num}_image.png")
-        
-        # Ensure unique filename
-        final_img_path = os.path.join(output_dir, proposed_filename)
-        counter = 1
-        while os.path.exists(final_img_path):
-            name, ext = os.path.splitext(proposed_filename)
-            final_img_path = os.path.join(output_dir, f"{name}_{counter}{ext}")
-            counter += 1
+        if not gemini_data_list:
+            log_container.warning(f"⚠️ No images detected by Gemini on page {page_num}. Skipping.")
+            continue
             
-        final_filename = os.path.basename(final_img_path)
-        final_txt_path = os.path.join(output_dir, final_filename.replace(".png", ".txt"))
+        # 3. Crop Illustrations using OpenCV
+        log_container.write(f"✂️ Auto-cropping {len(gemini_data_list)} image(s) from page...")
+        cropped_cv2_images = crop_illustrations(pil_img, expected_count=len(gemini_data_list))
         
-        # 3. Crop Illustration using OpenCV
-        log_container.write("✂️ Auto-cropping text from image...")
-        if not crop_illustration(pil_img, final_img_path):
-            log_container.warning(f"⚠️ Could not auto-crop. Saving uncropped image.")
-            pil_img.save(final_img_path) # Save original if crop fails
+        for i, img_data in enumerate(gemini_data_list):
+            caption = img_data.get("caption", "")
+            proposed_filename = img_data.get("filename", f"page_{page_num}_image_{i+1}.png")
             
-        # 4. Generate .txt file
-        log_container.write("📝 Generating MediaWiki text file...")
-        create_wiki_text_file(final_txt_path, caption, clean_pdf_name)
-        
+            # Ensure unique filename
+            final_img_path = os.path.join(output_dir, proposed_filename)
+            counter = 1
+            while os.path.exists(final_img_path):
+                name, ext = os.path.splitext(proposed_filename)
+                final_img_path = os.path.join(output_dir, f"{name}_{counter}{ext}")
+                counter += 1
+                
+            final_filename = os.path.basename(final_img_path)
+            final_txt_path = os.path.join(output_dir, final_filename.replace(".png", ".txt"))
+            
+            # Match the cropped image to the Gemini data (fallback to full page if crop fails)
+            if i < len(cropped_cv2_images):
+                cv2.imwrite(final_img_path, cropped_cv2_images[i])
+            else:
+                log_container.warning(f"⚠️ Could not auto-crop image {i+1}. Saving uncropped page.")
+                pil_img.save(final_img_path) 
+                
+            # 4. Generate .txt file
+            log_container.write(f"📝 Generating MediaWiki text file for {final_filename}...")
+            create_wiki_text_file(final_txt_path, caption, clean_pdf_name)
+            
+            log_container.success(f"✅ Finished page {page_num}, image {i+1} -> Saved as `{final_filename}`")
+            
         progress_bar.progress((idx + 1) / len(pages_to_process))
         log_container.success(f"✅ Finished page {page_num} -> Saved as `{final_filename}`")
         
