@@ -330,7 +330,7 @@ with col2:
 safe_title = target_book.replace("/", "_")
 state = load_book_state(safe_title)
 
-# --- STEP 1: EXPLICIT AUTHORIZATION FOR ROUTE MAPPING ---
+# --- STEP 2: EXPLICIT AUTHORIZATION FOR ROUTE MAPPING ---
 if not state.get("subpages"):
     st.info(f"Route map is missing or has been reset for **{target_book}**.")
     if st.button("🛠️ Generate Chapter Map", type="primary"):
@@ -365,12 +365,114 @@ for sp in state["subpages"]:
     })
 st.dataframe(map_display, use_container_width=True, hide_index=True)
 
-# --- STEP 2 & 3: AUTOMATED BATCH PROCESSING & WIKI UPLOAD ---
+# ==============================================================================
+# STEP 3: MASTER JSON GENERATION
+# ==============================================================================
+st.divider()
+st.subheader("Step 3: Generate Master JSON")
+
+local_pdf_path = find_local_pdf(state["master_pdf"], input_folder) if state.get("master_pdf") else None
+pdf_dir = os.path.dirname(local_pdf_path) if local_pdf_path else ""
+master_json_path = os.path.join(pdf_dir, f"master_{state.get('master_pdf')}.json") if pdf_dir else ""
+master_json_exists = os.path.exists(master_json_path) if master_json_path else False
+
+if not master_json_path:
+    st.warning("Cannot determine Master JSON path. Please ensure Map is generated correctly.")
+elif master_json_exists:
+    st.success(f"✅ Master JSON already exists for {state['master_pdf']}!")
+    with st.expander("Re-generate Master JSON"):
+        st.warning("Only do this if you need to re-OCR the entire document. This will overwrite the existing file.")
+        regenerate_master = st.button("🔄 Re-generate Master JSON")
+else:
+    st.info(f"Master JSON not found for {state['master_pdf']}. This step will OCR all mapped pages.")
+    regenerate_master = st.button("🚀 Generate Master JSON", type="primary")
+
+if master_json_path and (not master_json_exists and locals().get('regenerate_master', False) or locals().get('regenerate_master', False)):
+    all_mapped_pages = set()
+    for ch, data in state["route_map"].items():
+        for p in data.get("pdf_pages", []):
+            all_mapped_pages.add(p["pdf_num"])
+    pages_to_process = sorted(list(all_mapped_pages))
+
+    if not pages_to_process:
+        st.warning("No PDF pages found in the route map to process.")
+    else:
+        master_log = st.container(border=True)
+        master_log.write(f"⚙️ Initiating full OCR processing for {len(pages_to_process)} pages...")
+        
+        num_batches = 5
+        batch_size = math.ceil(len(pages_to_process) / num_batches) if len(pages_to_process) > 0 else 1
+        batches = [pages_to_process[j:j + batch_size] for j in range(0, len(pages_to_process), batch_size)]
+
+        batch_placeholders = {}
+        for i in range(len(batches)):
+            if not batches[i]: continue
+            start_pg, end_pg = batches[i][0], batches[i][-1]
+            page_label = f"pg {start_pg}" if start_pg == end_pg else f"pgs {start_pg}-{end_pg}"
+            with master_log.expander(f"Batch {i+1} Status ({page_label})", expanded=True):
+                batch_placeholders[i] = st.empty()
+
+        from multiprocessing import Manager
+        os.environ["PYTHONPATH"] = project_root
+
+        with Manager() as manager:
+            shared_logs = manager.dict()
+            for i in range(len(batches)):
+                shared_logs[i] = manager.list()
+
+            executor = concurrent.futures.ProcessPoolExecutor(max_workers=num_batches)
+            futures = []
+            for batch_id, batch_pages in enumerate(batches):
+                if not batch_pages: continue
+                future = executor.submit(
+                    process_pdf_batch,
+                    batch_id, batch_pages, local_pdf_path, ocr_strategy, 
+                    state["master_pdf"], pdf_dir, shared_logs[batch_id]
+                )
+                futures.append(future)
+
+            while True:
+                all_done = True
+                for batch_id, future in enumerate(futures):
+                    current_logs = list(shared_logs.get(batch_id, []))
+                    if current_logs and batch_id in batch_placeholders:
+                        batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
+                    if not future.done():
+                        all_done = False
+                if all_done:
+                    break
+                time.sleep(1)
+
+            executor.shutdown(wait=False, cancel_futures=True)
+
+        master_log.write("🔄 Assembling pages into Master JSON...")
+        master_data = {}
+        for batch_id in range(len(batches)):
+            batch_file_path = os.path.join(pdf_dir, f"temp_{state['master_pdf']}_batch_{batch_id}.json")
+            if os.path.exists(batch_file_path):
+                with open(batch_file_path, "r", encoding="utf-8") as f:
+                    batch_data = json.load(f)
+                    for p_num_str, text in batch_data.items():
+                        master_data[p_num_str] = text
+                os.remove(batch_file_path)
+        
+        with open(master_json_path, 'w', encoding='utf-8') as f:
+            json.dump(master_data, f, indent=4)
+        
+        st.success("🎉 Master JSON successfully generated!")
+        st.rerun()
+
+# Halt execution if Master JSON is not complete
+if not master_json_exists:
+    st.stop()
+
+
+# --- STEP 4 & 5: AUTOMATED BATCH PROCESSING & WIKI UPLOAD ---
 subpages_to_process = [sp for sp in state["subpages"] if sp not in state.get("completed_subpages", [])]
 subpages_to_upload = [sp for sp in state["subpages"] if sp not in state.get("uploaded_subpages", [])]
 
 # ==============================================================================
-# STEP 3: WIKI UPLOAD PHASE (Runs when Offline is complete)
+# STEP 5: WIKI UPLOAD PHASE (Runs when Offline is complete)
 # ==============================================================================
 if not subpages_to_process:
     st.success(f"✅ Offline processing complete for {target_book}! Local txt files are ready for review.")
@@ -382,7 +484,7 @@ if not subpages_to_process:
         st.stop()
         
     st.divider()
-    st.subheader("Step 3: Wiki Upload Phase")
+    st.subheader("Step 5: Wiki Upload Phase")
     st.info(f"Ready to upload {len(subpages_to_upload)} sections to the wiki.")
     
     if st.button("🌐 Upload All Chapters to Wiki", type="primary", use_container_width=True):
@@ -430,7 +532,7 @@ if not subpages_to_process:
 
 
 # ==============================================================================
-# STEP 2: OFFLINE BATCH PROCESSING
+# STEP 4: OFFLINE BATCH PROCESSING
 # ==============================================================================
 st.divider()
 st.subheader("Step 2: Offline Batch Processing")
@@ -524,61 +626,8 @@ if start_batch:
                     else:
                         log_container.warning(f"⚠️ Page {p_num} missing from master JSON.")
         else:
-            log_container.write("⚙️ Master JSON not found. Initiating batch OCR processing...")
-            num_batches = 5
-            batch_size = math.ceil(len(pages_to_process) / num_batches) if len(pages_to_process) > 0 else 1
-            batches = [pages_to_process[j:j + batch_size] for j in range(0, len(pages_to_process), batch_size)]
-
-            batch_placeholders = {}
-            for i in range(len(batches)):
-                if not batches[i]: continue
-                start_pg, end_pg = batches[i][0], batches[i][-1]
-                page_label = f"pg {start_pg}" if start_pg == end_pg else f"pgs {start_pg}-{end_pg}"
-                with log_container.expander(f"Batch {i+1} Status ({page_label})", expanded=True):
-                    batch_placeholders[i] = st.empty()
-
-            from multiprocessing import Manager
-            os.environ["PYTHONPATH"] = project_root
-
-            with Manager() as manager:
-                shared_logs = manager.dict()
-                for i in range(len(batches)):
-                    shared_logs[i] = manager.list()
-
-                executor = concurrent.futures.ProcessPoolExecutor(max_workers=num_batches)
-                futures = []
-                for batch_id, batch_pages in enumerate(batches):
-                    if not batch_pages: continue
-                    future = executor.submit(
-                        process_pdf_batch,
-                        batch_id, batch_pages, local_pdf_path, ocr_strategy, 
-                        state["master_pdf"], pdf_dir, shared_logs[batch_id]
-                    )
-                    futures.append(future)
-
-                while True:
-                    all_done = True
-                    for batch_id, future in enumerate(futures):
-                        current_logs = list(shared_logs.get(batch_id, []))
-                        if current_logs and batch_id in batch_placeholders:
-                            batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
-                        if not future.done():
-                            all_done = False
-                    if all_done:
-                        break
-                    time.sleep(1)
-
-                executor.shutdown(wait=False, cancel_futures=True)
-
-            log_container.write("🔄 Assembling pages from batch temp files...")
-            for batch_id in range(len(batches)):
-                batch_file_path = os.path.join(pdf_dir, f"temp_{state['master_pdf']}_batch_{batch_id}.json")
-                if os.path.exists(batch_file_path):
-                    with open(batch_file_path, "r", encoding="utf-8") as f:
-                        batch_data = json.load(f)
-                        for p_num_str, text in batch_data.items():
-                            all_extracted_text[int(p_num_str)] = text
-                    os.remove(batch_file_path)
+            log_container.error(f"❌ Master JSON not found! Please complete Step 3 (Generate Master JSON) first.")
+            st.stop()
 
         # --- BRUTE FORCE SPLIT LOGIC ---
         if pages_to_process and next_chapter:
