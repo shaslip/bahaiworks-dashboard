@@ -843,7 +843,7 @@ with tab_manual:
     with c1:
         manual_title = st.text_input("Wiki Page Title", placeholder="e.g. Star of the West/Volume 1/Issue 1")
     with c2:
-        manual_range = st.text_input("Book Page Range (e.g. 46-63 or 'frontmatter')", placeholder="e.g. 46-63, 70")
+        manual_range = st.text_input("Book Page Range (e.g. 46-63 or 'frontmatter' or 'all')", placeholder="e.g. 46-63, 70")
     
     start_manual_btn = st.button("🎯 Process Range", type="primary")
     manual_stop_btn = st.button("🛑 Stop Manual Process")
