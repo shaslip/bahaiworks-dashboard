@@ -389,8 +389,6 @@ if st.session_state.get('processing_active') == active_chapter:
                 save_book_state(safe_title, state)
                 st.session_state.pop('processing_active', None)
                 st.success(f"Upload complete for {active_chapter}!")
-                time.sleep(1)
-                st.rerun()
             else:
                 st.error(f"❌ Upload failed: {res}")
                 st.session_state.pop('processing_active', None)
@@ -530,8 +528,6 @@ if st.session_state.get('processing_active') == active_chapter:
         save_book_state(safe_title, state)
         st.session_state.pop('processing_active', None)
         st.success(f"Upload complete for {active_chapter}!")
-        time.sleep(1)
-        st.rerun()
     else:
         st.error(f"❌ Upload failed: {res}")
         st.session_state.pop('processing_active', None)
