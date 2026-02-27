@@ -53,8 +53,21 @@ def apply_final_formatting(text, title, year):
     text = re.sub(r'\{\{ocr.*?\}\}\n?', '', text, flags=re.IGNORECASE)
     
     if "{{header" not in text.lower():
-        # Basic fallback header if completely missing
-        header = f"{{{{header\n | title = {title.split('/')[-1]}\n | author = \n | translator = \n | section = \n | previous = \n | next = \n | year = {year if year else ''}\n}}}}"
+        section_name = title.split('/')[-1]
+        cat_str = year if year else ""
+        
+        # Formatted to match the exact spacing and structure of the standard book subpage header
+        header = f"""{{{{header
+ | title      = [[../]]
+ | author     = 
+ | translator = 
+ | section    = {section_name}
+ | previous   = 
+ | next       = 
+ | notes      = {{{{ps|1}}}}
+ | categories = {cat_str}
+}}}}"""
+        
         access_match = re.match(r'^\s*<accesscontrol>.*?</accesscontrol>\s*', text, re.DOTALL | re.IGNORECASE)
         if access_match:
             access_tag = access_match.group(0).strip()
