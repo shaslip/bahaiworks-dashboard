@@ -402,6 +402,35 @@ def find_and_fix_tag_by_page_num(wikitext, pdf_filename, pdf_page_num, correct_l
                 
     return wikitext
 
+def remove_tag_by_page_num(wikitext, pdf_filename, pdf_page_num):
+    """
+    Removes the {{page|...}} tag completely if the page is returned as --BLANK--.
+    """
+    tags = list(re.finditer(r'(\{\{page\|(.*?)\}\})(\s*\{\{ocr\}\})?', wikitext, re.IGNORECASE | re.DOTALL))
+    
+    for match in tags:
+        full_tag_block = match.group(0) # Includes {{ocr}} if present
+        params = match.group(2)         # Content inside {{page|...}}
+        
+        file_check = re.search(r'file\s*=\s*([^|}\n]+)', params, re.IGNORECASE)
+        page_check = re.search(r'page\s*=\s*(\d+)', params, re.IGNORECASE)
+        
+        if file_check and page_check:
+            found_filename = file_check.group(1).strip()
+            
+            if int(page_check.group(1)) == pdf_page_num and \
+               os.path.basename(found_filename).lower() == os.path.basename(pdf_filename).lower():
+                
+                # Remove the entire tag block
+                wikitext = wikitext.replace(full_tag_block, "")
+                # Clean up any leftover excess newlines caused by removal
+                wikitext = re.sub(r'\n{3,}', '\n\n', wikitext)
+                
+                st.toast(f"Removed Blank Tag: PDF {pdf_page_num}", icon="🗑️")
+                return wikitext
+                
+    return wikitext
+
 def build_pdf_index(root_folder):
     """
     Recursively scans the folder and creates a dictionary:
@@ -745,29 +774,34 @@ with tab_auto:
                 is_last_page = (page_num == scope_end)
                 correct_label = calculate_page_label(page_num, anchor_pdf_page)
                 
-                current_text = find_and_fix_tag_by_page_num(current_text, pdf_filename, page_num, correct_label)
+                if final_text.strip() == "--BLANK--":
+                    current_text = remove_tag_by_page_num(current_text, pdf_filename, page_num)
+                    log_area.text(f"🗑️ Page {page_num} returned --BLANK--. Removed tag.")
+                else:
+                    current_text = find_and_fix_tag_by_page_num(current_text, pdf_filename, page_num, correct_label)
 
-                if not final_text:
-                    log_area.text(f"⚠️ Page {page_num} was empty or failed. Skipping injection.")
-                    if not is_last_page:
-                        continue
+                    if not final_text:
+                        log_area.text(f"⚠️ Page {page_num} was empty or failed. Skipping injection.")
+                    else:
+                        if is_last_page:
+                            if "__NOTOC__" not in current_text:
+                                final_text += "\n__NOTOC__"
 
-                if is_last_page and final_text:
-                    if "__NOTOC__" not in current_text:
-                        final_text += "\n__NOTOC__"
-
-                final_wikitext, inject_error = inject_text_into_page(current_text, correct_label, final_text, pdf_filename)
-                
-                if inject_error:
-                    log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Injection Error ({correct_label}): {inject_error}", color="red")
-                    continue
-                    
-                current_text = final_wikitext
+                        final_wikitext, inject_error = inject_text_into_page(current_text, correct_label, final_text, pdf_filename)
+                        
+                        if inject_error:
+                            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Injection Error ({correct_label}): {inject_error}", color="red")
+                        else:
+                            current_text = final_wikitext
                 
                 with open(wip_file_path, "w", encoding="utf-8") as f:
                     f.write(current_text)
 
                 if is_last_page:
+                    # Failsafe: if the last page was skipped or blank, make sure NOTOC is still added
+                    if "__NOTOC__" not in current_text:
+                        current_text += "\n__NOTOC__"
+
                     log_area.text(f"🧹 Running final seam cleanup...")
                     cleaned_text = cleanup_page_seams(current_text)
                     cleaned_text = re.sub(r'https?://(?:www\.)?youtu\.be/([a-zA-Z0-9_-]+)', r'https://www.youtube.com/watch?v=\1', cleaned_text)
@@ -970,19 +1004,22 @@ with tab_manual:
             current_status_line.text(f"Merging: Book Page {correct_label}")
             
             final_text = all_extracted_text.get(pdf_page, "")
-            current_text = find_and_fix_tag_by_page_num(current_text, pdf_filename, pdf_page, correct_label)
+            
+            if final_text.strip() == "--BLANK--":
+                current_text = remove_tag_by_page_num(current_text, pdf_filename, pdf_page)
+                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;🗑️ Page {correct_label} returned --BLANK--. Removed tag.", color="gray")
+            else:
+                current_text = find_and_fix_tag_by_page_num(current_text, pdf_filename, pdf_page, correct_label)
 
-            if not final_text:
-                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Processing failed for Page {correct_label}", color="red")
-                continue
-
-            # Inject & Replace Locally
-            final_wikitext, inject_err = inject_text_into_page(current_text, correct_label, final_text, pdf_filename)
-            if inject_err:
-                log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Injection Failed: {inject_err}", color="red")
-                continue
-                
-            current_text = final_wikitext
+                if not final_text:
+                    log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Processing failed for Page {correct_label}", color="red")
+                else:
+                    # Inject & Replace Locally
+                    final_wikitext, inject_err = inject_text_into_page(current_text, correct_label, final_text, pdf_filename)
+                    if inject_err:
+                        log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;❌ Injection Failed: {inject_err}", color="red")
+                    else:
+                        current_text = final_wikitext
             
             # [CLEANUP] Compare current PDF page to scope_end
             if pdf_page == scope_end:
