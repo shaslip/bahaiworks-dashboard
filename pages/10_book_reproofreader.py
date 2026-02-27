@@ -238,7 +238,7 @@ def build_sequential_route_map(subpages, session, input_folder):
         stripped_text = text.lstrip()
         
         # Ignore common leading tags that shouldn't trigger a split
-        prefix_pattern = r'^(?:<accesscontrol>.*?</accesscontrol>\s*|\{\{(?:header|Publicationinfo)[^}]*\}\}\s*)*'
+        prefix_pattern = r'^(?:<accesscontrol>.*?</accesscontrol>\s*|\{\{(?:header|Publicationinfo)(?:[^{}]|\{\{[^}]*\}\})*\}\}\s*)*'
         clean_text = re.sub(prefix_pattern, '', stripped_text, flags=re.IGNORECASE | re.DOTALL)
         
         if clean_text and not clean_text.lower().startswith("{{page|"):
@@ -923,15 +923,19 @@ if subpages_to_process:
                 match = re.search(r'\{\{page\|', final_wikitext, flags=re.IGNORECASE)
                 if match:
                     leading_text = final_wikitext[:match.start()]
-                    
-                    # Explicitly preserve accesscontrol tags
+
+                    # Explicitly preserve accesscontrol tags and the header
                     safe_tags = []
                     access_match = re.search(r'<accesscontrol>.*?</accesscontrol>', leading_text, flags=re.IGNORECASE | re.DOTALL)
                     if access_match:
                         safe_tags.append(access_match.group(0))
                         
+                    header_match = re.search(r'\{\{header(?:[^{}]|\{\{[^}]*\}\})*\}\}', leading_text, flags=re.IGNORECASE | re.DOTALL)
+                    if header_match:
+                        safe_tags.append(header_match.group(0))
+
                     preserved_prefix = "\n".join(safe_tags) + "\n" if safe_tags else ""
-                    
+
                     final_wikitext = preserved_prefix + final_wikitext[match.start():]
                 else:
                     # If no page template is found, delete the legacy content entirely
