@@ -404,65 +404,79 @@ if st.session_state.get('processing_active') == active_chapter:
             
     pages_to_process = [t["pdf_num"] for t in pdf_targets]
     
-    # --- BATCH PREP ---
-    num_batches = 5
-    batch_size = math.ceil(len(pages_to_process) / num_batches)
-    batches = [pages_to_process[j:j + batch_size] for j in range(0, len(pages_to_process), batch_size)]
-
-    batch_placeholders = {}
-    for i in range(len(batches)):
-        if not batches[i]: continue
-        start_pg, end_pg = batches[i][0], batches[i][-1]
-        page_label = f"pg {start_pg}" if start_pg == end_pg else f"pgs {start_pg}-{end_pg}"
-        with log_container.expander(f"Batch {i+1} Status ({page_label})", expanded=True):
-            batch_placeholders[i] = st.empty()
-
-    # --- PARALLEL EXECUTION ---
-    from multiprocessing import Manager
-    os.environ["PYTHONPATH"] = project_root
-
-    with Manager() as manager:
-        shared_logs = manager.dict()
-        for i in range(len(batches)):
-            shared_logs[i] = manager.list()
-
-        executor = concurrent.futures.ProcessPoolExecutor(max_workers=num_batches)
-        futures = []
-        for batch_id, batch_pages in enumerate(batches):
-            if not batch_pages: continue
-            future = executor.submit(
-                process_pdf_batch,
-                batch_id, batch_pages, local_pdf_path, ocr_strategy, 
-                state["master_pdf"], pdf_dir, shared_logs[batch_id]
-            )
-            futures.append(future)
-
-        # Polling Loop
-        while True:
-            all_done = True
-            for batch_id, future in enumerate(futures):
-                current_logs = list(shared_logs.get(batch_id, []))
-                if current_logs and batch_id in batch_placeholders:
-                    batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
-                if not future.done():
-                    all_done = False
-            if all_done:
-                break
-            time.sleep(1)
-
-        executor.shutdown(wait=False, cancel_futures=True)
-
-    # --- OFFLINE ASSEMBLY & SPLIT LOGIC ---
-    log_container.write("🔄 Assembling pages and applying split logic...")
+    # --- MASTER JSON CHECK & TEXT EXTRACTION ---
+    master_json_path = os.path.join(pdf_dir, f"master_{state['master_pdf']}.json")
     all_extracted_text = {}
-    for batch_id in range(len(batches)):
-        batch_file_path = os.path.join(pdf_dir, f"temp_{state['master_pdf']}_batch_{batch_id}.json")
-        if os.path.exists(batch_file_path):
-            with open(batch_file_path, "r", encoding="utf-8") as f:
-                batch_data = json.load(f)
-                for p_num_str, text in batch_data.items():
-                    all_extracted_text[int(p_num_str)] = text
-            os.remove(batch_file_path)
+
+    if os.path.exists(master_json_path):
+        log_container.write(f"📄 Master JSON found. Reading text directly...")
+        with open(master_json_path, 'r', encoding='utf-8') as f:
+            master_data = json.load(f)
+            for p_num in pages_to_process:
+                if str(p_num) in master_data:
+                    all_extracted_text[int(p_num)] = master_data[str(p_num)]
+                else:
+                    log_container.warning(f"⚠️ Page {p_num} missing from master JSON.")
+    else:
+        log_container.write("⚙️ Master JSON not found. Initiating batch OCR processing...")
+        # --- BATCH PREP ---
+        num_batches = 5
+        batch_size = math.ceil(len(pages_to_process) / num_batches)
+        batches = [pages_to_process[j:j + batch_size] for j in range(0, len(pages_to_process), batch_size)]
+
+        batch_placeholders = {}
+        for i in range(len(batches)):
+            if not batches[i]: continue
+            start_pg, end_pg = batches[i][0], batches[i][-1]
+            page_label = f"pg {start_pg}" if start_pg == end_pg else f"pgs {start_pg}-{end_pg}"
+            with log_container.expander(f"Batch {i+1} Status ({page_label})", expanded=True):
+                batch_placeholders[i] = st.empty()
+
+        # --- PARALLEL EXECUTION ---
+        from multiprocessing import Manager
+        os.environ["PYTHONPATH"] = project_root
+
+        with Manager() as manager:
+            shared_logs = manager.dict()
+            for i in range(len(batches)):
+                shared_logs[i] = manager.list()
+
+            executor = concurrent.futures.ProcessPoolExecutor(max_workers=num_batches)
+            futures = []
+            for batch_id, batch_pages in enumerate(batches):
+                if not batch_pages: continue
+                future = executor.submit(
+                    process_pdf_batch,
+                    batch_id, batch_pages, local_pdf_path, ocr_strategy, 
+                    state["master_pdf"], pdf_dir, shared_logs[batch_id]
+                )
+                futures.append(future)
+
+            # Polling Loop
+            while True:
+                all_done = True
+                for batch_id, future in enumerate(futures):
+                    current_logs = list(shared_logs.get(batch_id, []))
+                    if current_logs and batch_id in batch_placeholders:
+                        batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
+                    if not future.done():
+                        all_done = False
+                if all_done:
+                    break
+                time.sleep(1)
+
+            executor.shutdown(wait=False, cancel_futures=True)
+
+        # --- OFFLINE ASSEMBLY ---
+        log_container.write("🔄 Assembling pages from batch temp files...")
+        for batch_id in range(len(batches)):
+            batch_file_path = os.path.join(pdf_dir, f"temp_{state['master_pdf']}_batch_{batch_id}.json")
+            if os.path.exists(batch_file_path):
+                with open(batch_file_path, "r", encoding="utf-8") as f:
+                    batch_data = json.load(f)
+                    for p_num_str, text in batch_data.items():
+                        all_extracted_text[int(p_num_str)] = text
+                os.remove(batch_file_path)
 
     # Check if the active chapter needs text from the previous page
     if page_data.get("needs_split") and pages_to_process:
