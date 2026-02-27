@@ -586,8 +586,11 @@ if start_batch:
             current_wikitext = state["wikitext_cache"].get(active_chapter, "")
             overflow = state.get("overflow_cache", {}).get(active_chapter, "")
             
-            # Combine safely bypassing any wiki-format strippers
-            combined_text = f"{overflow}\n\n{current_wikitext}".strip()
+            # If overflow exists from the previous split, it replaces the legacy text entirely
+            if overflow:
+                combined_text = overflow.strip()
+            else:
+                combined_text = current_wikitext.strip()
             
             if combined_text:
                 log_container.write("💾 Saving unmapped middle section locally...")
@@ -599,7 +602,7 @@ if start_batch:
                 safe_sp = active_chapter.replace("/", "_")
                 ch_file_path = os.path.join(pdf_dir, f"{safe_sp}.txt")
                 with open(ch_file_path, "w", encoding="utf-8") as f:
-                    f.write(cleanup_page_seams(combined_text))
+                    f.write(combined_text)
                 
                 state["completed_subpages"].append(active_chapter)
                 save_book_state(safe_title, state)
@@ -677,11 +680,14 @@ if start_batch:
             match = re.search(r'\{\{page\|', final_wikitext, flags=re.IGNORECASE)
             if match:
                 final_wikitext = final_wikitext[match.start():]
+            else:
+                # If no page template is found, delete the legacy content entirely
+                final_wikitext = ""
         
         # Pull any overflow belonging to this chapter and prepend it right before saving
         overflow = state.get("overflow_cache", {}).get(active_chapter, "")
         if overflow:
-            final_wikitext = f"{overflow}\n\n{final_wikitext}"
+            final_wikitext = f"{overflow}\n\n{final_wikitext}".strip()
             
         # --- Apply Header & OCR Cleanup ---
         final_wikitext = apply_final_formatting(final_wikitext, active_chapter, found_year)
