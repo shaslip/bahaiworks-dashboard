@@ -324,13 +324,21 @@ if execution_mode == "All Books (Production)":
         
     st.info(f"Found {len(pending_books)} book(s) marked as PENDING. The script will process Steps 1-3, mark them READY, and sleep for 2 hours between books.")
     
-    if st.button("▶️ Start Automation Loop", type="primary", use_container_width=True):
+    col_start, col_stop = st.columns([1, 1])
+    with col_start:
+        start_auto = st.button("▶️ Start Automation Loop", type="primary", use_container_width=True)
+    with col_stop:
+        if st.button("🛑 Stop Execution", use_container_width=True):
+            st.warning("Automation stopped.")
+            st.stop()
+            
+    if start_auto:
         overall_progress = st.progress(0)
         overall_status = st.empty()
-        log_container = st.container(border=True)
         
         for idx, target_book in enumerate(pending_books):
             overall_status.markdown(f"### Processing Book {idx+1}/{len(pending_books)}: `{target_book}`")
+            log_container = st.container(border=True)
             safe_title = target_book.replace("/", "_")
             state = load_book_state(safe_title)
             
@@ -374,6 +382,14 @@ if execution_mode == "All Books (Production)":
                 batch_size = math.ceil(len(pages_to_process) / num_batches) if len(pages_to_process) > 0 else 1
                 batches = [pages_to_process[j:j + batch_size] for j in range(0, len(pages_to_process), batch_size)]
                 
+                batch_placeholders = {}
+                for i in range(len(batches)):
+                    if not batches[i]: continue
+                    start_pg, end_pg = batches[i][0], batches[i][-1]
+                    page_label = f"pg {start_pg}" if start_pg == end_pg else f"pgs {start_pg}-{end_pg}"
+                    with log_container.expander(f"Batch {i+1} Status ({page_label})", expanded=True):
+                        batch_placeholders[i] = st.empty()
+                
                 from multiprocessing import Manager
                 os.environ["PYTHONPATH"] = project_root
                 
@@ -391,9 +407,20 @@ if execution_mode == "All Books (Production)":
                         )
                         futures.append(future)
                         
-                    # Wait for all batches to finish
-                    concurrent.futures.wait(futures)
-                    executor.shutdown(wait=False)
+                    # Restored live visibility loop
+                    while True:
+                        all_done = True
+                        for batch_id, future in enumerate(futures):
+                            current_logs = list(shared_logs.get(batch_id, []))
+                            if current_logs and batch_id in batch_placeholders:
+                                batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
+                            if not future.done():
+                                all_done = False
+                        if all_done:
+                            break
+                        time.sleep(1)
+                        
+                    executor.shutdown(wait=False, cancel_futures=True)
                     
                 log_container.write("🔄 Assembling pages into Master JSON...")
                 master_data = {}
@@ -458,7 +485,6 @@ if execution_mode == "All Books (Production)":
                     last_page_text = all_extracted_text.get(last_page_num, "")
                     if last_page_text:
                         unmapped_to_pass = [ch for ch in pending_ghosts if ch != next_chapter]
-                        # Uses default prompt since this runs headless
                         split_results = apply_chunked_split(last_page_text, next_chapter, unmapped_to_pass, "Look for the start of a new section or chapter heading.")
                         
                         if "_previous_" in split_results:
@@ -504,7 +530,7 @@ if execution_mode == "All Books (Production)":
             log_container.success(f"✅ {target_book} is completely mapped and processed. Local .txt files are ready for upload.")
             overall_progress.progress((idx + 1) / len(pending_books))
             
-            # Sleep logic between books (if not the last book)
+            # Sleep logic between books
             if idx < len(pending_books) - 1:
                 log_container.info("⏳ Sleeping for 2 hours before processing the next book...")
                 countdown = st.empty()
@@ -517,7 +543,7 @@ if execution_mode == "All Books (Production)":
                 
         st.success("🎉 Automated queue complete! Switch back to '1 Book (Test)' to manually upload books marked as READY.")
         
-    st.stop() # Stops execution so the manual UI doesn't render below
+    st.stop()
 
 # ==============================================================================
 # MANUAL MODE UI HERE
