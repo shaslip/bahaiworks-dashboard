@@ -288,16 +288,6 @@ st.sidebar.header("Configuration")
 input_folder = st.sidebar.text_input("Local PDF Root Folder", value="/home/sarah/Desktop/Projects/Bahai.works/English/")
 ocr_strategy = st.sidebar.radio("OCR Strategy", ["Gemini (Default)", "DocAI Only"])
 
-st.sidebar.divider()
-st.sidebar.subheader("LLM Split Configuration")
-split_prompt = st.sidebar.text_area(
-    "Custom Split Instruction", 
-    value="Look for the start of a new obituary. The person's name is usually in all caps or a distinct heading.",
-    help="Context to help the LLM identify where a specific chapter begins."
-)
-
-st.sidebar.divider()
-
 session = requests.Session()
 try:
     get_csrf_token(session)
@@ -517,6 +507,23 @@ if subpages_to_process:
     st.divider()
     st.subheader("Step 3: Offline Batch Processing")
     st.info(f"Ready to process {len(subpages_to_process)} remaining sections locally.")
+
+    # --- Evaluate if LLM Split is needed ---
+    will_need_split = False
+    for sp in subpages_to_process:
+        route_info = state.get("route_map", {}).get(sp, {})
+        if not route_info.get("pdf_pages") or route_info.get("needs_split", False):
+            will_need_split = True
+            break
+
+    split_prompt = ""
+    if will_need_split:
+        st.warning("⚠️ The map indicates that chapter splits are required. Review the LLM split instruction below before starting.")
+        split_prompt = st.text_area(
+            "Custom Split Instruction", 
+            value="Look for the start of a new obituary. The person's name is usually in all caps or a distinct heading.",
+            help="Context to help the LLM identify where a specific chapter begins."
+        )
 
     col_start, col_stop = st.columns([1, 1])
     with col_start:
