@@ -476,49 +476,41 @@ if st.session_state.get('processing_active') == active_chapter:
                         all_extracted_text[int(p_num_str)] = text
                 os.remove(batch_file_path)
 
-    # --- LOOK FORWARD SPLIT LOGIC ---
-    # Check if the subsequent unmapped chapters need a split on our LAST processed page
+    # --- BRUTE FORCE SPLIT LOGIC ---
+    # Always check the LAST processed page for splits into the next chapter or any ghost chapters
     if pages_to_process and next_chapter:
-        next_page_data = state["route_map"].get(next_chapter, {})
+        last_page_num = pages_to_process[-1]
+        last_page_text = all_extracted_text.get(last_page_num, "")
         
-        # If the next chapter has no mapped pages, it might be sharing our last page
-        if next_page_data.get("needs_split") and not next_page_data.get("pdf_pages"):
-            last_page_num = pages_to_process[-1]
-            master_json_path = os.path.join(pdf_dir, f"master_{state['master_pdf']}.json")
+        if last_page_text:
+            log_container.write(f"🧠 Asking LLM to check for chapter splits on page {last_page_num}...")
             
-            if os.path.exists(master_json_path):
-                with open(master_json_path, 'r', encoding='utf-8') as f:
-                    master_data = json.load(f)
-                    
-                last_page_text = master_data.get(str(last_page_num), "")
-                if last_page_text:
-                    log_container.write(f"🧠 Asking LLM to find forward splits on page {last_page_num}...")
-                    
-                    # Find all contiguous subsequent chapters that have NO mapped pages
-                    unmapped_chapters = []
-                    curr_idx = state["subpages"].index(active_chapter) + 1
-                    while curr_idx < len(state["subpages"]):
-                        ch = state["subpages"][curr_idx]
-                        if state["route_map"].get(ch, {}).get("needs_split") and not state["route_map"].get(ch, {}).get("pdf_pages"):
-                            unmapped_chapters.append(ch)
-                        else:
-                            break # Stop looking forward once we hit a chapter with its own mapped pages
-                            
-                    if unmapped_chapters:
-                        target_next = unmapped_chapters[0]
-                        remaining_unmapped = unmapped_chapters[1:]
-                        
-                        split_results = apply_chunked_split(last_page_text, target_next, remaining_unmapped, split_prompt)
-                        
-                        # The text belonging to the active chapter is everything before the first split
-                        if "_previous_" in split_results:
-                            # Replace the last page's extracted text with ONLY the active chapter's portion
-                            all_extracted_text[last_page_num] = split_results["_previous_"]
-                            
-                        # Save the identified forward chapters to the cache so they upload when their turn arrives
-                        for unmapped_chap in unmapped_chapters:
-                            if unmapped_chap in split_results:
-                                state["wikitext_cache"][unmapped_chap] = split_results[unmapped_chap]
+            # Find all ghost chapters (0 mapped pages) across the entire book
+            ghost_chapters = [ch for ch in state["subpages"] if not state["route_map"].get(ch, {}).get("pdf_pages")]
+            if active_chapter in ghost_chapters:
+                ghost_chapters.remove(active_chapter)
+                
+            unmapped_to_pass = [ch for ch in ghost_chapters if ch != next_chapter]
+            
+            split_results = apply_chunked_split(last_page_text, next_chapter, unmapped_to_pass, split_prompt)
+            
+            # The text belonging to the active chapter is everything before the first split
+            if "_previous_" in split_results:
+                # Replace the last page's extracted text with ONLY the active chapter's portion
+                all_extracted_text[last_page_num] = split_results["_previous_"]
+                
+            # Process any forward chapters found on this page
+            for found_chap, text_content in split_results.items():
+                if found_chap == "_previous_" or not text_content.strip(): 
+                    continue
+                
+                # Prepend the overflow text to the found chapter's wikitext cache
+                # so it is included when that chapter is subsequently uploaded.
+                existing_wikitext = state["wikitext_cache"].get(found_chap, "")
+                marker = f""
+                
+                if marker not in existing_wikitext:
+                    state["wikitext_cache"][found_chap] = f"{marker}\n{text_content}\n\n{existing_wikitext}"
 
     # Inject Current Chapter
     current_wikitext = state["wikitext_cache"].get(active_chapter, "")
