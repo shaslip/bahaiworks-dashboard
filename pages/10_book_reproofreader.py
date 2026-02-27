@@ -756,7 +756,6 @@ if st.button("🌐 Upload All Chapters to Wiki", type="primary", width='stretch'
         with open(ch_file_path, "r", encoding="utf-8") as f:
             final_wikitext = f.read()
             
-        log_container.write(f"🚀 Uploading {active_chapter}...")
         res = upload_to_bahaiworks(active_chapter, final_wikitext, "Bot: Parallel Batch Reproofread", session=session)
         
         if res.get('edit', {}).get('result') == 'Success':
