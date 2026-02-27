@@ -32,6 +32,7 @@ from src.mediawiki_uploader import (
     get_csrf_token,
     cleanup_page_seams
 )
+from src.gemini_processor import apply_chunked_split
 
 # --- Configuration ---
 if 'GEMINI_API_KEY' not in os.environ:
@@ -203,7 +204,6 @@ def build_sequential_route_map(subpages, session, input_folder):
 
     # --- Save a text file per chapter in the local PDF directory ---
     if master_pdf_filename:
-        # Relies on find_local_pdf already being defined in the file
         local_pdf_path = find_local_pdf(master_pdf_filename, input_folder)
         if local_pdf_path:
             pdf_dir = os.path.dirname(local_pdf_path)
@@ -222,28 +222,6 @@ def find_local_pdf(filename, root_folder):
                 return os.path.join(dirpath, f)
     return None
 
-def apply_proportional_split(full_ai_text, old_part1, old_part2):
-    """
-    Splits the AI text proportionally without difflib matching. 
-    Prevents typo/formatting corrections from throwing off the split logic.
-    """
-    if not old_part1 or not old_part2:
-        return full_ai_text, ""
-        
-    ratio = len(old_part1) / float(len(old_part1) + len(old_part2) + 1)
-    target_idx = int(len(full_ai_text) * ratio)
-    
-    # Try to snap to a clean paragraph break
-    breaks = [m.start() for m in re.finditer(r'\n+', full_ai_text)]
-    if not breaks:
-        breaks = [m.start() for m in re.finditer(r'\s+', full_ai_text)]
-        
-    if breaks:
-        closest_break = min(breaks, key=lambda x: abs(x - target_idx))
-        return full_ai_text[:closest_break].strip(), full_ai_text[closest_break:].strip()
-        
-    return full_ai_text, ""
-
 # ==============================================================================
 # 3. UI & MAIN LOGIC
 # ==============================================================================
@@ -255,6 +233,14 @@ input_folder = st.sidebar.text_input("Local PDF Root Folder", value="/home/sarah
 ocr_strategy = st.sidebar.radio("OCR Strategy", ["Gemini (Default)", "DocAI Only"])
 
 st.sidebar.divider()
+st.sidebar.subheader("LLM Split Configuration")
+split_prompt = st.sidebar.text_area(
+    "Custom Split Instruction", 
+    value="Look for the start of a new obituary. The person's name is usually in all caps or a distinct heading.",
+    help="Context to help the LLM identify where a specific chapter begins."
+)
+
+st.sidebar.divider()
 
 session = requests.Session()
 try:
@@ -263,7 +249,7 @@ except Exception as e:
     st.error(f"Authentication Failed: {e}")
     st.stop()
 
-# --- RESTORED: Master Queue Display ---
+# --- Master Queue Display ---
 queue_data = load_queue()
 
 if queue_data:
@@ -278,7 +264,7 @@ if not all_books:
 
 st.divider()
 
-# --- UNLOCKED: Select Any Book & Reset State ---
+# --- Select Any Book & Reset State ---
 col1, col2 = st.columns([3, 1])
 with col1:
     target_book = st.selectbox("Select Target Book (All Statuses Available)", all_books)
@@ -317,7 +303,6 @@ if not state.get("subpages"):
     if st.button("🛠️ Generate Chapter Map", type="primary"):
         with st.spinner("🔍 Scanning wiki subpages and building route map..."):
             subpages = get_all_subpages(target_book, session)
-            # Unpack the new ordered_subpages list
             route_map, master_pdf_filename, wikitext_cache, ordered_subpages = build_sequential_route_map(subpages, session, input_folder)
             
             if not route_map or not master_pdf_filename:
@@ -347,34 +332,27 @@ for sp in state["subpages"]:
     })
 st.dataframe(map_display, use_container_width=True, hide_index=True)
 
-# --- STEP 2: PROCESS ENTIRE PDF ---
+# --- STEP 2: FIND NEXT TASK & PAUSE ---
+subpages_to_process = [sp for sp in state["subpages"] if sp not in state.get("completed_subpages", [])]
+
+if not subpages_to_process:
+    st.success(f"✅ All sections for {target_book} completed!")
+    queue_data[target_book]["status"] = "COMPLETED"
+    save_queue(queue_data)
+    st.stop()
+
+active_chapter = subpages_to_process[0]
+active_chapter_idx = state["subpages"].index(active_chapter)
+next_chapter = state["subpages"][active_chapter_idx + 1] if active_chapter_idx + 1 < len(state["subpages"]) else None
+
 st.divider()
 st.subheader("Action Required")
-
-master_pdf = state.get("master_pdf")
-if not master_pdf:
-    st.warning("Generate Chapter Map first to identify the master PDF.")
-    st.stop()
-
-local_pdf_path = find_local_pdf(master_pdf, input_folder)
-if not local_pdf_path:
-    st.error(f"Local PDF not found for '{master_pdf}'")
-    st.stop()
-
-pdf_dir = os.path.dirname(local_pdf_path)
-master_json_path = os.path.join(pdf_dir, f"master_{master_pdf}.json")
-
-if os.path.exists(master_json_path):
-    st.success(f"✅ Full book processing already completed! Master record found at {master_json_path}")
-    st.info("The next step (splitting and uploading) will be built here soon.")
-    st.stop()
-
-st.info(f"Next task: Run **{ocr_strategy}** on the entire book (`{master_pdf}`).")
+st.info(f"Next task: Processing section **{active_chapter}**")
 
 col_start, col_stop = st.columns([1, 1])
 with col_start:
-    if st.button(f"🚀 Run {ocr_strategy}", type="primary", use_container_width=True):
-        st.session_state['processing_active'] = "FULL_BOOK"
+    if st.button("🚀 Yes, Process This Section", type="primary", use_container_width=True):
+        st.session_state['processing_active'] = active_chapter
         st.rerun()
 with col_stop:
     if st.button("🛑 Stop Execution", use_container_width=True):
@@ -383,21 +361,53 @@ with col_stop:
         st.stop()
 
 # Execution bound to session state so it doesn't vanish
-if st.session_state.get('processing_active') == "FULL_BOOK":
+if st.session_state.get('processing_active') == active_chapter:
     
     log_container = st.container(border=True)
-    log_container.write(f"Starting parallel processing for the entire book: {master_pdf}...")
+    log_container.write(f"Starting parallel processing for {active_chapter}...")
     
-    doc = fitz.open(local_pdf_path)
-    total_pages = len(doc)
-    doc.close()
+    local_pdf_path = find_local_pdf(state["master_pdf"], input_folder)
+    if not local_pdf_path:
+        st.error(f"Local PDF not found for '{state['master_pdf']}'")
+        st.session_state.pop('processing_active', None)
+        st.stop()
+        
+    # --- Get the directory of the PDF for temp files ---
+    pdf_dir = os.path.dirname(local_pdf_path)
 
-    pages_to_process = list(range(1, total_pages + 1))
-    num_batches = 10
+    page_data = state["route_map"].get(active_chapter, {})
+    pdf_targets = page_data.get("pdf_pages", [])
+    
+    # --- UNMAPPED CHAPTER HANDLING ---
+    if not pdf_targets:
+        current_wikitext = state["wikitext_cache"].get(active_chapter, "")
+        if current_wikitext.strip():
+            log_container.write("🚀 Uploading middle section to wiki...")
+            res = upload_to_bahaiworks(active_chapter, current_wikitext, "Bot: Parallel Batch Reproofread", session=session)
+            if res.get('edit', {}).get('result') == 'Success':
+                state["completed_subpages"].append(active_chapter)
+                save_book_state(safe_title, state)
+                st.session_state.pop('processing_active', None)
+                st.success(f"Upload complete for {active_chapter}!")
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.error(f"❌ Upload failed: {res}")
+                st.session_state.pop('processing_active', None)
+                st.stop()
+        else:
+            log_container.write("No PDF pages mapped and no cached text. Skipping section.")
+            state["completed_subpages"].append(active_chapter)
+            save_book_state(safe_title, state)
+            st.session_state.pop('processing_active', None)
+            st.rerun()
+            
+    pages_to_process = [t["pdf_num"] for t in pdf_targets]
+    
+    # --- BATCH PREP ---
+    num_batches = 5
     batch_size = math.ceil(len(pages_to_process) / num_batches)
     batches = [pages_to_process[j:j + batch_size] for j in range(0, len(pages_to_process), batch_size)]
-
-    st.write(f"🚀 Split {total_pages} pages across {len(batches)} batches.")
 
     batch_placeholders = {}
     for i in range(len(batches)):
@@ -423,7 +433,7 @@ if st.session_state.get('processing_active') == "FULL_BOOK":
             future = executor.submit(
                 process_pdf_batch,
                 batch_id, batch_pages, local_pdf_path, ocr_strategy, 
-                master_pdf, pdf_dir, shared_logs[batch_id]
+                state["master_pdf"], pdf_dir, shared_logs[batch_id]
             )
             futures.append(future)
 
@@ -440,42 +450,74 @@ if st.session_state.get('processing_active') == "FULL_BOOK":
                 break
             time.sleep(1)
 
-        # Force shutdown to prevent UI hang
         executor.shutdown(wait=False, cancel_futures=True)
-        
-        # Ruthlessly kill the background workers so gRPC threads don't cause a RAM leak
-        import signal
-        if hasattr(executor, '_processes') and executor._processes is not None:
-            for pid in executor._processes.keys():
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except OSError:
-                    pass
 
-    # --- OFFLINE ASSEMBLY / MERGE MASTER RECORD ---
-    log_container.write("🔄 Merging all batches into master record...")
-    master_data = {}
-    
+    # --- OFFLINE ASSEMBLY & SPLIT LOGIC ---
+    log_container.write("🔄 Assembling pages and applying split logic...")
+    all_extracted_text = {}
     for batch_id in range(len(batches)):
-        batch_file_path = os.path.join(pdf_dir, f"temp_{master_pdf}_batch_{batch_id}.json")
+        batch_file_path = os.path.join(pdf_dir, f"temp_{state['master_pdf']}_batch_{batch_id}.json")
         if os.path.exists(batch_file_path):
             with open(batch_file_path, "r", encoding="utf-8") as f:
                 batch_data = json.load(f)
                 for p_num_str, text in batch_data.items():
-                    master_data[int(p_num_str)] = text
-
-    # Save sorted master record
-    sorted_master = {str(k): master_data[k] for k in sorted(master_data.keys())}
-    with open(master_json_path, "w", encoding="utf-8") as f:
-        json.dump(sorted_master, f, indent=4)
-
-    # Cleanup temp batches
-    for batch_id in range(len(batches)):
-        batch_file_path = os.path.join(pdf_dir, f"temp_{master_pdf}_batch_{batch_id}.json")
-        if os.path.exists(batch_file_path):
+                    all_extracted_text[int(p_num_str)] = text
             os.remove(batch_file_path)
 
-    st.session_state.pop('processing_active', None)
-    st.success(f"✅ Full book processing complete! Master record saved to {master_json_path}")
-    time.sleep(1)
-    st.rerun()
+    # Check if the active chapter needs text from the previous page
+    if page_data.get("needs_split") and pages_to_process:
+        first_page_num = pages_to_process[0]
+        prev_page_num = first_page_num - 1
+        master_json_path = os.path.join(pdf_dir, f"master_{state['master_pdf']}.json")
+        
+        if os.path.exists(master_json_path):
+            with open(master_json_path, 'r', encoding='utf-8') as f:
+                master_data = json.load(f)
+                
+            prev_page_text = master_data.get(str(prev_page_num), "")
+            if prev_page_text:
+                log_container.write(f"🧠 Asking LLM to find splits on page {prev_page_num}...")
+                
+                # Find all chapters that have NO mapped pages
+                unmapped_chapters = [sp for sp in state["subpages"] if not state["route_map"].get(sp, {}).get("pdf_pages")]
+                
+                split_results = apply_chunked_split(prev_page_text, active_chapter, unmapped_chapters, split_prompt)
+                
+                # Prepend the active chapter's missing text to its first processed page
+                if active_chapter in split_results:
+                    if first_page_num in all_extracted_text:
+                        all_extracted_text[first_page_num] = split_results[active_chapter] + "\n\n" + all_extracted_text[first_page_num]
+                    else:
+                        all_extracted_text[first_page_num] = split_results[active_chapter]
+                
+                # Save middle chapters to the cache so they upload when their turn arrives
+                for unmapped_chap in unmapped_chapters:
+                    if unmapped_chap in split_results:
+                        state["wikitext_cache"][unmapped_chap] = split_results[unmapped_chap]
+
+    # Inject Current Chapter
+    current_wikitext = state["wikitext_cache"].get(active_chapter, "")
+    for target in pdf_targets:
+        pdf_num = target["pdf_num"]
+        label = target["label"]
+        chunk_to_inject = all_extracted_text.get(pdf_num, "")
+        
+        if chunk_to_inject:
+            current_wikitext, err = inject_text_into_page(current_wikitext, label, chunk_to_inject, state["master_pdf"])
+
+    # Final Cleanup & Upload
+    final_wikitext = cleanup_page_seams(current_wikitext)
+    log_container.write("🚀 Uploading section to wiki...")
+    
+    res = upload_to_bahaiworks(active_chapter, final_wikitext, "Bot: Parallel Batch Reproofread", session=session)
+    
+    if res.get('edit', {}).get('result') == 'Success':
+        state["completed_subpages"].append(active_chapter)
+        save_book_state(safe_title, state)
+        st.session_state.pop('processing_active', None)
+        st.success(f"Upload complete for {active_chapter}!")
+        time.sleep(1)
+        st.rerun()
+    else:
+        st.error(f"❌ Upload failed: {res}")
+        st.session_state.pop('processing_active', None)
