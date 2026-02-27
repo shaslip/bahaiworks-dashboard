@@ -332,17 +332,69 @@ for sp in state["subpages"]:
     })
 st.dataframe(map_display, use_container_width=True, hide_index=True)
 
-# --- STEP 2: AUTOMATED BATCH PROCESSING (OFFLINE) ---
+# --- STEP 2 & 3: AUTOMATED BATCH PROCESSING & WIKI UPLOAD ---
 subpages_to_process = [sp for sp in state["subpages"] if sp not in state.get("completed_subpages", [])]
+subpages_to_upload = [sp for sp in state["subpages"] if sp not in state.get("uploaded_subpages", [])]
 
+# If offline processing is completely finished, switch to Upload Mode
 if not subpages_to_process:
-    st.success(f"✅ All sections for {target_book} completed!")
-    queue_data[target_book]["status"] = "COMPLETED"
-    save_queue(queue_data)
-    st.stop()
+    st.success(f"✅ Offline processing complete for {target_book}! Local txt files are ready for review.")
+    
+    if not subpages_to_upload:
+        st.success(f"🎉 All sections for {target_book} have been uploaded to the wiki!")
+        queue_data[target_book]["status"] = "COMPLETED"
+        save_queue(queue_data)
+        st.stop()
+        
+    st.divider()
+    st.subheader("Step 3: Wiki Upload Phase")
+    st.info(f"Ready to upload {len(subpages_to_upload)} sections to the wiki.")
+    
+    if st.button("🌐 Upload All Chapters to Wiki", type="primary", use_container_width=True):
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        log_container = st.container(border=True)
+        
+        local_pdf_path = find_local_pdf(state["master_pdf"], input_folder)
+        pdf_dir = os.path.dirname(local_pdf_path) if local_pdf_path else ""
+        
+        if "uploaded_subpages" not in state:
+            state["uploaded_subpages"] = []
+            
+        for idx, active_chapter in enumerate(subpages_to_upload):
+            status_text.markdown(f"**Uploading {idx+1}/{len(subpages_to_upload)}:** `{active_chapter}`")
+            progress_bar.progress(idx / len(subpages_to_upload))
+            
+            safe_sp = active_chapter.replace("/", "_")
+            ch_file_path = os.path.join(pdf_dir, f"{safe_sp}.txt")
+            
+            if not os.path.exists(ch_file_path):
+                log_container.error(f"❌ Local file missing for {active_chapter}")
+                continue
+                
+            with open(ch_file_path, "r", encoding="utf-8") as f:
+                final_wikitext = f.read()
+                
+            log_container.write(f"🚀 Uploading {active_chapter}...")
+            res = upload_to_bahaiworks(active_chapter, final_wikitext, "Bot: Parallel Batch Reproofread", session=session)
+            
+            if res.get('edit', {}).get('result') == 'Success':
+                state["uploaded_subpages"].append(active_chapter)
+                save_book_state(safe_title, state)
+                log_container.write(f"✅ Success: {active_chapter}")
+            else:
+                log_container.error(f"❌ Upload failed: {res}")
+                st.stop()
+                
+        progress_bar.progress(1.0)
+        queue_data[target_book]["status"] = "COMPLETED"
+        save_queue(queue_data)
+        status_text.success("🎉 All chapters successfully uploaded to the wiki!")
+        
+    st.stop() # Halts execution here so the offline UI below is hidden
 
 st.divider()
-st.subheader("Offline Batch Processing")
+st.subheader("Step 2: Offline Batch Processing")
 st.info(f"Ready to process {len(subpages_to_process)} remaining sections locally.")
 
 col_start, col_stop = st.columns([1, 1])
