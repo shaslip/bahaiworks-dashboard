@@ -374,28 +374,38 @@ def get_chapter_split_indices(page_text, target_chapter, unmapped_chapters, cust
 def apply_chunked_split(page_text, target_chapter, unmapped_chapters, custom_instruction):
     """
     Divides a single page of text into multiple chapter chunks based on LLM-identified indices.
+    Tolerates lazy LLM responses that drop prefixes.
     """
     indices, blocks = get_chapter_split_indices(page_text, target_chapter, unmapped_chapters, custom_instruction)
     
     if not indices:
         return {"_previous_": page_text} # Fallback if LLM fails
         
-    # Verify at least one of our requested chapters was actually found
     requested_chapters = [target_chapter] + unmapped_chapters
-    valid_splits = {k: int(v) for k, v in indices.items() if k in requested_chapters and str(v).isdigit()}
+    valid_splits = {}
     
+    # Fuzzy match LLM output back to the full requested chapter name
+    for k, v in indices.items():
+        if not str(v).isdigit(): continue
+        
+        if k in requested_chapters:
+            valid_splits[k] = int(v)
+            continue
+            
+        for req in requested_chapters:
+            if k in req or req.endswith(k):
+                valid_splits[req] = int(v)
+                break
+                
     if not valid_splits:
         return {"_previous_": page_text}
         
-    # Sort the found chapters by their starting block index ascending
     sorted_splits = sorted(valid_splits.items(), key=lambda x: x[1])
     results = {}
     
-    # Everything before the very first split belongs to the previous chapter/page
     first_split_idx = sorted_splits[0][1]
     results["_previous_"] = "\n\n".join(blocks[:first_split_idx])
     
-    # Extract text for each identified chapter based on the boundaries
     for i, (chap_name, start_idx) in enumerate(sorted_splits):
         end_idx = sorted_splits[i+1][1] if i + 1 < len(sorted_splits) else len(blocks)
         results[chap_name] = "\n\n".join(blocks[start_idx:end_idx])
