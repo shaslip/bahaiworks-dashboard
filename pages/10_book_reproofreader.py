@@ -134,7 +134,11 @@ def get_all_subpages(root_title, session):
         try:
             res = session.get(API_URL, params=params).json()
             chunk = res.get('query', {}).get('allpages', [])
-            pages.extend([p['title'] for p in chunk])
+            
+            # EXCLUDE AC-Message pages
+            for p in chunk:
+                if not p['title'].endswith("AC-Message"):
+                    pages.append(p['title'])
             
             if 'continue' in res:
                 params.update(res['continue'])
@@ -382,7 +386,7 @@ st.dataframe(map_display, width='stretch', hide_index=True)
 # STEP 3: MASTER JSON GENERATION
 # ==============================================================================
 st.divider()
-st.subheader("Step 3: Generate Master JSON")
+st.subheader("Step 2: Generate Master JSON")
 
 local_pdf_path = find_local_pdf(state["master_pdf"], input_folder) if state.get("master_pdf") else None
 pdf_dir = os.path.dirname(local_pdf_path) if local_pdf_path else ""
@@ -509,7 +513,7 @@ if not subpages_to_process:
         st.stop()
         
     st.divider()
-    st.subheader("Step 5: Wiki Upload Phase")
+    st.subheader("Step 4: Wiki Upload Phase")
     st.info(f"Ready to upload {len(subpages_to_upload)} sections to the wiki.")
     
     if st.button("🌐 Upload All Chapters to Wiki", type="primary", width='stretch'):
@@ -557,10 +561,10 @@ if not subpages_to_process:
 
 
 # ==============================================================================
-# STEP 4: OFFLINE BATCH PROCESSING
+# STEP 3: OFFLINE BATCH PROCESSING
 # ==============================================================================
 st.divider()
-st.subheader("Step 2: Offline Batch Processing")
+st.subheader("Step 3: Offline Batch Processing")
 st.info(f"Ready to process {len(subpages_to_process)} remaining sections locally.")
 
 col_start, col_stop = st.columns([1, 1])
@@ -586,6 +590,18 @@ if start_batch:
         st.stop()
         
     pdf_dir = os.path.dirname(local_pdf_path)
+
+    # --- MASTER JSON CHECK & LOAD (MOVED OUTSIDE LOOP) ---
+    master_json_path = os.path.join(pdf_dir, f"master_{state['master_pdf']}.json")
+    master_data = {}
+    
+    if os.path.exists(master_json_path):
+        log_container.write(f"📄 Master JSON found. Loading text into memory...")
+        with open(master_json_path, 'r', encoding='utf-8') as f:
+            master_data = json.load(f)
+    else:
+        log_container.error(f"❌ Master JSON not found! Please complete Step 2 (Generate Master JSON) first.")
+        st.stop()
 
     for idx, active_chapter in enumerate(subpages_to_process):
         active_chapter_idx = state["subpages"].index(active_chapter)
@@ -639,25 +655,23 @@ if start_batch:
 
         pages_to_process = [t["pdf_num"] for t in pdf_targets]
         
-        # --- MASTER JSON CHECK & TEXT EXTRACTION ---
-        master_json_path = os.path.join(pdf_dir, f"master_{state['master_pdf']}.json")
+        # --- TEXT EXTRACTION FROM PRE-LOADED JSON ---
         all_extracted_text = {}
+        for p_num in pages_to_process:
+            if str(p_num) in master_data:
+                all_extracted_text[int(p_num)] = master_data[str(p_num)]
+            else:
+                log_container.warning(f"⚠️ Page {p_num} missing from master JSON.")
 
-        if os.path.exists(master_json_path):
-            log_container.write(f"📄 Master JSON found. Reading text directly...")
-            with open(master_json_path, 'r', encoding='utf-8') as f:
-                master_data = json.load(f)
-                for p_num in pages_to_process:
-                    if str(p_num) in master_data:
-                        all_extracted_text[int(p_num)] = master_data[str(p_num)]
-                    else:
-                        log_container.warning(f"⚠️ Page {p_num} missing from master JSON.")
-        else:
-            log_container.error(f"❌ Master JSON not found! Please complete Step 3 (Generate Master JSON) first.")
-            st.stop()
+        # --- TARGETED LLM SPLIT LOGIC ---
+        needs_split = page_data.get("needs_split", False)
+        next_chapter_unmapped = False
+        if next_chapter:
+            next_chapter_unmapped = not state["route_map"].get(next_chapter, {}).get("pdf_pages")
 
-        # --- BRUTE FORCE SPLIT LOGIC ---
-        if pages_to_process and next_chapter:
+        # Only trigger the LLM if the current chapter explicitly needs a split, 
+        # or if the next chapter has no mapped pages (meaning we need to find its start point).
+        if pages_to_process and next_chapter and (needs_split or next_chapter_unmapped):
             last_page_num = pages_to_process[-1]
             last_page_text = all_extracted_text.get(last_page_num, "")
             
