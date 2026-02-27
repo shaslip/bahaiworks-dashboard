@@ -859,9 +859,11 @@ with tab_manual:
             st.error(f"Authentication Failed: {e}")
             st.stop()
 
-        is_frontmatter = manual_range.strip().lower() == "frontmatter"
+        range_input = manual_range.strip().lower()
+        is_frontmatter = range_input == "frontmatter"
+        is_all = range_input == "all"
         
-        if not is_frontmatter:
+        if not is_frontmatter and not is_all:
             target_labels = parse_page_range(manual_range)
             if not target_labels:
                 st.error("Invalid page range.")
@@ -883,6 +885,10 @@ with tab_manual:
             
         # --- Normalize custom templates ---
         current_text = normalize_page_templates(current_text, session)
+        
+        if is_all:
+            current_text = process_header(current_text, manual_title, session=session)
+            log_small(f"&nbsp;&nbsp;&nbsp;&nbsp;📝 Processed header for 'all' mode.", color="#444")
             
         # 3. Find File
         file_match = re.search(r'file\s*=\s*([^|}\n]+)', current_text, re.IGNORECASE)
@@ -919,6 +925,8 @@ with tab_manual:
                 st.error("No frontmatter detected (Anchor is PDF page 1).")
                 st.stop()
             pdf_targets = list(range(1, anchor_pdf_page))
+        elif is_all:
+            pdf_targets = list(range(1, scope_end + 1))
         else:
             pdf_targets = [bp + anchor_pdf_page - 1 for bp in target_labels]
 
