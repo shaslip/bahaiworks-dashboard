@@ -243,7 +243,9 @@ def reformat_raw_text(raw_text):
         if response.prompt_feedback.block_reason:
              return f"FORMATTING_ERROR: {raw_text}" # Return raw so we at least save something
              
-        return response.text.strip()
+        text = response.text.strip()
+        text = re.sub(r'^[ \t]+', '', text, flags=re.MULTILINE)
+        return text
         
     except Exception as e:
         return f"FORMATTING_ERROR: {raw_text}"
@@ -266,7 +268,9 @@ def proofread_page(image):
             [prompt, image],
             request_options={"timeout": 120}
         )
-        return response.text.strip()
+        text = response.text.strip()
+        text = re.sub(r'^[ \t]+', '', text, flags=re.MULTILINE)
+        return text
     except Exception as e:
         return f"Error: {e}"
 
