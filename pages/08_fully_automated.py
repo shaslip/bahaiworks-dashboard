@@ -177,7 +177,7 @@ def get_all_pdf_files(root_folder):
     for dirpath, _, filenames in os.walk(root_folder):
         for f in filenames:
             # Define substrings to exclude
-            blacklist = ["-old", "-full", "-cle"]
+            blacklist = ["-old", "-full", "-cle", "-old2"]
             
             # Check if it is a PDF, doesn't start with 'scan', and doesn't contain blacklisted strings
             filename_lower = f.lower()
