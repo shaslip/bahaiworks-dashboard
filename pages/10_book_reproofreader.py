@@ -825,9 +825,20 @@ if subpages_to_process:
                 current_wikitext = state["wikitext_cache"].get(active_chapter, "")
                 overflow = state.get("overflow_cache", {}).get(active_chapter, "")
                 
+                # Preserve accesscontrol and header tags before overwriting with overflow
+                safe_tags = []
+                access_match = re.search(r'<accesscontrol>.*?</accesscontrol>', current_wikitext, flags=re.IGNORECASE | re.DOTALL)
+                if access_match:
+                    safe_tags.append(access_match.group(0))
+                header_match = re.search(r'\{\{header(?:[^{}]|\{\{[^}]*\}\})*\}\}', current_wikitext, flags=re.IGNORECASE | re.DOTALL)
+                if header_match:
+                    safe_tags.append(header_match.group(0))
+                    
+                preserved_prefix = "\n".join(safe_tags) + "\n" if safe_tags else ""
+                
                 # If overflow exists from the previous split, it replaces the legacy text entirely
                 if overflow:
-                    combined_text = overflow.strip()
+                    combined_text = preserved_prefix + overflow.strip()
                 else:
                     combined_text = current_wikitext.strip()
                 
