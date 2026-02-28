@@ -917,6 +917,7 @@ if subpages_to_process:
 
             # Final Cleanup & Local Save (NO WIKI UPLOAD)
             final_wikitext = current_wikitext
+            preserved_prefix = ""
             
             # Clear legacy unproofread text before the first {{page| template
             if pdf_targets:
@@ -936,15 +937,18 @@ if subpages_to_process:
 
                     preserved_prefix = "\n".join(safe_tags) + "\n" if safe_tags else ""
 
-                    final_wikitext = preserved_prefix + final_wikitext[match.start():]
+                    final_wikitext = final_wikitext[match.start():]
                 else:
                     # If no page template is found, delete the legacy content entirely
                     final_wikitext = ""
             
-            # Pull any overflow belonging to this chapter and prepend it right before saving
+            # Pull any overflow belonging to this chapter and prepend it
             overflow = state.get("overflow_cache", {}).get(active_chapter, "")
             if overflow:
                 final_wikitext = f"{overflow}\n\n{final_wikitext}".strip()
+                
+            # Reattach the preserved prefix at the very top so apply_final_formatting can see it
+            final_wikitext = preserved_prefix + final_wikitext
                 
             # --- Apply Header, Seam Cleanup, NOTOC, & OCR Cleanup ---
             final_wikitext = apply_final_formatting(final_wikitext, active_chapter, found_year)
