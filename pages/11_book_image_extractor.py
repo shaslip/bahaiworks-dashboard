@@ -63,10 +63,13 @@ def crop_illustrations(pil_img, expected_count=1):
         
     return cropped_images
 
-def create_wiki_text_file(txt_path, caption, book_title):
+def create_wiki_text_file(txt_path, caption, book_title, access_control=""):
     clean_title = re.sub(r'\.pdf$', '', book_title, flags=re.IGNORECASE).replace('_', ' ')
     
-    content = f"""== File info ==
+    # Add a newline after the tag if it exists, otherwise leave blank
+    access_block = f"{access_control.strip()}\n" if access_control.strip() else ""
+    
+    content = f"""{access_block}== File info ==
 {{{{cs
 | caption = {caption}
 | source = {clean_title}
@@ -88,6 +91,7 @@ input_folder = st.sidebar.text_input("Local PDF Root Folder", value="/home/sarah
 
 pdf_filename = st.text_input("PDF Filename", placeholder="e.g., A_Day_for_Very_Great_Things.pdf")
 page_ranges = st.text_input("Page Ranges", placeholder="e.g., 527-546, 12, 15-20")
+access_control = st.text_input("Access Control (Optional)", placeholder="e.g., <accesscontrol>Access:DayVeryGreatThings</accesscontrol>")
 
 if st.button("🚀 Process Images", type="primary"):
     if not pdf_filename or not page_ranges:
@@ -169,7 +173,7 @@ if st.button("🚀 Process Images", type="primary"):
                 
             # 4. Generate .txt file
             log_container.write(f"📝 Generating MediaWiki text file for {final_filename}...")
-            create_wiki_text_file(final_txt_path, caption, clean_pdf_name)
+            create_wiki_text_file(final_txt_path, caption, clean_pdf_name, access_control)
             
             log_container.success(f"✅ Finished page {page_num}, image {i+1} -> Saved as `{final_filename}`")
             
