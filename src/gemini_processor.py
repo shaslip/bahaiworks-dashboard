@@ -16,6 +16,12 @@ genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 # Your specific model
 MODEL_NAME = 'gemini-3-flash-preview'
 
+def check_fatal_rate_limit(e):
+    """Helper to detect 429 Rate Limit or Quota errors and raise them immediately."""
+    error_msg = str(e).lower()
+    if "429" in error_msg or "quota" in error_msg or "rate limit" in error_msg:
+        raise Exception(f"FATAL_RATE_LIMIT: {str(e)}")
+
 def parse_range_string(range_str):
     pages = []
     if not range_str: return pages
@@ -92,6 +98,7 @@ def extract_metadata_from_pdf(pdf_path, page_range_str):
             return json.loads(match.group(0))
         return {"error": "No JSON found in response", "raw": response.text}
     except Exception as e:
+        check_fatal_rate_limit(e)
         print(f"Debug: Metadata Error: {e}")
         return {"error": f"API Error: {e}"}
 
@@ -159,6 +166,7 @@ def extract_toc_from_pdf(pdf_path, page_range_str):
             return {"toc_json": [], "toc_wikitext": "", "error": "No JSON List found", "raw": response.text}
             
     except Exception as e:
+        check_fatal_rate_limit(e)
         print(f"Debug: API Exception: {e}")
         return {"toc_json": [], "toc_wikitext": "", "error": str(e)}
 
@@ -199,6 +207,7 @@ def transcribe_with_document_ai(image):
         return result.document.text
 
     except Exception as e:
+        check_fatal_rate_limit(e)
         return f"DOCAI_ERROR: {str(e)}"
 
 def reformat_raw_text(raw_text):
@@ -248,6 +257,7 @@ def reformat_raw_text(raw_text):
         return text
         
     except Exception as e:
+        check_fatal_rate_limit(e)
         return f"FORMATTING_ERROR: {raw_text}"
 
 def proofread_page(image):
@@ -272,6 +282,7 @@ def proofread_page(image):
         text = re.sub(r'^[ \t]+', '', text, flags=re.MULTILINE)
         return text
     except Exception as e:
+        check_fatal_rate_limit(e)
         return f"Error: {e}"
 
 def proofread_with_formatting(image):
@@ -331,6 +342,7 @@ def proofread_with_formatting(image):
             return text
 
         except Exception as e:
+            check_fatal_rate_limit(e)
             print(f"Attempt {attempt + 1} Error: {str(e)}")
             if attempt < max_retries:
                 time.sleep(15)
@@ -372,6 +384,7 @@ def get_chapter_split_indices(page_text, target_chapter, unmapped_chapters, cust
         result = json_repair.loads(response.text)
         return result, blocks
     except Exception as e:
+        check_fatal_rate_limit(e)
         print(f"LLM split identification failed: {e}")
         return {}, blocks
 
@@ -467,5 +480,6 @@ def extract_image_caption_and_filename(image, default_name="fallback_image.png")
             
         return [{"caption": "", "filename": default_name}]
     except Exception as e:
+        check_fatal_rate_limit(e)
         print(f"Debug: Caption extraction error: {e}")
         return [{"caption": "", "filename": default_name}]
