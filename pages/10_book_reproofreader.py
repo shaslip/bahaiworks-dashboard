@@ -322,7 +322,13 @@ if execution_mode == "All Books (Production)":
         st.success("No 'PENDING' books found in the queue.")
         st.stop()
         
-    st.info(f"Found {len(pending_books)} book(s) marked as PENDING. The script will process Steps 1-3, mark them READY, and sleep for 2 hours between books.")
+    # Sort alphabetically and allow selection of starting point
+    pending_books.sort()
+    starting_book = st.sidebar.selectbox("Start Production From:", pending_books)
+    start_idx = pending_books.index(starting_book)
+    target_pending_books = pending_books[start_idx:]
+        
+    st.info(f"Found {len(target_pending_books)} book(s) to process starting from `{starting_book}`. The script will process Steps 1-3, auto-upload if no splits are needed, and sleep for 2 hours between books.")
     
     col_start, col_stop = st.columns([1, 1])
     with col_start:
@@ -336,8 +342,8 @@ if execution_mode == "All Books (Production)":
         overall_progress = st.progress(0)
         overall_status = st.empty()
         
-        for idx, target_book in enumerate(pending_books):
-            overall_status.markdown(f"### Processing Book {idx+1}/{len(pending_books)}: `{target_book}`")
+        for idx, target_book in enumerate(target_pending_books):
+            overall_status.markdown(f"### Processing Book {idx+1}/{len(target_pending_books)}: `{target_book}`")
             log_container = st.container(border=True)
             safe_title = target_book.replace("/", "_")
             state = load_book_state(safe_title)
@@ -407,18 +413,37 @@ if execution_mode == "All Books (Production)":
                         )
                         futures.append(future)
                         
-                    # Restored live visibility loop
+                    # Restored live visibility loop with 429 monitoring
+                    fatal_error = False
                     while True:
                         all_done = True
                         for batch_id, future in enumerate(futures):
                             current_logs = list(shared_logs.get(batch_id, []))
                             if current_logs and batch_id in batch_placeholders:
                                 batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
+                                
+                                # Check for 429 / Rate Limit
+                                for log_msg in current_logs:
+                                    if "429" in log_msg or "rate limit" in log_msg.lower() or "quota" in log_msg.lower():
+                                        fatal_error = True
+                                        break
+                                        
+                            if fatal_error:
+                                break
+                                
                             if not future.done():
                                 all_done = False
-                        if all_done:
+                                
+                        if fatal_error or all_done:
                             break
                         time.sleep(1)
+                        
+                    if fatal_error:
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        log_container.error("❌ FATAL: 429 Rate Limit or Quota Error detected. Halting execution to prevent raw text saving.")
+                        queue_data[target_book]["status"] = "ERROR: 429 Rate Limit"
+                        save_queue(queue_data)
+                        st.stop()
                         
                     executor.shutdown(wait=False, cancel_futures=True)
                     
@@ -524,14 +549,46 @@ if execution_mode == "All Books (Production)":
                 state["completed_subpages"].append(active_chapter)
                 save_book_state(safe_title, state)
                 
-            # Finalize Book
-            queue_data[target_book]["status"] = "READY"
-            save_queue(queue_data)
-            log_container.success(f"✅ {target_book} is completely mapped and processed. Local .txt files are ready for upload.")
-            overall_progress.progress((idx + 1) / len(pending_books))
+            # --- AUTO STEP 4: Conditional Wiki Upload ---
+            will_need_split = False
+            for sp in state["subpages"]:
+                route_info = state.get("route_map", {}).get(sp, {})
+                if not route_info.get("pdf_pages") or route_info.get("needs_split", False):
+                    will_need_split = True
+                    break
+            
+            if not will_need_split:
+                log_container.write("🌐 No split logic required. Auto-uploading to Wiki...")
+                for sp in state["subpages"]:
+                    safe_sp = sp.replace("/", "_")
+                    ch_file_path = os.path.join(pdf_dir, f"{safe_sp}.txt")
+                    if os.path.exists(ch_file_path):
+                        with open(ch_file_path, "r", encoding="utf-8") as f:
+                            final_wikitext = f.read()
+                        
+                        res = upload_to_bahaiworks(sp, final_wikitext, "Bot: Parallel Batch Reproofread", session=session)
+                        if res.get('edit', {}).get('result') == 'Success':
+                            if "uploaded_subpages" not in state: state["uploaded_subpages"] = []
+                            if sp not in state["uploaded_subpages"]:
+                                state["uploaded_subpages"].append(sp)
+                        else:
+                            log_container.error(f"❌ Upload failed for {sp}: {res}")
+                            st.stop()
+                
+                save_book_state(safe_title, state)
+                queue_data[target_book]["status"] = "COMPLETED"
+                save_queue(queue_data)
+                log_container.success(f"✅ {target_book} automatically uploaded and marked COMPLETED.")
+            else:
+                # Finalize Book as READY
+                queue_data[target_book]["status"] = "READY"
+                save_queue(queue_data)
+                log_container.success(f"✅ {target_book} is completely mapped and processed. Requires manual review (READY).")
+                
+            overall_progress.progress((idx + 1) / len(target_pending_books))
             
             # Sleep logic between books
-            if idx < len(pending_books) - 1:
+            if idx < len(target_pending_books) - 1:
                 log_container.info("⏳ Sleeping for 2 hours before processing the next book...")
                 countdown = st.empty()
                 for remaining in range(7200, 0, -1):
@@ -699,18 +756,34 @@ if master_json_path and (not master_json_exists and locals().get('regenerate_mas
                 )
                 futures.append(future)
 
+            fatal_error = False
             while True:
                 all_done = True
                 for batch_id, future in enumerate(futures):
                     current_logs = list(shared_logs.get(batch_id, []))
                     if current_logs and batch_id in batch_placeholders:
                         batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
+                        
+                        # Check for 429 / Rate Limit
+                        for log_msg in current_logs:
+                            if "429" in log_msg or "rate limit" in log_msg.lower() or "quota" in log_msg.lower():
+                                fatal_error = True
+                                break
+                    if fatal_error:
+                        break
+                        
                     if not future.done():
                         all_done = False
-                if all_done:
+                        
+                if fatal_error or all_done:
                     break
                 time.sleep(1)
 
+            if fatal_error:
+                executor.shutdown(wait=False, cancel_futures=True)
+                master_log.error("❌ FATAL: 429 Rate Limit or Quota Error detected. Halting execution to prevent raw text saving.")
+                st.stop()
+                
             executor.shutdown(wait=False, cancel_futures=True)
 
         master_log.write("🔄 Assembling pages into Master JSON...")
