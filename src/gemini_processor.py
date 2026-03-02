@@ -248,9 +248,9 @@ def reformat_raw_text(raw_text):
             request_options={"timeout": 120}
         )
         
-        # If Gemini *still* refuses (unlikely but possible on text), return raw text as fail-safe
+        # Throw the clean error flag so batch_worker can trigger the DocAI fallback
         if response.prompt_feedback.block_reason:
-             return f"FORMATTING_ERROR: {raw_text}" # Return raw so we at least save something
+             return "FORMATTING_ERROR" 
              
         text = response.text.strip()
         text = re.sub(r'^[ \t]+', '', text, flags=re.MULTILINE)
@@ -258,7 +258,7 @@ def reformat_raw_text(raw_text):
         
     except Exception as e:
         check_fatal_rate_limit(e)
-        return f"FORMATTING_ERROR: {raw_text}"
+        return "FORMATTING_ERROR"
 
 def proofread_page(image):
     """
