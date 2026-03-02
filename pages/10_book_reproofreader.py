@@ -502,7 +502,7 @@ if execution_mode == "All Books (Production)":
                                 
                                 # Check for 429 / Rate Limit
                                 for log_msg in current_logs:
-                                    if "429" in log_msg or "rate limit" in log_msg.lower() or "quota" in log_msg.lower():
+                                    if "FATAL_RATE_LIMIT" in log_msg:
                                         fatal_error = True
                                         break
                                         
