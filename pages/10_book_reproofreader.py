@@ -242,6 +242,9 @@ def build_sequential_route_map(subpages, session, input_folder):
         if err or not text:
             continue
             
+        # --- Normalize Custom Templates (e.g. {{swpage}}, {{bwpage}}) ---
+        text = normalize_page_templates(text, session)
+            
         # --- Skip redirects ---
         if re.match(r'^\s*#redirect\s*\[\[', text, flags=re.IGNORECASE):
             continue
