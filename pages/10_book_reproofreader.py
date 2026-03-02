@@ -126,6 +126,68 @@ def save_book_state(safe_title, state):
 # 2. WIKI & MAP HELPERS
 # ==============================================================================
 
+# --- CUSTOM TEMPLATE CONFIGURATION ---
+CUSTOM_PAGE_CONFIGS = {
+    "swpage": {
+        "module_title": "Module:SotW",
+        "file_format": "SW_Volume{vol}.pdf",
+        "offset_map_name": "pdfOffset_map"
+    },
+    "bwpage": {
+        "module_title": "Module:BahaiWorld", 
+        "file_format": "BW_Volume{vol}.pdf", 
+        "offset_map_name": "pdfOffset_map"
+    }
+}
+
+def get_module_offsets(module_title, map_name, session):
+    """Fetches the Lua module and extracts the offset map into a Python dict."""
+    wikitext, error = fetch_wikitext(module_title, session=session)
+    if error:
+        st.error(f"Failed to fetch {module_title}: {error}")
+        return {}
+
+    offsets = {}
+    # Find the table block: local pdfOffset_map = { ... }
+    table_match = re.search(fr'local\s+{map_name}\s*=\s*\{{([^}}]+)\}}', wikitext, re.IGNORECASE)
+    if table_match:
+        table_content = table_match.group(1)
+        # Find all [key]="value" or [key]=value pairs
+        pairs = re.finditer(r'\[(\d+)\]\s*=\s*["\']?(-?\d+)["\']?', table_content)
+        for p in pairs:
+            offsets[int(p.group(1))] = int(p.group(2))
+    return offsets
+
+def normalize_page_templates(wikitext, session):
+    """Finds custom templates and converts them to standard {{page|...}} tags."""
+    offset_caches = {}
+
+    for template_name, config in CUSTOM_PAGE_CONFIGS.items():
+        # Matches {{swpage|11|105}} -> group 1: vol, group 2: page
+        pattern = fr'\{{\{{\s*{template_name}\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\}}\}}'
+
+        def repl(match):
+            vol = int(match.group(1))
+            page = int(match.group(2))
+
+            # Lazy load the module offset map only if needed
+            if template_name not in offset_caches:
+                offset_caches[template_name] = get_module_offsets(
+                    config["module_title"],
+                    config["offset_map_name"],
+                    session
+                )
+
+            offset = offset_caches[template_name].get(vol, 0)
+            pdf_page = page + offset
+            filename = config["file_format"].format(vol=vol)
+
+            return f"{{{{page|{page}|file={filename}|page={pdf_page}}}}}"
+
+        wikitext = re.sub(pattern, repl, wikitext, flags=re.IGNORECASE)
+
+    return wikitext
+
 def get_all_subpages(root_title, session):
     pages = []
     params = {
