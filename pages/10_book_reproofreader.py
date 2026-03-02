@@ -180,6 +180,10 @@ def build_sequential_route_map(subpages, session, input_folder):
         if err or not text:
             continue
             
+        # --- Skip redirects ---
+        if re.match(r'^\s*#redirect\s*\[\[', text, flags=re.IGNORECASE):
+            continue
+            
         # --- Skip pages that are already proofread ---
         header_match = re.search(r'\{\{header\s*\n.*?\n\}\}', text, re.DOTALL | re.IGNORECASE)
         if header_match:
