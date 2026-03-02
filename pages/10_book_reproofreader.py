@@ -180,6 +180,15 @@ def build_sequential_route_map(subpages, session, input_folder):
         if err or not text:
             continue
             
+        # --- Skip pages that are already proofread ---
+        header_match = re.search(r'\{\{header\s*\n.*?\n\}\}', text, re.DOTALL | re.IGNORECASE)
+        if header_match:
+            header_body = header_match.group(0)
+            notes_match = re.search(r'\|\s*notes\s*=\s*(.*?)(?=\n\s*\||$)', header_body, re.DOTALL | re.IGNORECASE)
+            # If the notes field exists and contains {{ps|1}}, skip mapping this chapter entirely
+            if notes_match and re.search(r'\{\{ps\|\s*1\s*\}\}', notes_match.group(1), re.IGNORECASE):
+                continue
+
         wikitext_cache[title] = text
         route_map[title] = {"pdf_pages": [], "old_texts": {}, "needs_split": False}
         
