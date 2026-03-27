@@ -65,6 +65,14 @@ def crop_illustrations(pil_img, expected_count=1):
     cropped_images = []
     for c in top_contours:
         x, y, w, h = cv2.boundingRect(c)
+        
+        # --- Remove the 4px padding added by the dilation step ---
+        padding = 4
+        x = x + padding
+        y = y + padding
+        w = w - (padding * 2)
+        h = h - (padding * 2)
+        
         # Crop exactly to the bounding box, zero buffer
         cropped = img[y:y+h, x:x+w]
         cropped_images.append(cropped)
