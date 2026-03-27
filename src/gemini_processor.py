@@ -439,7 +439,7 @@ def extract_image_caption_and_filename(image, default_name="fallback_image.png")
     Analyze this book page. 
     1. Identify all distinct images/illustrations on the page.
     2. Extract the text of the image caption for each image. Preserve the exact original casing, including capitalized proper nouns (people, places, etc.). If there is no caption, return an empty string.
-    3. Propose a short, descriptive filename for each image based on its contents or caption (must end in .png). Use underscores instead of spaces.
+    3. Propose a short, descriptive filename for each image based on its contents or caption (must end in .png). Omit apostrophes entirely (e.g., "Baha'i" should become "Bahai"). Use underscores instead of spaces.
     
     Return ONLY a valid JSON array of objects, one for each image, in this format:
     [
@@ -458,6 +458,21 @@ def extract_image_caption_and_filename(image, default_name="fallback_image.png")
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
     }
 
+    def clean_filename(fname, default_idx):
+        if not fname: 
+            fname = f"image_{default_idx}"
+            
+        # Strip apostrophes and replace spaces
+        fname = fname.replace("'", "").replace("’", "").replace(" ", "_")
+        
+        # Clean up Gemini's "Bahai_i" or "Baha_i" habit if it still slipped through
+        fname = re.sub(r'(?i)baha_i|bahai_i', 'Bahai', fname)
+        
+        if not fname.endswith(".png"): 
+            fname += ".png"
+            
+        return fname
+
     try:
         response = model.generate_content([prompt, image], safety_settings=safety_settings)
         
@@ -466,16 +481,14 @@ def extract_image_caption_and_filename(image, default_name="fallback_image.png")
         if match_array:
             data = json.loads(match_array.group(0))
             for i, item in enumerate(data):
-                if not item.get("filename", "").endswith(".png"):
-                    item["filename"] = item.get("filename", f"image_{i}").replace(" ", "_") + ".png"
+                item["filename"] = clean_filename(item.get("filename", ""), i)
             return data
             
         # Fallback if it returns a single object by mistake
         match_obj = re.search(r'\{.*\}', response.text, re.DOTALL)
         if match_obj:
             data = json.loads(match_obj.group(0))
-            if not data.get("filename", "").endswith(".png"):
-                data["filename"] = data.get("filename", "image").replace(" ", "_") + ".png"
+            data["filename"] = clean_filename(data.get("filename", ""), 0)
             return [data]
             
         return [{"caption": "", "filename": default_name}]
