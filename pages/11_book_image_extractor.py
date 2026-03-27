@@ -21,6 +21,14 @@ st.set_page_config(page_title="Book Image Extractor", page_icon="🖼️", layou
 # HELPER FUNCTIONS
 # ==============================================================================
 
+# --- Constants ---
+PDF_OFFSET_MAP = {
+    1: 0, 2: 17, 3: 13, 4: 20, 5: 26, 6: 29, 7: 21, 8: 34, 9: 29, 10: 25,
+    11: 24, 12: 30, 13: 41, 14: 25, 15: 24, 16: 19, 17: 20, 18: 21, 19: 24,
+    20: 32, 21: 1, 22: 8, 23: 9, 24: 7, 25: 5, 26: 8, 27: 2, 28: 0, 29: 2,
+    30: -1, 31: 1, 32: 1, 33: 1, 34: 1
+}
+
 def find_local_pdf(filename, root_folder):
     for dirpath, _, filenames in os.walk(root_folder):
         for f in filenames:
@@ -63,13 +71,24 @@ def crop_illustrations(pil_img, expected_count=1):
         
     return cropped_images
 
-def create_wiki_text_file(txt_path, caption, book_title, access_control=""):
+def create_wiki_text_file(txt_path, caption, book_title, access_control="", is_bw_volume=False, bw_volume=None, physical_page=None):
     clean_title = re.sub(r'\.pdf$', '', book_title, flags=re.IGNORECASE).replace('_', ' ')
     
     # Add a newline after the tag if it exists, otherwise leave blank
     access_block = f"{access_control.strip()}\n" if access_control.strip() else ""
     
-    content = f"""{access_block}== File info ==
+    if is_bw_volume and bw_volume is not None and physical_page is not None:
+        content = f"""{access_block}== File info ==
+{{{{cs
+| caption = {caption}
+| source = {{{{bws|{bw_volume}|{physical_page}}}}}
+}}}}
+
+== File license ==
+{{{{Baha'i World excerpt}}}}
+"""
+    else:
+        content = f"""{access_block}== File info ==
 {{{{cs
 | caption = {caption}
 | source = {clean_title}
@@ -122,9 +141,15 @@ if st.button("🚀 Process Images", type="primary"):
     status_text = st.empty()
     log_container = st.container(border=True)
     
+    # --- Detect if working on a Bahá'í World volume ---
+    bw_match = re.search(r'BW_Volume(\d+)\.pdf', pdf_filename, re.IGNORECASE)
+    is_bw_volume = bool(bw_match)
+    bw_volume_num = int(bw_match.group(1)) if is_bw_volume else None
+    bw_offset = PDF_OFFSET_MAP.get(bw_volume_num, 0) if is_bw_volume else 0
+
     for idx, page_num in enumerate(pages_to_process):
         status_text.markdown(f"**Processing Page {page_num} ({idx+1}/{len(pages_to_process)})...**")
-        
+
         # 1. Extract Page using pdf2image
         log_container.write(f"📄 Extracting page {page_num}...")
         try:
@@ -136,11 +161,11 @@ if st.button("🚀 Process Images", type="primary"):
         except Exception as e:
             log_container.error(f"❌ Error converting page {page_num}: {e}")
             continue
-            
+
         # 2. Ask Gemini for Captions and Filenames
         log_container.write("🧠 Requesting captions and filenames from Gemini...")
         gemini_data_list = extract_image_caption_and_filename(pil_img, default_name=f"page_{page_num}_image.png")
-        
+
         if not gemini_data_list:
             log_container.warning(f"⚠️ No images detected by Gemini on page {page_num}. Skipping.")
             continue
@@ -173,7 +198,18 @@ if st.button("🚀 Process Images", type="primary"):
                 
             # 4. Generate .txt file
             log_container.write(f"📝 Generating MediaWiki text file for {final_filename}...")
-            create_wiki_text_file(final_txt_path, caption, clean_pdf_name, access_control)
+            
+            physical_page = page_num - bw_offset if is_bw_volume else None
+            
+            create_wiki_text_file(
+                final_txt_path, 
+                caption, 
+                clean_pdf_name, 
+                access_control,
+                is_bw_volume=is_bw_volume,
+                bw_volume=bw_volume_num,
+                physical_page=physical_page
+            )
             
             log_container.success(f"✅ Finished page {page_num}, image {i+1} -> Saved as `{final_filename}`")
             
