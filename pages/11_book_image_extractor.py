@@ -64,18 +64,26 @@ def crop_illustrations(pil_img, expected_count=1):
     
     cropped_images = []
     for c in top_contours:
+        # 1. Get the rough bounding box from the dilated contour
         x, y, w, h = cv2.boundingRect(c)
+        rough_crop = img[y:y+h, x:x+w]
         
-        # --- Remove the 4px padding added by the dilation step ---
-        padding = 4
-        x = x + padding
-        y = y + padding
-        w = w - (padding * 2)
-        h = h - (padding * 2)
+        # 2. Apply OpenCV equivalent of ImageMagick's 10% fuzz trim
+        gray_cropped = cv2.cvtColor(rough_crop, cv2.COLOR_BGR2GRAY)
         
-        # Crop exactly to the bounding box, zero buffer
-        cropped = img[y:y+h, x:x+w]
-        cropped_images.append(cropped)
+        # 10% of 255 is ~25. 255 - 25 = 230.
+        # Anything > 230 is background noise. Anything <= 230 is the illustration.
+        _, thresh_cropped = cv2.threshold(gray_cropped, 230, 255, cv2.THRESH_BINARY_INV)
+        coords = cv2.findNonZero(thresh_cropped)
+        
+        # 3. Perform the final tight crop
+        if coords is not None:
+            tx, ty, tw, th = cv2.boundingRect(coords)
+            final_crop = rough_crop[ty:ty+th, tx:tx+tw]
+        else:
+            final_crop = rough_crop # Fallback if image is completely blank
+            
+        cropped_images.append(final_crop)
         
     return cropped_images
 
