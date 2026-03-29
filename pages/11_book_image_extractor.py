@@ -130,8 +130,14 @@ skip_crop_ranges = st.text_input("Full Page Document Ranges (Skip Cropping)", pl
 access_control = st.text_input("Access Control (Optional)", placeholder="e.g., <accesscontrol>Access:DayVeryGreatThings</accesscontrol>")
 
 if st.button("🚀 Process Images", type="primary"):
-    if not pdf_filename or not page_ranges:
-        st.warning("Please provide both a PDF filename and page ranges.")
+    # 1. Check if we at least have a filename
+    if not pdf_filename:
+        st.warning("Please provide a PDF filename.")
+        st.stop()
+        
+    # 2. Check if AT LEAST ONE of the range boxes has text
+    if not page_ranges and not skip_crop_ranges:
+        st.warning("Please provide at least one page range (Standard or Full Page Document).")
         st.stop()
         
     local_pdf_path = find_local_pdf(pdf_filename, input_folder)
@@ -140,11 +146,15 @@ if st.button("🚀 Process Images", type="primary"):
         st.error(f"❌ Could not find {pdf_filename} in {input_folder}")
         st.stop()
         
-    pages_to_process = parse_range_string(page_ranges)
+    # 3. Parse both ranges safely (returns empty list if string is empty)
+    standard_pages = parse_range_string(page_ranges) if page_ranges else []
     skip_crop_pages = parse_range_string(skip_crop_ranges) if skip_crop_ranges else []
     
+    # 4. Combine them into one master list, removing duplicates and sorting
+    pages_to_process = sorted(list(set(standard_pages + skip_crop_pages)))
+    
     if not pages_to_process:
-        st.warning("No valid pages found in range.")
+        st.warning("No valid pages found in the provided ranges.")
         st.stop()
         
     pdf_dir = os.path.dirname(local_pdf_path)
