@@ -126,6 +126,7 @@ input_folder = st.sidebar.text_input("Local PDF Root Folder", value="/home/sarah
 
 pdf_filename = st.text_input("PDF Filename", placeholder="e.g., A_Day_for_Very_Great_Things.pdf")
 page_ranges = st.text_input("Page Ranges", placeholder="e.g., 527-546, 12, 15-20")
+skip_crop_ranges = st.text_input("Full Page Document Ranges (Skip Cropping)", placeholder="e.g., 5, 10-12")
 access_control = st.text_input("Access Control (Optional)", placeholder="e.g., <accesscontrol>Access:DayVeryGreatThings</accesscontrol>")
 
 if st.button("🚀 Process Images", type="primary"):
@@ -140,6 +141,8 @@ if st.button("🚀 Process Images", type="primary"):
         st.stop()
         
     pages_to_process = parse_range_string(page_ranges)
+    skip_crop_pages = parse_range_string(skip_crop_ranges) if skip_crop_ranges else []
+    
     if not pages_to_process:
         st.warning("No valid pages found in range.")
         st.stop()
@@ -178,17 +181,28 @@ if st.button("🚀 Process Images", type="primary"):
             log_container.error(f"❌ Error converting page {page_num}: {e}")
             continue
 
+        is_skip_crop = page_num in skip_crop_pages
+
         # 2. Ask Gemini for Captions and Filenames
-        log_container.write("🧠 Requesting captions and filenames from Gemini...")
-        gemini_data_list = extract_image_caption_and_filename(pil_img, default_name=f"page_{page_num}_image.png")
+        if is_skip_crop:
+            log_container.write("🧠 Requesting captions and filenames from Gemini (Document Mode)...")
+            gemini_data_list = extract_image_caption_and_filename(pil_img, default_name=f"page_{page_num}_image.png", is_full_page_doc=True)
+        else:
+            log_container.write("🧠 Requesting captions and filenames from Gemini...")
+            gemini_data_list = extract_image_caption_and_filename(pil_img, default_name=f"page_{page_num}_image.png")
 
         if not gemini_data_list:
             log_container.warning(f"⚠️ No images detected by Gemini on page {page_num}. Skipping.")
             continue
             
-        # 3. Crop Illustrations using OpenCV
-        log_container.write(f"✂️ Auto-cropping {len(gemini_data_list)} image(s) from page...")
-        cropped_cv2_images = crop_illustrations(pil_img, expected_count=len(gemini_data_list))
+        # 3. Crop Illustrations using OpenCV (or skip)
+        if is_skip_crop:
+            log_container.write("⏭️ Skipping auto-crop (full page document mode).")
+            # Convert the full PIL image to cv2 format so it matches the downstream save logic
+            cropped_cv2_images = [cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)]
+        else:
+            log_container.write(f"✂️ Auto-cropping {len(gemini_data_list)} image(s) from page...")
+            cropped_cv2_images = crop_illustrations(pil_img, expected_count=len(gemini_data_list))
         
         for i, img_data in enumerate(gemini_data_list):
             caption = img_data.get("caption", "")
