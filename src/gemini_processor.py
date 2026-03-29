@@ -429,27 +429,43 @@ def apply_chunked_split(page_text, target_chapter, unmapped_chapters, custom_ins
         
     return results
 
-def extract_image_caption_and_filename(image, default_name="fallback_image.png"):
+def extract_image_caption_and_filename(image, default_name="fallback_image.png", is_full_page_doc=False):
     """
     Sends a page image to Gemini to extract captions and propose filenames for all images on the page.
     """
     model = genai.GenerativeModel(MODEL_NAME)
     
-    prompt = """
-    Analyze this book page. 
-    1. Identify all distinct images/illustrations on the page.
-    2. Extract the text of the image caption for each image. Preserve the exact original casing, including capitalized proper nouns (people, places, etc.). If there is no caption, return an empty string.
-    3. Propose a short, descriptive filename for each image based on its contents or caption (must end in .png). Omit apostrophes entirely (e.g., "Baha'i" should become "Bahai"). Use underscores instead of spaces.
-    
-    Return ONLY a valid JSON array of objects, one for each image, in this format:
-    [
-        {
-            "caption": "Extracted caption text here",
-            "filename": "Proposed_filename.png"
-        }
-    ]
-    If there are no images, return an empty array [].
-    """
+    if is_full_page_doc:
+        prompt = """
+        Analyze this scanned document page. 
+        1. Treat the ENTIRE PAGE as a single image/document (e.g., an article of incorporation, certificate, or letter). Do not look for a separate illustration.
+        2. Extract any descriptive caption, heading, or label that identifies this document (often found at the very top or bottom). Preserve the exact original casing. If there is no clear caption, return an empty string.
+        3. Propose a short, descriptive filename for this document based on its text/type (must end in .png). Omit apostrophes entirely and use underscores instead of spaces.
+        
+        Return ONLY a valid JSON array of objects, containing exactly ONE object in this format:
+        [
+            {
+                "caption": "Extracted caption text here",
+                "filename": "Proposed_filename.png"
+            }
+        ]
+        """
+    else:
+        prompt = """
+        Analyze this book page. 
+        1. Identify all distinct images/illustrations on the page.
+        2. Extract the text of the image caption for each image. Preserve the exact original casing, including capitalized proper nouns (people, places, etc.). If there is no caption, return an empty string.
+        3. Propose a short, descriptive filename for each image based on its contents or caption (must end in .png). Omit apostrophes entirely (e.g., "Baha'i" should become "Bahai"). Use underscores instead of spaces.
+        
+        Return ONLY a valid JSON array of objects, one for each image, in this format:
+        [
+            {
+                "caption": "Extracted caption text here",
+                "filename": "Proposed_filename.png"
+            }
+        ]
+        If there are no images, return an empty array [].
+        """
     
     safety_settings = {
         HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
