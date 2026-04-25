@@ -206,7 +206,7 @@ if st.button("🚀 Process Images", type="primary"):
         
     pdf_dir = os.path.dirname(local_pdf_path)
     clean_pdf_name = re.sub(r'\.pdf$', '', pdf_filename, flags=re.IGNORECASE)
-    output_dir = os.path.join(pdf_dir, "images", clean_pdf_name)
+    output_dir = os.path.join(pdf_dir, "images")
     
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
