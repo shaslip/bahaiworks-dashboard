@@ -5,6 +5,7 @@ import re
 import cv2
 import numpy as np
 from pdf2image import convert_from_path
+import requests
 
 # --- Path Setup ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -21,13 +22,47 @@ st.set_page_config(page_title="Book Image Extractor", page_icon="🖼️", layou
 # HELPER FUNCTIONS
 # ==============================================================================
 
-# --- Constants ---
-PDF_OFFSET_MAP = {
-    1: 0, 2: 17, 3: 13, 4: 20, 5: 26, 6: 29, 7: 21, 8: 34, 9: 29, 10: 25,
-    11: 24, 12: 30, 13: 41, 14: 25, 15: 24, 16: 19, 17: 20, 18: 21, 19: 24,
-    20: 32, 21: 1, 22: 8, 23: 9, 24: 7, 25: 5, 26: 8, 27: 2, 28: 0, 29: 2,
-    30: -1, 31: 1, 32: 1, 33: 1, 34: 1, 35: 9
-}
+# --- Constants / Wiki Data Fetching ---
+@st.cache_data(ttl=3600)  # Cache for 1 hour to avoid spamming the wiki API
+def fetch_offset_map(module_name):
+    """Fetches and parses a Lua offset map from a specified MediaWiki module."""
+    url = "https://bahai.media/api.php"
+    params = {
+        "action": "query",
+        "prop": "revisions",
+        "rvprop": "content",
+        "titles": module_name,
+        "format": "json",
+        "rvslots": "main"
+    }
+    try:
+        response = requests.get(url, params=params)
+        data = response.json()
+        pages = data.get("query", {}).get("pages", {})
+        page_id = list(pages.keys())[0]
+        
+        if page_id == "-1":
+            return {}
+            
+        content = pages[page_id]["revisions"][0]["slots"]["main"]["*"]
+        
+        # Regex to locate the local pdfOffset_map block
+        map_match = re.search(r'local pdfOffset_map\s*=\s*\{([^}]+)\}', content)
+        if not map_match:
+            return {}
+            
+        map_str = map_match.group(1)
+        offset_map = {}
+        
+        # Extract Lua table integer key/value pairs: [1] = 0, [2] = 17, etc.
+        pairs = re.findall(r'\[\s*(\d+)\s*\]\s*=\s*(-?\d+)', map_str)
+        for k, v in pairs:
+            offset_map[int(k)] = int(v)
+            
+        return offset_map
+    except Exception as e:
+        print(f"Error fetching {module_name} offset map: {e}")
+        return {}
 
 def find_local_pdf(filename, root_folder):
     for dirpath, _, filenames in os.walk(root_folder):
@@ -87,7 +122,9 @@ def crop_illustrations(pil_img, expected_count=1):
         
     return cropped_images
 
-def create_wiki_text_file(txt_path, caption, book_title, access_control="", is_bw_volume=False, bw_volume=None, physical_page=None):
+def create_wiki_text_file(txt_path, caption, book_title, access_control="", 
+                          is_bw_volume=False, bw_volume=None, 
+                          is_bn_issue=False, bn_issue=None, physical_page=None):
     clean_title = re.sub(r'\.pdf$', '', book_title, flags=re.IGNORECASE).replace('_', ' ')
     
     # Add a newline after the tag if it exists, otherwise leave blank
@@ -102,6 +139,16 @@ def create_wiki_text_file(txt_path, caption, book_title, access_control="", is_b
 
 == File license ==
 {{{{Baha'i World excerpt}}}}
+"""
+    elif is_bn_issue and bn_issue is not None and physical_page is not None:
+        content = f"""{access_block}== File info ==
+{{{{cs
+| caption = {caption}
+| source = {{{{bns|{bn_issue}|{physical_page}}}}}
+}}}}
+
+== File license ==
+{{{{Bn-excerpt}}}}
 """
     else:
         content = f"""{access_block}== File info ==
@@ -170,11 +217,25 @@ if st.button("🚀 Process Images", type="primary"):
     status_text = st.empty()
     log_container = st.container(border=True)
     
-    # --- Detect if working on a Bahá'í World volume ---
+    # --- Detect publication type & fetch offsets ---
     bw_match = re.search(r'BW_Volume(\d+)\.pdf', pdf_filename, re.IGNORECASE)
     is_bw_volume = bool(bw_match)
     bw_volume_num = int(bw_match.group(1)) if is_bw_volume else None
-    bw_offset = PDF_OFFSET_MAP.get(bw_volume_num, 0) if is_bw_volume else 0
+
+    # Handles Baha'i_News_354.pdf or Bahai_News_354.pdf
+    bn_match = re.search(r'Baha\'?i_News_(\d+)\.pdf', pdf_filename, re.IGNORECASE)
+    is_bn_issue = bool(bn_match)
+    bn_issue_num = int(bn_match.group(1)) if is_bn_issue else None
+
+    page_offset = 0
+    if is_bw_volume:
+        log_container.info(f"📚 Detected Bahá'í World Volume {bw_volume_num}. Fetching offset map...")
+        bw_offset_map = fetch_offset_map("Module:BahaiWorld")
+        page_offset = bw_offset_map.get(bw_volume_num, 0)
+    elif is_bn_issue:
+        log_container.info(f"📰 Detected Bahá'í News Issue {bn_issue_num}. Fetching offset map...")
+        bn_offset_map = fetch_offset_map("Module:BahaiNews")
+        page_offset = bn_offset_map.get(bn_issue_num, 0)
 
     for idx, page_num in enumerate(pages_to_process):
         status_text.markdown(f"**Processing Page {page_num} ({idx+1}/{len(pages_to_process)})...**")
@@ -239,7 +300,7 @@ if st.button("🚀 Process Images", type="primary"):
             # 4. Generate .txt file
             log_container.write(f"📝 Generating MediaWiki text file for {final_filename}...")
             
-            physical_page = page_num - bw_offset if is_bw_volume else None
+            physical_page = page_num - page_offset if (is_bw_volume or is_bn_issue) else None
             
             create_wiki_text_file(
                 final_txt_path, 
@@ -248,6 +309,8 @@ if st.button("🚀 Process Images", type="primary"):
                 access_control,
                 is_bw_volume=is_bw_volume,
                 bw_volume=bw_volume_num,
+                is_bn_issue=is_bn_issue,
+                bn_issue=bn_issue_num,
                 physical_page=physical_page
             )
             
