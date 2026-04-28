@@ -172,8 +172,8 @@ with tab2:
                     for j, img_path in enumerate(chunk):
                         current_name = os.path.basename(img_path)
                         with cols[j]:
-                            # Updated from use_column_width=True to use_container_width=True
-                            st.image(img_path, use_container_width=True)
+                            # Updated to use the new Streamlit width parameter
+                            st.image(img_path, width='stretch')
                             
                             # The user selects the TRUE filename for the image displayed above
                             selections[current_name] = st.selectbox(
