@@ -162,21 +162,26 @@ with tab2:
             
             # Using a form per page so swaps happen atomically
             with st.form(key=f"form_page_{page}"):
-                cols = st.columns(len(img_paths))
                 selections = {}
                 
-                for i, img_path in enumerate(img_paths):
-                    current_name = os.path.basename(img_path)
-                    with cols[i]:
-                        st.image(img_path, use_column_width=True)
-                        
-                        # The user selects the TRUE filename for the image displayed above
-                        selections[current_name] = st.selectbox(
-                            f"True filename",
-                            options=base_names,
-                            index=base_names.index(current_name),
-                            key=f"swap_{page}_{current_name}"
-                        )
+                # Chunk images into rows of 2 to prevent overcrowding
+                for i in range(0, len(img_paths), 2):
+                    cols = st.columns(2)
+                    chunk = img_paths[i:i+2]
+                    
+                    for j, img_path in enumerate(chunk):
+                        current_name = os.path.basename(img_path)
+                        with cols[j]:
+                            # Updated from use_column_width=True to use_container_width=True
+                            st.image(img_path, use_container_width=True)
+                            
+                            # The user selects the TRUE filename for the image displayed above
+                            selections[current_name] = st.selectbox(
+                                f"True filename",
+                                options=base_names,
+                                index=base_names.index(current_name),
+                                key=f"swap_{page}_{current_name}"
+                            )
                 
                 if st.form_submit_button("Apply File Name Changes"):
                     # Validate that the user didn't assign the same name to two different images
