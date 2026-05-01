@@ -455,7 +455,7 @@ def extract_image_caption_and_filename(image, default_name="fallback_image.png",
         Analyze this book page. 
         1. Identify all distinct images/illustrations on the page.
         2. Extract the text of the image caption for each image. Preserve the exact original casing, including capitalized proper nouns (people, places, etc.). If there is no caption, return an empty string.
-        3. Propose a short, descriptive filename for each image based on its contents or caption (must end in .png). Omit apostrophes entirely (e.g., "Baha'i" should become "Bahai"). Use underscores instead of spaces.
+        3. Propose a short, descriptive filename for each image based on its contents or caption (must end in .png). Omit apostrophes entirely (e.g., "Baha'i" should become "Bahai"). Use underscores instead of spaces. If the caption includes a year include it in the filename.
         
         Return ONLY a valid JSON array of objects, one for each image, in this format:
         [
