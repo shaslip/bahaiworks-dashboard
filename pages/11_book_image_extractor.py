@@ -94,8 +94,10 @@ def crop_illustrations(pil_img, expected_count=1):
     sorted_by_area = sorted(contours, key=cv2.contourArea, reverse=True)
     top_contours = sorted_by_area[:expected_count]
     
-    # Sort those top contours from top-to-bottom so they match Gemini's reading order
-    top_contours = sorted(top_contours, key=lambda c: cv2.boundingRect(c)[1])
+    # Sort top-to-bottom (Y), and left-to-right (X) for side-by-side images.
+    # We divide Y by 100 to group images roughly on the same row, preventing 
+    # slight vertical offsets from ruining the left-to-right order.
+    top_contours = sorted(top_contours, key=lambda c: (cv2.boundingRect(c)[1] // 100, cv2.boundingRect(c)[0]))
     
     cropped_images = []
     for c in top_contours:
