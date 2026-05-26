@@ -515,43 +515,67 @@ def extract_image_caption_and_filename(image, default_name="fallback_image.png",
 
 def format_file_description(wikitext, target_category):
     """
-    Uses Gemini to reformat file description pages according to specific rules.
+    Splits the wikitext into unstructured (caption/source) and structured (metadata/categories).
+    Uses Gemini for the unstructured part, and Python regex for the structured part.
     """
-    model = genai.GenerativeModel(MODEL_NAME)
+    # 1. Split the wikitext
+    # We look for the start of the metadata block: Bn-excerpt, Categories, or ImageNotes
+    match = re.search(r'\{\{Bn-excerpt\}\}|\[\[Category:|\{\{ImageNote\|', wikitext, re.IGNORECASE)
     
+    if match:
+        split_idx = match.start()
+        top_part = wikitext[:split_idx].strip()
+        bottom_part = wikitext[split_idx:].strip()
+    else:
+        # If none of the metadata triggers exist, the whole thing goes to Gemini 
+        # (e.g. just a caption and {{bns|...}})
+        top_part = wikitext.strip()
+        bottom_part = ""
+
+    # 2. Python Cleanup for Bottom Part
+    if bottom_part:
+        # Clean target category (handle potential spacing variations)
+        target_cat_name = target_category.replace("Category:", "").strip()
+        target_cat_pattern = r'\[\[Category:\s*' + re.escape(target_cat_name) + r'\s*\]\]'
+        bottom_part = re.sub(target_cat_pattern, '', bottom_part, flags=re.IGNORECASE)
+        
+        # Clean image file type categories
+        image_cats_pattern = r'\[\[Category:\s*(PNG|JPG|JPEG|GIF|TIF|TIFF|WEBP)\s*files\s*\]\]'
+        bottom_part = re.sub(image_cats_pattern, '', bottom_part, flags=re.IGNORECASE)
+        
+        # Remove existing {{Bn-excerpt}} (we will explicitly add it back in the reassembly)
+        bottom_part = re.sub(r'\{\{Bn-excerpt\}\}', '', bottom_part, flags=re.IGNORECASE)
+        
+        # Clean up multiple blank lines left behind by the removals
+        bottom_part = re.sub(r'\n{3,}', '\n\n', bottom_part).strip()
+
+    # 3. Gemini Processing for Top Part
+    model = genai.GenerativeModel(MODEL_NAME)
     prompt = f"""
     You are an assistant helping format MediaWiki image description pages.
     
-    I will provide the current wikitext of a file page. 
-    You must output ONLY the new, corrected wikitext. Do not include markdown formatting blocks (```), do not include conversational filler.
+    I will provide the top half of a file page (containing the caption and source).
+    You must output ONLY the new, corrected wikitext for the File info block. Do not include markdown formatting blocks (```).
     
     INSTRUCTIONS:
-    1. Place the following exact structure at the very top of the page:
+    1. Output exactly this structure:
     == File info ==
     {{{{cs
     | caption = 
     | source = 
     }}}}
-
-    == File license ==
-    {{{{Bn-excerpt}}}}
     
-    2. Locate the existing caption (usually the plain text description) and put it in the `caption =` field.
-       - If the caption is wrapped in quotation marks, remove them.
+    2. Extract the caption and put it in the `caption =` field.
+       - Remove any surrounding quotation marks.
+       - Remove "== Summary ==" or "== File info ==" if they exist in the original text.
        - Fix transliterations for Bahá’í terms: Replace "Baha'u'llah" with "Bahá’u’lláh", "Baha'is" with "Bahá’ís", "Bahá'í" with "Bahá’í", and "Bahji" with "Bahjí".
        
-    3. Locate the source and put it in the `source =` field.
+    3. Extract the source and put it in the `source =` field.
        - If the source is in a format like "From BN [number] p [number]", wrap it in the template: {{{{bns|[number]|[number]}}}}.
        - If it already uses a template like {{{{bns|...}}}}, preserve it inside the source field.
-       
-    4. Category Management:
-       - COMPLETELY REMOVE the category tag: [[{target_category}]]
-       - Preserve all other category tags at the bottom of the page.
-       
-    5. Preserve any content listed after the categories such as {{{{ImageNote...}}}}, {{{{ImageNoteEnd}}}}, and {{{{ia|...}}}} at the very bottom of the page.
-    
-    ORIGINAL WIKITEXT:
-    {wikitext}
+
+    ORIGINAL TEXT:
+    {top_part}
     """
     
     safety_settings = {
@@ -562,11 +586,22 @@ def format_file_description(wikitext, target_category):
     }
 
     try:
-        response = model.generate_content(prompt, safety_settings=safety_settings)
-        text = response.text.strip()
-        # Remove markdown code blocks if Gemini ignores the instruction
-        text = re.sub(r'^```(?:mediawiki|wikitext)?\n|\n```$', '', text, flags=re.MULTILINE).strip()
-        return text
+        # Failsafe if top part is somehow totally empty
+        if not top_part:
+            gemini_text = "== File info ==\n{{cs\n| caption = \n| source = \n}}"
+        else:
+            response = model.generate_content(prompt, safety_settings=safety_settings)
+            gemini_text = response.text.strip()
+            # Strip markdown blocks if Gemini disobeys
+            gemini_text = re.sub(r'^```(?:mediawiki|wikitext)?\n|\n```$', '', gemini_text, flags=re.MULTILINE).strip()
+
+        # 4. Reassembly
+        final_text = f"{gemini_text}\n\n== File license ==\n{{{{Bn-excerpt}}}}"
+        if bottom_part:
+            final_text += f"\n\n{bottom_part}"
+            
+        return final_text
+        
     except Exception as e:
         check_fatal_rate_limit(e)
         return f"GEMINI_ERROR: {str(e)}"
