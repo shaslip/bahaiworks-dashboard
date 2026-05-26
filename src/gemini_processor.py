@@ -512,3 +512,61 @@ def extract_image_caption_and_filename(image, default_name="fallback_image.png",
         check_fatal_rate_limit(e)
         print(f"Debug: Caption extraction error: {e}")
         return [{"caption": "", "filename": default_name}]
+
+def format_file_description(wikitext, target_category):
+    """
+    Uses Gemini to reformat file description pages according to specific rules.
+    """
+    model = genai.GenerativeModel(MODEL_NAME)
+    
+    prompt = f"""
+    You are an assistant helping format MediaWiki image description pages.
+    
+    I will provide the current wikitext of a file page. 
+    You must output ONLY the new, corrected wikitext. Do not include markdown formatting blocks (```), do not include conversational filler.
+    
+    INSTRUCTIONS:
+    1. Place the following exact structure at the very top of the page:
+    == File info ==
+    {{{{cs
+    | caption = 
+    | source = 
+    }}}}
+
+    == File license ==
+    {{{{Bn-excerpt}}}}
+    
+    2. Locate the existing caption (usually the plain text description) and put it in the `caption =` field.
+       - If the caption is wrapped in quotation marks, remove them.
+       - Fix transliterations for Bahá’í terms: Replace "Baha'u'llah" with "Bahá’u’lláh", "Baha'is" with "Bahá’ís", "Bahá'í" with "Bahá’í", and "Bahji" with "Bahjí".
+       
+    3. Locate the source and put it in the `source =` field.
+       - If the source is in a format like "From BN [number] p [number]", wrap it in the template: {{{{bns|[number]|[number]}}}}.
+       - If it already uses a template like {{{{bns|...}}}}, preserve it inside the source field.
+       
+    4. Category Management:
+       - COMPLETELY REMOVE the category tag: [[{target_category}]]
+       - Preserve all other category tags at the bottom of the page.
+       
+    5. Preserve any content listed after the categories such as {{{{ImageNote...}}}}, {{{{ImageNoteEnd}}}}, and {{{{ia|...}}}} at the very bottom of the page.
+    
+    ORIGINAL WIKITEXT:
+    {wikitext}
+    """
+    
+    safety_settings = {
+        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+    }
+
+    try:
+        response = model.generate_content(prompt, safety_settings=safety_settings)
+        text = response.text.strip()
+        # Remove markdown code blocks if Gemini ignores the instruction
+        text = re.sub(r'^```(?:mediawiki|wikitext)?\n|\n```$', '', text, flags=re.MULTILINE).strip()
+        return text
+    except Exception as e:
+        check_fatal_rate_limit(e)
+        return f"GEMINI_ERROR: {str(e)}"
