@@ -109,6 +109,78 @@ def fetch_wikitext(title, session=None, api_url=API_URL):
     
     return None, "Unknown Error"
 
+def upload_to_mediawiki(title, content, summary="Bot upload", check_exists=False, session=None, api_url=API_URL):
+    """
+    Generic upload function supporting dynamic API URLs.
+    """
+    local_session = False
+    if session is None:
+        session = requests.Session()
+        local_session = True
+    
+    try:
+        csrf_token = get_csrf_token(session, api_url=api_url)
+        
+        create_params = {
+            'action': 'edit',
+            'title': title,
+            'text': content,
+            'summary': summary,
+            'token': csrf_token,
+            'format': 'json'
+        }
+        response = session.post(api_url, data=create_params)
+        data = response.json()
+        
+        if 'error' in data:
+            raise Exception(data['error']['info'])
+            
+        return data
+        
+    except Exception as e:
+        raise e
+    finally:
+        if local_session:
+            session.close()
+
+def get_category_files(category_name, session=None, api_url=API_URL):
+    """
+    Fetches all non-PDF files in a given category.
+    Handles pagination automatically.
+    """
+    requester = session if session else requests
+    files = []
+    
+    # Ensure category prefix
+    if not category_name.lower().startswith("category:"):
+        category_name = f"Category:{category_name}"
+
+    params = {
+        "action": "query",
+        "list": "categorymembers",
+        "cmtitle": category_name,
+        "cmnamespace": 6,  # Namespace 6 is for Files
+        "cmlimit": "max",
+        "format": "json"
+    }
+
+    while True:
+        response = requester.get(api_url, params=params).json()
+        members = response.get('query', {}).get('categorymembers', [])
+        
+        for member in members:
+            title = member['title']
+            # Exclude PDFs
+            if not title.lower().endswith(".pdf"):
+                files.append(title)
+                
+        if 'continue' in response:
+            params.update(response['continue'])
+        else:
+            break
+            
+    return files
+
 def inject_text_into_page(wikitext, page_num, new_content, pdf_filename="File.pdf"):
     """
     Surgically replaces content FOLLOWING {{page|X...}} tag.
