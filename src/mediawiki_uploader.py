@@ -10,7 +10,7 @@ API_URL = 'https://bahai.works/api.php'
 BW_USER = os.getenv("WIKI_USERNAME")
 BW_PASS = os.getenv("WIKI_PASSWORD")
 
-def get_csrf_token(session):
+def get_csrf_token(session, api_url=API_URL):
     """
     Authenticates with MediaWiki and retrieves a CSRF token.
     """
@@ -18,7 +18,7 @@ def get_csrf_token(session):
         raise ValueError("Missing WIKI_USERNAME or WIKI_PASSWORD in .env")
 
     # 1. Get Login Token
-    login_token_response = session.get(API_URL, params={
+    login_token_response = session.get(api_url, params={
         'action': 'query',
         'meta': 'tokens',
         'type': 'login',
@@ -27,7 +27,7 @@ def get_csrf_token(session):
     login_token = login_token_response.json()['query']['tokens']['logintoken']
 
     # 2. Perform Login
-    login_response = session.post(API_URL, data={
+    login_response = session.post(api_url, data={
         'action': 'login',
         'lgname': BW_USER,
         'lgpassword': BW_PASS,
@@ -40,7 +40,7 @@ def get_csrf_token(session):
         raise PermissionError(f"Login failed: {login_data}")
 
     # 3. Get CSRF Token
-    csrf_token_response = session.get(API_URL, params={
+    csrf_token_response = session.get(api_url, params={
         'action': 'query',
         'meta': 'tokens',
         'format': 'json'
