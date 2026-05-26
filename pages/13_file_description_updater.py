@@ -108,12 +108,12 @@ if st.session_state.processing_complete and st.session_state.files_data:
         col1, col2 = st.columns(2)
         
         with col1:
-            st.text_area("Original Wikitext", value=data["original"], height=250, disabled=True, key=f"orig_{title}")
+            st.text_area("Original Wikitext", value=data["original"], height=500, disabled=True, key=f"orig_{title}")
             
         with col2:
             # The user can edit this box. We use the 'new' text as the initial value.
             # Changes are automatically saved to st.session_state[f"edit_{title}"]
-            st.text_area("New Wikitext (Editable)", value=data["new"], height=250, key=f"edit_{title}")
+            st.text_area("New Wikitext (Editable)", value=data["new"], height=500, key=f"edit_{title}")
             
         st.divider()
 
