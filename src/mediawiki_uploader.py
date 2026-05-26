@@ -66,7 +66,7 @@ def page_exists(session, title):
             return False
     return True
 
-def fetch_wikitext(title, session=None):
+def fetch_wikitext(title, session=None, api_url=API_URL):
     """
     Fetches the absolute latest revision.
     Args:
@@ -87,7 +87,7 @@ def fetch_wikitext(title, session=None):
         
         # Use provided session (authenticated) or fallback to generic requests
         requester = session if session else requests
-        response = requester.get(API_URL, params=params, headers=headers, timeout=10)
+        response = requester.get(api_url, params=params, headers=headers, timeout=10)
         data = response.json()
         
         pages = data.get('query', {}).get('pages', {})
