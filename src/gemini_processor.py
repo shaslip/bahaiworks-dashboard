@@ -545,6 +545,9 @@ def format_file_description(wikitext, target_category):
         
         # Remove existing {{Bn-excerpt}} (we will explicitly add it back in the reassembly)
         bottom_part = re.sub(r'\{\{Bn-excerpt\}\}', '', bottom_part, flags=re.IGNORECASE)
+
+        # Remove any errant headers (e.g., == Licensing ==, == License ==)
+        bottom_part = re.sub(r'^==\s*.*?\s*==[ \t]*\r?\n?', '', bottom_part, flags=re.MULTILINE)
         
         # Clean up multiple blank lines left behind by the removals
         bottom_part = re.sub(r'\n{3,}', '\n\n', bottom_part).strip()
