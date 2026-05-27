@@ -54,8 +54,9 @@ def fetch_offset_map(module_name):
         map_str = map_match.group(1)
         offset_map = {}
         
-        # Extract Lua table integer key/value pairs: [1] = 0, [2] = 17, etc.
-        pairs = re.findall(r'\[\s*(\d+)\s*\]\s*=\s*(-?\d+)', map_str)
+        # Extract Lua table integer key/value pairs, allowing for optional quotes around the value
+        # e.g., [1] = 0 or [519] = "2"
+        pairs = re.findall(r'\[\s*(\d+)\s*\]\s*=\s*[\'"]?(-?\d+)[\'"]?', map_str)
         for k, v in pairs:
             offset_map[int(k)] = int(v)
             
