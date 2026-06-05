@@ -304,62 +304,66 @@ if st.session_state.anno_queue:
             box_options.append(f"Box {i+1} ({color_name})")
         
         with st.form(key=f"map_form_{st.session_state.current_idx}"):
-            final_mappings = {}
-            all_names_to_map = ai_data["mapped_names"] + ai_data["manual_names"]
+            # Removed st.form to allow live updates of the thumbnails
+        final_mappings = {}
+        all_names_to_map = ai_data["mapped_names"] + ai_data["manual_names"]
+        
+        for i, item in enumerate(all_names_to_map):
+            orig_name = item["name"]
+            ai_box_id = item.get("box_id")
+            is_verified = item.get("exists", False)
             
-            for i, item in enumerate(all_names_to_map):
-                orig_name = item["name"]
-                ai_box_id = item.get("box_id")
-                is_verified = item.get("exists", False)
-                
-                default_idx = 0
-                if ai_box_id is not None and 1 <= ai_box_id <= len(current_boxes):
-                    default_idx = ai_box_id
-                
-                # Split into 3 columns: Thumbnail, Name, Dropdown
-                col_img, col_name, col_box = st.columns([1, 2, 1.5])
-                
-                with col_img:
-                    if default_idx > 0:
-                        # Crop the face using the scaled coordinates
-                        box = current_boxes[default_idx - 1]
-                        left = int(box["left"] * scale_x)
-                        top = int(box["top"] * scale_y)
-                        w = int(box["width"] * box.get("scaleX", 1) * scale_x)
-                        h = int(box["height"] * box.get("scaleY", 1) * scale_y)
-                        
-                        face_crop = pil_img.crop((left, top, left + w, top + h))
-                        st.image(face_crop, width=80)
-                        
-                        # Show which box this represents
-                        stroke_color = box.get("stroke", "#FF0000").upper()
-                        color_name = get_color_name(stroke_color)
-                        st.caption(f"Box {default_idx} ({color_name})")
-                    else:
-                        st.markdown("<div style='height:80px; width:80px; background-color:#333; display:flex; align-items:center; justify-content:center; border-radius:5px; color:#fff; font-size:12px;'>No Face</div>", unsafe_allow_html=True)
-
-                with col_name:
-                    if is_verified:
-                        st.markdown(f"<div style='padding-top:20px;'>✅ <b>{orig_name}</b></div>", unsafe_allow_html=True)
-                        final_name = orig_name
-                    else:
-                        final_name = st.text_input(f"⚠️ Category not found. Edit:", value=orig_name, key=f"edit_name_{i}")
-                
-                with col_box:
-                    selected_box = st.selectbox(
-                        "Assign Box:",
-                        options=box_options,
-                        index=default_idx,
-                        key=f"map_box_{i}"
-                    )
-                
+            default_idx = 0
+            if ai_box_id is not None and 1 <= ai_box_id <= len(current_boxes):
+                default_idx = ai_box_id
+            
+            col_img, col_name, col_box = st.columns([1, 2, 1.5])
+            
+            # 1. Render the Selectbox FIRST so we can use its live value
+            with col_box:
+                selected_box = st.selectbox(
+                    "Assign Box:",
+                    options=box_options,
+                    index=default_idx,
+                    key=f"map_box_{i}"
+                )
+            
+            # 2. Render the Thumbnail based on what the user ACTUALLY selected
+            with col_img:
                 if selected_box != "None":
-                    box_idx = int(re.search(r'Box (\d+)', selected_box).group(1)) - 1
-                    final_mappings[final_name] = box_idx
+                    current_box_idx = int(re.search(r'Box (\d+)', selected_box).group(1)) - 1
+                    box = current_boxes[current_box_idx]
                     
-                st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
+                    left = int(box["left"] * scale_x)
+                    top = int(box["top"] * scale_y)
+                    w = int(box["width"] * box.get("scaleX", 1) * scale_x)
+                    h = int(box["height"] * box.get("scaleY", 1) * scale_y)
+                    
+                    face_crop = pil_img.crop((left, top, left + w, top + h))
+                    st.image(face_crop, width=80)
+                    
+                    stroke_color = box.get("stroke", "#FF0000").upper()
+                    color_name = get_color_name(stroke_color)
+                    st.caption(f"Box {current_box_idx + 1} ({color_name})")
+                else:
+                    st.markdown("<div style='height:80px; width:80px; background-color:#333; display:flex; align-items:center; justify-content:center; border-radius:5px; color:#fff; font-size:12px;'>No Face</div>", unsafe_allow_html=True)
 
-            submit_btn = st.form_submit_button("💾 Save Annotations & Next", type="primary")
+            # 3. Render the Name editor
+            with col_name:
+                if is_verified:
+                    st.markdown(f"<div style='padding-top:20px;'>✅ <b>{orig_name}</b></div>", unsafe_allow_html=True)
+                    final_name = orig_name
+                else:
+                    final_name = st.text_input(f"⚠️ Category not found. Edit:", value=orig_name, key=f"edit_name_{i}")
+            
+            # 4. Save the mapping
+            if selected_box != "None":
+                current_box_idx = int(re.search(r'Box (\d+)', selected_box).group(1)) - 1
+                final_mappings[final_name] = current_box_idx
+                
+            st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
+
+        submit_btn = st.button("💾 Save Annotations & Next", type="primary")
 
         st.write("➕ **Missed a name?**")
         new_name = st.text_input("Enter name:")
