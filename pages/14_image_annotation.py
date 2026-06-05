@@ -3,6 +3,8 @@ import os
 import sys
 import re
 import json
+import base64
+from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 from streamlit_drawable_canvas import st_canvas
 
@@ -27,7 +29,6 @@ def get_caption_from_txt(txt_path):
     if not os.path.exists(txt_path): return ""
     with open(txt_path, 'r', encoding='utf-8') as f:
         content = f.read()
-    # Look for the caption parameter in the {{cs}} template
     match = re.search(r'\|\s*caption\s*=\s*(.*?)\n\|', content, re.IGNORECASE | re.DOTALL)
     if match:
         return match.group(1).strip()
@@ -37,8 +38,6 @@ def draw_numbered_boxes(pil_img, faces):
     """Draws boxes and large ID numbers on a temporary image for Gemini to read."""
     img_copy = pil_img.copy()
     draw = ImageDraw.Draw(img_copy)
-    
-    # Try to load a default font, fallback to basic if not found
     try:
         font = ImageFont.truetype("arial.ttf", 40)
     except IOError:
@@ -47,20 +46,28 @@ def draw_numbered_boxes(pil_img, faces):
     for face in faces:
         x, y, w, h = face['box']
         box_id = face['id']
-        
-        # Draw thick red box
         draw.rectangle([x, y, x+w, y+h], outline="red", width=5)
-        
-        # Draw background for text to make it readable
-        text = str(box_id)
-        # Using simple bounding box for text background
         draw.rectangle([x, max(0, y-40), x+40, y], fill="red")
-        draw.text((x+5, max(0, y-40)), text, fill="white", font=font)
+        draw.text((x+5, max(0, y-40)), str(box_id), fill="white", font=font)
         
     return img_copy
 
-def generate_fabric_json(faces):
-    """Converts MTCNN boxes into the JSON format required by streamlit-drawable-canvas."""
+def pil_to_base64(pil_img):
+    """Converts a PIL image to a base64 data URI."""
+    buffered = BytesIO()
+    pil_img.save(buffered, format="PNG")
+    img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+    return f"data:image/png;base64,{img_str}"
+
+def generate_fabric_json(faces, pil_img, canvas_w, canvas_h):
+    """
+    Converts MTCNN boxes into the JSON format required by streamlit-drawable-canvas.
+    Also injects the background image directly to bypass Streamlit 1.41+ bugs.
+    """
+    orig_w, orig_h = pil_img.size
+    scale_x = canvas_w / orig_w
+    scale_y = canvas_h / orig_h
+    
     colors = ["#FF0000", "#00FF00", "#0000FF", "#FFFF00", "#FF00FF", "#00FFFF"]
     objects = []
     
@@ -69,21 +76,37 @@ def generate_fabric_json(faces):
         color = colors[i % len(colors)]
         objects.append({
             "type": "rect",
-            "left": x,
-            "top": y,
-            "width": w,
-            "height": h,
-            "fill": "rgba(0,0,0,0)", # Transparent fill
+            "left": x * scale_x,
+            "top": y * scale_y,
+            "width": w * scale_x,
+            "height": h * scale_y,
+            "fill": "rgba(0,0,0,0)",
             "stroke": color,
             "strokeWidth": 3,
             "selectable": True,
             "hasControls": True
         })
         
-    return {"version": "4.4.0", "objects": objects}
+    # Inject background image natively into Fabric.js
+    resized_img = pil_img.resize((canvas_w, canvas_h))
+    bg_b64 = pil_to_base64(resized_img)
+        
+    return {
+        "version": "4.4.0",
+        "objects": objects,
+        "backgroundImage": {
+            "type": "image",
+            "src": bg_b64,
+            "originX": "left",
+            "originY": "top",
+            "left": 0,
+            "top": 0,
+            "width": canvas_w,
+            "height": canvas_h
+        }
+    }
 
 def append_annotations_to_txt(txt_path, annotations_wikitext):
-    """Appends the generated ImageNote templates to the bottom of the text file."""
     with open(txt_path, 'a', encoding='utf-8') as f:
         f.write(f"\n\n{annotations_wikitext}")
 
@@ -91,6 +114,8 @@ def append_annotations_to_txt(txt_path, annotations_wikitext):
 # STATE MANAGEMENT
 # ==============================================================================
 
+if "pending_queue" not in st.session_state:
+    st.session_state.pending_queue = []
 if "anno_queue" not in st.session_state:
     st.session_state.anno_queue = []
 if "current_idx" not in st.session_state:
@@ -107,9 +132,8 @@ st.title("🏷️ AI-Assisted Image Annotation")
 st.sidebar.header("Configuration")
 folder_path = st.sidebar.text_input("Images Folder Path", value="/home/sarah/Desktop/Projects/Bahai.works/English/images/")
 
-# --- STAGE 0: SELECT FILES ---
+# --- STAGE 0: SELECT FILES (THE QUEUE REVIEW) ---
 if not st.session_state.anno_queue:
-    st.write("Select images containing people to automatically detect faces and annotate them.")
     
     if st.button("Scan Folder"):
         if os.path.exists(folder_path):
@@ -119,23 +143,46 @@ if not st.session_state.anno_queue:
                     txt_file = f.replace('.png', '.txt')
                     if os.path.exists(os.path.join(folder_path, txt_file)):
                         valid_files.append(f)
-            st.session_state.scanned_files = valid_files
+            st.session_state.pending_queue = valid_files
+            st.rerun()
         else:
             st.error("Invalid folder path.")
 
-    if "scanned_files" in st.session_state and st.session_state.scanned_files:
-        selected = st.multiselect("Select images to annotate:", st.session_state.scanned_files)
+    if st.session_state.pending_queue:
+        st.write("### Review Queue")
+        st.write("Review the images and their text. Click **Remove** for any images that do not need facial annotation.")
+        st.divider()
         
-        if st.button("🚀 Start Annotation Process", type="primary") and selected:
-            st.session_state.anno_queue = [os.path.join(folder_path, s) for s in selected]
+        # Iterate over a copy so we can remove items safely
+        for img_file in list(st.session_state.pending_queue):
+            img_path = os.path.join(folder_path, img_file)
+            txt_path = img_path.replace('.png', '.txt')
+            
+            with open(txt_path, 'r', encoding='utf-8') as f:
+                txt_content = f.read()
+                
+            col1, col2, col3 = st.columns([2, 3, 1])
+            with col1:
+                st.image(img_path, use_container_width=True)
+            with col2:
+                st.text_area("Text Content", txt_content, height=200, key=f"txt_{img_file}", disabled=True)
+            with col3:
+                if st.button("❌ Remove", key=f"rm_{img_file}"):
+                    st.session_state.pending_queue.remove(img_file)
+                    st.rerun()
+            st.divider()
+            
+        if st.button("🚀 Process Remaining Queue", type="primary"):
+            st.session_state.anno_queue = [os.path.join(folder_path, f) for f in st.session_state.pending_queue]
             st.session_state.current_idx = 0
             st.session_state.current_ai_data = None
+            st.session_state.pending_queue = [] # Clear the pending queue
             st.rerun()
+
 
 # --- STAGE 1: REVIEW & EDIT ---
 if st.session_state.anno_queue:
     
-    # Check if we are done
     if st.session_state.current_idx >= len(st.session_state.anno_queue):
         st.success("🎉 All selected images have been annotated!")
         if st.button("Start Over"):
@@ -151,10 +198,16 @@ if st.session_state.anno_queue:
     
     st.markdown(f"### Image {st.session_state.current_idx + 1} of {len(st.session_state.anno_queue)}: `{filename}`")
     
-    # 1. AI Processing (Runs once per image)
+    pil_img = Image.open(current_img_path)
+    orig_w, orig_h = pil_img.size
+    
+    # Determine canvas display size
+    canvas_display_w = 700
+    canvas_display_h = int(orig_h * (canvas_display_w / orig_w))
+
+    # 1. AI Processing
     if st.session_state.current_ai_data is None:
         with st.spinner("🤖 AI is detecting faces and reading the caption..."):
-            pil_img = Image.open(current_img_path)
             caption = get_caption_from_txt(current_txt_path)
             
             # Run MTCNN
@@ -166,29 +219,22 @@ if st.session_state.anno_queue:
                 numbered_img = draw_numbered_boxes(pil_img, faces)
                 mapped_names = map_faces_to_caption(numbered_img, caption)
             elif not faces and caption:
-                # Fallback: No faces found, but we have a caption. Let Gemini just extract names.
                 mapped_names = map_faces_to_caption(pil_img, caption)
                 
             # Prepare Canvas initial data
-            canvas_json = generate_fabric_json(faces)
+            canvas_json = generate_fabric_json(faces, pil_img, canvas_display_w, canvas_display_h)
             
             st.session_state.current_ai_data = {
                 "caption": caption,
                 "faces": faces,
                 "mapped_names": mapped_names,
                 "canvas_json": canvas_json,
-                "manual_names": [] # For user-added names
+                "manual_names": []
             }
             st.rerun()
 
     # 2. Render the Review UI
     ai_data = st.session_state.current_ai_data
-    pil_img = Image.open(current_img_path)
-    orig_w, orig_h = pil_img.size
-    
-    # Determine canvas display size (scale down for UI, but keep aspect ratio)
-    canvas_display_w = 700
-    canvas_display_h = int(orig_h * (canvas_display_w / orig_w))
 
     st.info(f"**Caption:** {ai_data['caption']}")
 
@@ -197,12 +243,12 @@ if st.session_state.anno_queue:
     with col1:
         st.write("✏️ **Draw, Move, or Delete Boxes** (Select a box and press Delete/Backspace to remove)")
         
-        # The Canvas Component
+        # The Canvas Component (background_image bypassed to avoid Streamlit 1.41 bug)
         canvas_result = st_canvas(
             fill_color="rgba(0, 0, 0, 0)",
             stroke_width=3,
             stroke_color="#FF0000",
-            background_image=pil_img,
+            background_image=None, 
             update_streamlit=True,
             height=canvas_display_h,
             width=canvas_display_w,
@@ -221,18 +267,14 @@ if st.session_state.anno_queue:
             
         box_options = ["None"] + [f"Box {i+1}" for i in range(len(current_boxes))]
         
-        # Form to handle mapping
         with st.form(key=f"map_form_{st.session_state.current_idx}"):
             final_mappings = {}
-            
-            # Combine AI names and Manual names
             all_names_to_map = ai_data["mapped_names"] + [{"name": n, "box_id": None} for n in ai_data["manual_names"]]
             
             for item in all_names_to_map:
                 name = item["name"]
                 ai_box_id = item.get("box_id")
                 
-                # Determine default index for the selectbox
                 default_idx = 0
                 if ai_box_id is not None and 1 <= ai_box_id <= len(current_boxes):
                     default_idx = ai_box_id
@@ -245,14 +287,12 @@ if st.session_state.anno_queue:
                 )
                 
                 if selected_box != "None":
-                    # Convert "Box 1" to integer index 0
                     box_idx = int(selected_box.replace("Box ", "")) - 1
                     final_mappings[name] = box_idx
 
             st.divider()
             submit_btn = st.form_submit_button("💾 Save Annotations & Next", type="primary")
 
-        # Allow user to manually add a name missed by Gemini
         st.write("➕ **Missed a name?**")
         new_name = st.text_input("Enter name:")
         if st.button("Add Name"):
@@ -277,14 +317,11 @@ if st.session_state.anno_queue:
         scale_x = orig_w / canvas_display_w
         scale_y = orig_h / canvas_display_h
         
-        # Generate the ImageNote templates
         for i, (name, box_idx) in enumerate(final_mappings.items()):
             box = current_boxes[box_idx]
             
-            # Canvas coordinates are relative to canvas_display_w/h. Must scale up to original image size.
             true_x = int(box["left"] * scale_x)
             true_y = int(box["top"] * scale_y)
-            # Fabric.js scales width/height if the user resized the box
             true_w = int(box["width"] * box.get("scaleX", 1) * scale_x)
             true_h = int(box["height"] * box.get("scaleY", 1) * scale_y)
             
@@ -295,7 +332,6 @@ if st.session_state.anno_queue:
             
         final_wikitext = "\n".join(wikitext_blocks)
         
-        # Append to the .txt file
         append_annotations_to_txt(current_txt_path, final_wikitext)
         
         st.success("Saved!")
