@@ -422,3 +422,27 @@ def update_header_ps_tag(wikitext):
     # 3. Reconstruct
     new_wikitext = wikitext.replace(match.group(0), f"{start_tag}{new_body}{end_tag}")
     return new_wikitext
+
+def check_category_exists_on_media(category_name):
+    """
+    Checks if a category exists specifically on bahai.media.
+    """
+    api_url = 'https://bahai.media/api.php'
+    if not category_name.lower().startswith("category:"):
+        category_name = f"Category:{category_name}"
+        
+    params = {
+        'action': 'query',
+        'titles': category_name,
+        'format': 'json'
+    }
+    try:
+        response = requests.get(api_url, params=params, timeout=10)
+        data = response.json()
+        pages = data.get('query', {}).get('pages', {})
+        for page_id in pages:
+            if int(page_id) < 0:
+                return False
+        return True
+    except Exception:
+        return False # Default to False (editable) if network error
