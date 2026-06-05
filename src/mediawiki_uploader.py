@@ -446,3 +446,46 @@ def check_category_exists_on_media(category_name):
         return True
     except Exception:
         return False # Default to False (editable) if network error
+
+def check_categories_batch(category_names):
+    """
+    Checks if multiple categories exist on bahai.media in a single API request.
+    Returns a dictionary: {"Name": True, "Another Name": False}
+    """
+    if not category_names:
+        return {}
+        
+    api_url = 'https://bahai.media/api.php'
+    
+    # Ensure Category: prefix for the API
+    formatted_names = [f"Category:{name}" if not name.lower().startswith("category:") else name for name in category_names]
+    
+    # MediaWiki allows checking up to 50 titles at once separated by a pipe
+    titles_str = "|".join(formatted_names)
+    
+    params = {
+        'action': 'query',
+        'titles': titles_str,
+        'format': 'json'
+    }
+    
+    # Default everything to True. We will flip to False if the API says it's missing.
+    results = {name: True for name in category_names} 
+    
+    try:
+        response = requests.get(api_url, params=params, timeout=10)
+        data = response.json()
+        pages = data.get('query', {}).get('pages', {})
+        
+        for page_id, page_info in pages.items():
+            # Negative page_id means the page does not exist
+            if int(page_id) < 0:
+                returned_title = page_info.get('title', '')
+                clean_name = returned_title.replace("Category:", "")
+                if clean_name in results:
+                    results[clean_name] = False
+                    
+        return results
+    except Exception:
+        # If the network fails, default to False so the user can manually edit
+        return {name: False for name in category_names}
