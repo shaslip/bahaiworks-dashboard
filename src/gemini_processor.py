@@ -608,3 +608,44 @@ def format_file_description(wikitext, target_category):
     except Exception as e:
         check_fatal_rate_limit(e)
         return f"GEMINI_ERROR: {str(e)}"
+
+def map_faces_to_caption(image_with_boxes, caption_text):
+    """
+    Takes an image with numbered bounding boxes drawn on it, and the caption text.
+    Asks Gemini to extract names and map them to the box IDs.
+    """
+    model = genai.GenerativeModel(MODEL_NAME)
+    
+    prompt = f"""
+    Analyze this image which has numbered bounding boxes drawn on it, and the following caption:
+    "{caption_text}"
+    
+    1. Extract the names of the individuals mentioned in the caption.
+    2. Match each name to the corresponding numbered box in the image.
+    
+    Return ONLY a valid JSON array of objects in this exact format:
+    [
+        {{"name": "Person Name", "box_id": 1}},
+        {{"name": "Another Person", "box_id": 2}}
+    ]
+    If a name is mentioned but you cannot confidently find their face/box, set "box_id" to null.
+    If no names are found, return an empty array [].
+    """
+    
+    safety_settings = {
+        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+    }
+
+    try:
+        response = model.generate_content([prompt, image_with_boxes], safety_settings=safety_settings)
+        match = re.search(r'\[.*\]', response.text, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+        return []
+    except Exception as e:
+        check_fatal_rate_limit(e)
+        print(f"Debug: Face mapping error: {e}")
+        return []
