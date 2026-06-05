@@ -4,6 +4,7 @@ import sys
 import re
 import json
 import base64
+import unicodedata
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 from streamlit_drawable_canvas import st_canvas
@@ -36,6 +37,15 @@ NAMED_COLORS = [
     ("#00FA9A", "Spring Green"),
     ("#FF1493", "Deep Pink")
 ]
+
+def normalize_name(name):
+    """Removes accents and transliteration marks (like ‘ and ’) from names."""
+    if not name: return name
+    # Remove standard accents (á -> a, í -> i, etc.)
+    n = unicodedata.normalize('NFKD', name).encode('ASCII', 'ignore').decode('utf-8')
+    # Remove specific apostrophes/quotes
+    n = re.sub(r"['‘’`]", "", n)
+    return n.strip()
 
 def get_color_name(hex_code):
     """Translates a hex code to a human-readable color name for the UI."""
@@ -229,6 +239,10 @@ if st.session_state.anno_queue:
             elif not faces and caption:
                 mapped_names = map_faces_to_caption(pil_img, caption)
                 
+            # Normalize names extracted by Gemini
+            for item in mapped_names:
+                item["name"] = normalize_name(item["name"])
+                
             canvas_json = generate_fabric_json(faces, pil_img, canvas_display_w, canvas_display_h)
             
             st.session_state.current_ai_data = {
@@ -307,8 +321,9 @@ if st.session_state.anno_queue:
         st.write("➕ **Missed a name?**")
         new_name = st.text_input("Enter name:")
         if st.button("Add Name"):
-            if new_name and new_name not in [n["name"] for n in ai_data["mapped_names"]] and new_name not in ai_data["manual_names"]:
-                st.session_state.current_ai_data["manual_names"].append(new_name)
+            norm_name = normalize_name(new_name)
+            if norm_name and norm_name not in [n["name"] for n in ai_data["mapped_names"]] and norm_name not in ai_data["manual_names"]:
+                st.session_state.current_ai_data["manual_names"].append(norm_name)
                 st.rerun()
 
         if st.button("⏭️ Skip Image"):
