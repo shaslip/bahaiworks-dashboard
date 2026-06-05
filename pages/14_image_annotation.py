@@ -18,7 +18,7 @@ if project_root not in sys.path:
 # --- Imports ---
 from src.face_detection import detect_faces
 from src.gemini_processor import map_faces_to_caption
-from src.mediawiki_uploader import check_category_exists_on_media
+from src.mediawiki_uploader import check_category_exists_on_media, check_categories_batch
 
 st.set_page_config(page_title="Image Annotation", page_icon="🏷️", layout="wide")
 
@@ -244,10 +244,16 @@ if st.session_state.anno_queue:
             elif not faces and caption:
                 mapped_names = map_faces_to_caption(pil_img, caption)
                 
-            # Normalize and verify names extracted by Gemini
+            # Normalize names extracted by Gemini
             for item in mapped_names:
                 item["name"] = normalize_name(item["name"])
-                item["exists"] = check_category_exists_on_media(item["name"])
+                
+            # Verify all names in ONE single API request
+            names_to_check = [item["name"] for item in mapped_names]
+            category_status = check_categories_batch(names_to_check)
+            
+            for item in mapped_names:
+                item["exists"] = category_status.get(item["name"], False)
                 
             canvas_json = generate_fabric_json(faces, pil_img, canvas_display_w, canvas_display_h)
             
