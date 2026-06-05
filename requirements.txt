@@ -29,6 +29,7 @@ opencv-python-headless==4.10.0.84
 # Face Detection
 mtcnn==0.1.1
 tensorflow-cpu==2.16.1
+setuptools
 
 # Interactive Canvas (for manual review/drawing)
 streamlit-drawable-canvas==0.9.3
