@@ -21,11 +21,31 @@ from src.gemini_processor import map_faces_to_caption
 st.set_page_config(page_title="Image Annotation", page_icon="🏷️", layout="wide")
 
 # ==============================================================================
-# HELPER FUNCTIONS
+# HELPER FUNCTIONS & COLOR MAPPING
 # ==============================================================================
 
+NAMED_COLORS = [
+    ("#FF0000", "Red"),
+    ("#00FF00", "Green"),
+    ("#0000FF", "Blue"),
+    ("#FFFF00", "Yellow"),
+    ("#FF00FF", "Magenta"),
+    ("#00FFFF", "Cyan"),
+    ("#FFA500", "Orange"),
+    ("#800080", "Purple"),
+    ("#00FA9A", "Spring Green"),
+    ("#FF1493", "Deep Pink")
+]
+
+def get_color_name(hex_code):
+    """Translates a hex code to a human-readable color name for the UI."""
+    hex_code = hex_code.upper()
+    for h, name in NAMED_COLORS:
+        if h == hex_code:
+            return name
+    return "Custom Color"
+
 def get_caption_from_txt(txt_path):
-    """Extracts the caption string from the wikitext file."""
     if not os.path.exists(txt_path): return ""
     with open(txt_path, 'r', encoding='utf-8') as f:
         content = f.read()
@@ -35,7 +55,6 @@ def get_caption_from_txt(txt_path):
     return ""
 
 def draw_numbered_boxes(pil_img, faces):
-    """Draws boxes and large ID numbers on a temporary image for Gemini to read."""
     img_copy = pil_img.copy()
     draw = ImageDraw.Draw(img_copy)
     try:
@@ -53,27 +72,21 @@ def draw_numbered_boxes(pil_img, faces):
     return img_copy
 
 def pil_to_base64(pil_img):
-    """Converts a PIL image to a base64 data URI."""
     buffered = BytesIO()
     pil_img.save(buffered, format="PNG")
     img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
     return f"data:image/png;base64,{img_str}"
 
 def generate_fabric_json(faces, pil_img, canvas_w, canvas_h):
-    """
-    Converts MTCNN boxes into the JSON format required by streamlit-drawable-canvas.
-    Also injects the background image directly to bypass Streamlit 1.41+ bugs.
-    """
     orig_w, orig_h = pil_img.size
     scale_x = canvas_w / orig_w
     scale_y = canvas_h / orig_h
     
-    colors = ["#FF0000", "#00FF00", "#0000FF", "#FFFF00", "#FF00FF", "#00FFFF"]
     objects = []
     
     for i, face in enumerate(faces):
         x, y, w, h = face['box']
-        color = colors[i % len(colors)]
+        color_hex = NAMED_COLORS[i % len(NAMED_COLORS)][0]
         objects.append({
             "type": "rect",
             "left": x * scale_x,
@@ -81,13 +94,12 @@ def generate_fabric_json(faces, pil_img, canvas_w, canvas_h):
             "width": w * scale_x,
             "height": h * scale_y,
             "fill": "rgba(0,0,0,0)",
-            "stroke": color,
+            "stroke": color_hex,
             "strokeWidth": 3,
             "selectable": True,
             "hasControls": True
         })
         
-    # Inject background image natively into Fabric.js
     resized_img = pil_img.resize((canvas_w, canvas_h))
     bg_b64 = pil_to_base64(resized_img)
         
@@ -153,7 +165,6 @@ if not st.session_state.anno_queue:
         st.write("Review the images and their text. Click **Remove** for any images that do not need facial annotation.")
         st.divider()
         
-        # Iterate over a copy so we can remove items safely
         for img_file in list(st.session_state.pending_queue):
             img_path = os.path.join(folder_path, img_file)
             txt_path = img_path.replace('.png', '.txt')
@@ -176,7 +187,7 @@ if not st.session_state.anno_queue:
             st.session_state.anno_queue = [os.path.join(folder_path, f) for f in st.session_state.pending_queue]
             st.session_state.current_idx = 0
             st.session_state.current_ai_data = None
-            st.session_state.pending_queue = [] # Clear the pending queue
+            st.session_state.pending_queue = [] 
             st.rerun()
 
 
@@ -201,7 +212,6 @@ if st.session_state.anno_queue:
     pil_img = Image.open(current_img_path)
     orig_w, orig_h = pil_img.size
     
-    # Determine canvas display size
     canvas_display_w = 700
     canvas_display_h = int(orig_h * (canvas_display_w / orig_w))
 
@@ -210,10 +220,8 @@ if st.session_state.anno_queue:
         with st.spinner("🤖 AI is detecting faces and reading the caption..."):
             caption = get_caption_from_txt(current_txt_path)
             
-            # Run MTCNN
             faces = detect_faces(pil_img)
             
-            # Map Names with Gemini
             mapped_names = []
             if faces and caption:
                 numbered_img = draw_numbered_boxes(pil_img, faces)
@@ -221,7 +229,6 @@ if st.session_state.anno_queue:
             elif not faces and caption:
                 mapped_names = map_faces_to_caption(pil_img, caption)
                 
-            # Prepare Canvas initial data
             canvas_json = generate_fabric_json(faces, pil_img, canvas_display_w, canvas_display_h)
             
             st.session_state.current_ai_data = {
@@ -243,11 +250,10 @@ if st.session_state.anno_queue:
     with col1:
         st.write("✏️ **Draw, Move, or Delete Boxes** (Select a box and press Delete/Backspace to remove)")
         
-        # The Canvas Component (background_image bypassed to avoid Streamlit 1.41 bug)
         canvas_result = st_canvas(
             fill_color="rgba(0, 0, 0, 0)",
             stroke_width=3,
-            stroke_color="#FF0000",
+            stroke_color="#FF0000", # Default color if user draws a new box
             background_image=None, 
             update_streamlit=True,
             height=canvas_display_h,
@@ -260,12 +266,16 @@ if st.session_state.anno_queue:
     with col2:
         st.write("📋 **Map Names to Boxes**")
         
-        # Extract current boxes from canvas
         current_boxes = []
         if canvas_result.json_data is not None:
             current_boxes = canvas_result.json_data["objects"]
             
-        box_options = ["None"] + [f"Box {i+1}" for i in range(len(current_boxes))]
+        # Dynamically generate dropdown options based on the colors currently in the canvas
+        box_options = ["None"]
+        for i, box in enumerate(current_boxes):
+            stroke_color = box.get("stroke", "#FF0000").upper()
+            color_name = get_color_name(stroke_color)
+            box_options.append(f"Box {i+1} ({color_name})")
         
         with st.form(key=f"map_form_{st.session_state.current_idx}"):
             final_mappings = {}
@@ -287,7 +297,8 @@ if st.session_state.anno_queue:
                 )
                 
                 if selected_box != "None":
-                    box_idx = int(selected_box.replace("Box ", "")) - 1
+                    # Extract the box index (e.g., "Box 1 (Red)" -> 0)
+                    box_idx = int(re.search(r'Box (\d+)', selected_box).group(1)) - 1
                     final_mappings[name] = box_idx
 
             st.divider()
