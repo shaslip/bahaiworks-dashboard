@@ -225,6 +225,10 @@ if st.session_state.anno_queue:
     
     canvas_display_w = 700
     canvas_display_h = int(orig_h * (canvas_display_w / orig_w))
+    
+    # Calculate scale factors for cropping and saving
+    scale_x = orig_w / canvas_display_w
+    scale_y = orig_h / canvas_display_h
 
     # 1. AI Processing
     if st.session_state.current_ai_data is None:
@@ -302,20 +306,40 @@ if st.session_state.anno_queue:
                 ai_box_id = item.get("box_id")
                 is_verified = item.get("exists", False)
                 
-                col_a, col_b = st.columns(2)
+                default_idx = 0
+                if ai_box_id is not None and 1 <= ai_box_id <= len(current_boxes):
+                    default_idx = ai_box_id
                 
-                with col_a:
+                # Split into 3 columns: Thumbnail, Name, Dropdown
+                col_img, col_name, col_box = st.columns([1, 2, 1.5])
+                
+                with col_img:
+                    if default_idx > 0:
+                        # Crop the face using the scaled coordinates
+                        box = current_boxes[default_idx - 1]
+                        left = int(box["left"] * scale_x)
+                        top = int(box["top"] * scale_y)
+                        w = int(box["width"] * box.get("scaleX", 1) * scale_x)
+                        h = int(box["height"] * box.get("scaleY", 1) * scale_y)
+                        
+                        face_crop = pil_img.crop((left, top, left + w, top + h))
+                        st.image(face_crop, width=80)
+                        
+                        # Show which box this represents
+                        stroke_color = box.get("stroke", "#FF0000").upper()
+                        color_name = get_color_name(stroke_color)
+                        st.caption(f"Box {default_idx} ({color_name})")
+                    else:
+                        st.markdown("<div style='height:80px; width:80px; background-color:#333; display:flex; align-items:center; justify-content:center; border-radius:5px; color:#fff; font-size:12px;'>No Face</div>", unsafe_allow_html=True)
+
+                with col_name:
                     if is_verified:
-                        st.markdown(f"<div style='padding-top:35px;'>✅ <b>{orig_name}</b></div>", unsafe_allow_html=True)
+                        st.markdown(f"<div style='padding-top:20px;'>✅ <b>{orig_name}</b></div>", unsafe_allow_html=True)
                         final_name = orig_name
                     else:
                         final_name = st.text_input(f"⚠️ Category not found. Edit:", value=orig_name, key=f"edit_name_{i}")
                 
-                with col_b:
-                    default_idx = 0
-                    if ai_box_id is not None and 1 <= ai_box_id <= len(current_boxes):
-                        default_idx = ai_box_id
-                        
+                with col_box:
                     selected_box = st.selectbox(
                         "Assign Box:",
                         options=box_options,
@@ -354,8 +378,6 @@ if st.session_state.anno_queue:
             st.rerun()
             
         wikitext_blocks = []
-        scale_x = orig_w / canvas_display_w
-        scale_y = orig_h / canvas_display_h
         
         for i, (name, box_idx) in enumerate(final_mappings.items()):
             box = current_boxes[box_idx]
