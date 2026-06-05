@@ -174,7 +174,7 @@ if not st.session_state.anno_queue:
                 
             col1, col2, col3 = st.columns([2, 3, 1])
             with col1:
-                st.image(img_path, use_container_width=True)
+                st.image(img_path, width='stretch')
             with col2:
                 st.text_area("Text Content", txt_content, height=200, key=f"txt_{img_file}", disabled=True)
             with col3:
