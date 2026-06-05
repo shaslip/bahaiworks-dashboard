@@ -18,6 +18,7 @@ if project_root not in sys.path:
 # --- Imports ---
 from src.face_detection import detect_faces
 from src.gemini_processor import map_faces_to_caption
+from src.mediawiki_uploader import check_category_exists_on_media
 
 st.set_page_config(page_title="Image Annotation", page_icon="🏷️", layout="wide")
 
@@ -239,9 +240,10 @@ if st.session_state.anno_queue:
             elif not faces and caption:
                 mapped_names = map_faces_to_caption(pil_img, caption)
                 
-            # Normalize names extracted by Gemini
+            # Normalize and verify names extracted by Gemini
             for item in mapped_names:
                 item["name"] = normalize_name(item["name"])
+                item["exists"] = check_category_exists_on_media(item["name"])
                 
             canvas_json = generate_fabric_json(faces, pil_img, canvas_display_w, canvas_display_h)
             
@@ -293,37 +295,49 @@ if st.session_state.anno_queue:
         
         with st.form(key=f"map_form_{st.session_state.current_idx}"):
             final_mappings = {}
-            all_names_to_map = ai_data["mapped_names"] + [{"name": n, "box_id": None} for n in ai_data["manual_names"]]
+            all_names_to_map = ai_data["mapped_names"] + ai_data["manual_names"]
             
-            for item in all_names_to_map:
-                name = item["name"]
+            for i, item in enumerate(all_names_to_map):
+                orig_name = item["name"]
                 ai_box_id = item.get("box_id")
+                is_verified = item.get("exists", False)
                 
-                default_idx = 0
-                if ai_box_id is not None and 1 <= ai_box_id <= len(current_boxes):
-                    default_idx = ai_box_id
-                    
-                selected_box = st.selectbox(
-                    f"Name: {name}",
-                    options=box_options,
-                    index=default_idx,
-                    key=f"map_{name}"
-                )
+                col_a, col_b = st.columns(2)
+                
+                with col_a:
+                    if is_verified:
+                        st.markdown(f"<div style='padding-top:35px;'>✅ <b>{orig_name}</b></div>", unsafe_allow_html=True)
+                        final_name = orig_name
+                    else:
+                        final_name = st.text_input(f"⚠️ Category not found. Edit:", value=orig_name, key=f"edit_name_{i}")
+                
+                with col_b:
+                    default_idx = 0
+                    if ai_box_id is not None and 1 <= ai_box_id <= len(current_boxes):
+                        default_idx = ai_box_id
+                        
+                    selected_box = st.selectbox(
+                        "Assign Box:",
+                        options=box_options,
+                        index=default_idx,
+                        key=f"map_box_{i}"
+                    )
                 
                 if selected_box != "None":
-                    # Extract the box index (e.g., "Box 1 (Red)" -> 0)
                     box_idx = int(re.search(r'Box (\d+)', selected_box).group(1)) - 1
-                    final_mappings[name] = box_idx
+                    final_mappings[final_name] = box_idx
+                    
+                st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
 
-            st.divider()
             submit_btn = st.form_submit_button("💾 Save Annotations & Next", type="primary")
 
         st.write("➕ **Missed a name?**")
         new_name = st.text_input("Enter name:")
         if st.button("Add Name"):
             norm_name = normalize_name(new_name)
-            if norm_name and norm_name not in [n["name"] for n in ai_data["mapped_names"]] and norm_name not in ai_data["manual_names"]:
-                st.session_state.current_ai_data["manual_names"].append(norm_name)
+            if norm_name and norm_name not in [n["name"] for n in ai_data["mapped_names"]] and norm_name not in [n["name"] for n in ai_data["manual_names"]]:
+                exists = check_category_exists_on_media(norm_name)
+                st.session_state.current_ai_data["manual_names"].append({"name": norm_name, "box_id": None, "exists": exists})
                 st.rerun()
 
         if st.button("⏭️ Skip Image"):
