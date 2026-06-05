@@ -1,10 +1,18 @@
 import os
+import logging
+
 # Suppress TensorFlow informational logs and oneDNN warnings
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # 3 = FATAL only
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+
+# Suppress Python's internal logging for TensorFlow
+logging.getLogger('tensorflow').setLevel(logging.FATAL)
 
 import numpy as np
 from mtcnn import MTCNN
+
+# Initialize the detector ONCE globally so we don't rebuild it for every image
+DETECTOR = MTCNN()
 
 def detect_faces(pil_image):
     """
@@ -15,11 +23,8 @@ def detect_faces(pil_image):
     img_array = np.array(pil_image.convert('RGB'))
     img_h, img_w, _ = img_array.shape
     
-    # Initialize detector
-    detector = MTCNN()
-    
-    # Detect faces
-    faces = detector.detect_faces(img_array)
+    # Detect faces using the global detector
+    faces = DETECTOR.detect_faces(img_array)
     
     results = []
     for i, face in enumerate(faces):
