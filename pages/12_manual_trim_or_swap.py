@@ -156,7 +156,7 @@ with tab2:
     # Display UI for Swapping
     if st.session_state.multi_image_pages:
         # Regex captures "bahai" (Group 1) and the attached letters (Group 2)
-        typo_pattern = re.compile(r'(bahai)(?!s\b)([a-z]+)', re.IGNORECASE)
+        typo_pattern = re.compile(r'(bahai)(?!s(?:[^a-z]|$))([a-z]+)', re.IGNORECASE)
         
         for page, img_paths in st.session_state.multi_image_pages.items():
             base_names = [os.path.basename(p) for p in img_paths]
