@@ -155,17 +155,43 @@ with tab2:
 
     # Display UI for Swapping
     if st.session_state.multi_image_pages:
-        # Regex looks for "bahai" followed by letters, but ignores "bahais" at word boundaries
-        typo_pattern = re.compile(r'bahai(?!s\b)[a-z]+', re.IGNORECASE)
+        # Regex captures "bahai" (Group 1) and the attached letters (Group 2)
+        typo_pattern = re.compile(r'(bahai)(?!s\b)([a-z]+)', re.IGNORECASE)
         
         for page, img_paths in st.session_state.multi_image_pages.items():
             base_names = [os.path.basename(p) for p in img_paths]
             
-            # Check if any image on this page matches the typo pattern (ignoring the file extension)
+            # Check if any image on this page matches the typo pattern
             page_has_typos = any(typo_pattern.search(os.path.splitext(name)[0]) for name in base_names)
             
             if page_has_typos:
                 st.markdown(f"### Page {page} :red[[Possible file name errors]]")
+                
+                # Show actionable fix buttons ABOVE the form (Streamlit requirement)
+                for img_path in img_paths:
+                    img_name = os.path.basename(img_path)
+                    if typo_pattern.search(img_name):
+                        # Replaces "Bahainstitute" with "Bahai_institute"
+                        fixed_name = typo_pattern.sub(r'\1_i\2', img_name)
+                        
+                        col1, col2 = st.columns([3, 1], vertical_alignment="center")
+                        with col1:
+                            st.warning(f"⚠️ Typo detected: `{img_name}`")
+                        with col2:
+                            if st.button("Would you like to fix this error [Yes]", key=f"fix_{page}_{img_name}"):
+                                # 1. Rename Image
+                                os.rename(img_path, os.path.join(folder_path, fixed_name))
+                                
+                                # 2. Rename corresponding .txt file so they stay linked
+                                txt_name = os.path.splitext(img_name)[0] + '.txt'
+                                txt_path = os.path.join(folder_path, txt_name)
+                                if os.path.exists(txt_path):
+                                    new_txt_name = os.path.splitext(fixed_name)[0] + '.txt'
+                                    os.rename(txt_path, os.path.join(folder_path, new_txt_name))
+                                    
+                                st.success("Fixed! Rescanning folder...")
+                                st.session_state.multi_image_pages = {} # Clear state to force a fresh scan
+                                st.rerun()
             else:
                 st.markdown(f"### Page {page}")
             
@@ -181,12 +207,7 @@ with tab2:
                     for j, img_path in enumerate(chunk):
                         current_name = os.path.basename(img_path)
                         with cols[j]:
-                            # Updated to use the new Streamlit width parameter
                             st.image(img_path, width='stretch')
-                            
-                            # Show a specific warning above the selectbox if this exact file has the typo
-                            if typo_pattern.search(os.path.splitext(current_name)[0]):
-                                st.warning(f"⚠️ Typo detected in filename")
                             
                             # The user selects the TRUE filename for the image displayed above
                             selections[current_name] = st.selectbox(
