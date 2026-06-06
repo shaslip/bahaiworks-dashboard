@@ -192,8 +192,6 @@ with tab2:
                                 st.success("Fixed! Rescanning folder...")
                                 st.session_state.multi_image_pages = {} # Clear state to force a fresh scan
                                 st.rerun()
-            else:
-                st.markdown(f"### Page {page}")
             
             # Using a form per page so swaps happen atomically
             with st.form(key=f"form_page_{page}"):
