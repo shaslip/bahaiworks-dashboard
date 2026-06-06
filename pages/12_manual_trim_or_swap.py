@@ -161,12 +161,12 @@ with tab2:
         for page, img_paths in st.session_state.multi_image_pages.items():
             base_names = [os.path.basename(p) for p in img_paths]
             
+            st.markdown(f"### Page {page}")
+            
             # Check if any image on this page matches the typo pattern
             page_has_typos = any(typo_pattern.search(os.path.splitext(name)[0]) for name in base_names)
             
             if page_has_typos:
-                st.markdown(f"### Page {page} :red[[Possible file name errors]]")
-                
                 # Show actionable fix buttons ABOVE the form (Streamlit requirement)
                 for img_path in img_paths:
                     img_name = os.path.basename(img_path)
@@ -178,7 +178,7 @@ with tab2:
                         with col1:
                             st.warning(f"⚠️ Typo detected: `{img_name}`")
                         with col2:
-                            if st.button("Would you like to fix this error [Yes]", key=f"fix_{page}_{img_name}"):
+                            if st.button("Fix this error", key=f"fix_{page}_{img_name}"):
                                 # 1. Rename Image
                                 os.rename(img_path, os.path.join(folder_path, fixed_name))
                                 
