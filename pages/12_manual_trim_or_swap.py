@@ -155,10 +155,19 @@ with tab2:
 
     # Display UI for Swapping
     if st.session_state.multi_image_pages:
+        # Regex looks for "bahai" followed by letters, but ignores "bahais" at word boundaries
+        typo_pattern = re.compile(r'bahai(?!s\b)[a-z]+', re.IGNORECASE)
+        
         for page, img_paths in st.session_state.multi_image_pages.items():
-            st.markdown(f"### Page {page}")
-            
             base_names = [os.path.basename(p) for p in img_paths]
+            
+            # Check if any image on this page matches the typo pattern (ignoring the file extension)
+            page_has_typos = any(typo_pattern.search(os.path.splitext(name)[0]) for name in base_names)
+            
+            if page_has_typos:
+                st.markdown(f"### Page {page} :red[[Possible file name errors]]")
+            else:
+                st.markdown(f"### Page {page}")
             
             # Using a form per page so swaps happen atomically
             with st.form(key=f"form_page_{page}"):
@@ -174,6 +183,10 @@ with tab2:
                         with cols[j]:
                             # Updated to use the new Streamlit width parameter
                             st.image(img_path, width='stretch')
+                            
+                            # Show a specific warning above the selectbox if this exact file has the typo
+                            if typo_pattern.search(os.path.splitext(current_name)[0]):
+                                st.warning(f"⚠️ Typo detected in filename")
                             
                             # The user selects the TRUE filename for the image displayed above
                             selections[current_name] = st.selectbox(
