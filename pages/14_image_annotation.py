@@ -185,14 +185,14 @@ if not st.session_state.anno_queue:
                 with open(txt_path, 'r', encoding='utf-8') as f:
                     txt_content = f.read()
                     
-                col1, col2, col3 = st.columns([2, 3, 1])
+                # Adjust column ratios to let the text area fill space and push the checkbox right
+                col1, col2, col3 = st.columns([2, 6, 0.5])
                 with col1:
                     st.image(img_path, width='stretch')
                 with col2:
                     st.text_area("Text Content", txt_content, height=250, key=f"txt_{img_file}", disabled=True)
                 with col3:
-                    # Checkbox instead of a remove button
-                    st.checkbox("", value=False, key=f"check_{img_file}")
+                    st.checkbox("Select", value=False, key=f"check_{img_file}", label_visibility="collapsed")
                 st.divider()
                 
             # Submit button for the form
