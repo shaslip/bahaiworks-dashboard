@@ -172,35 +172,44 @@ if not st.session_state.anno_queue:
             st.error("Invalid folder path.")
 
     if st.session_state.pending_queue:
-        st.write("### Review Queue")
-        st.write("Review the images and their text. Click **Remove** for any images that do not need facial annotation.")
-        st.divider()
-        
-        for img_file in list(st.session_state.pending_queue):
-            img_path = os.path.join(folder_path, img_file)
-            txt_path = img_path.replace('.png', '.txt')
-            
-            with open(txt_path, 'r', encoding='utf-8') as f:
-                txt_content = f.read()
-                
-            col1, col2, col3 = st.columns([2, 3, 1])
-            with col1:
-                st.image(img_path, width='stretch')
-            with col2:
-                st.text_area("Text Content", txt_content, height=200, key=f"txt_{img_file}", disabled=True)
-            with col3:
-                if st.button("❌ Remove", key=f"rm_{img_file}"):
-                    st.session_state.pending_queue.remove(img_file)
-                    st.rerun()
+        # Wrap in a form so checking boxes doesn't trigger a slow rerun every time
+        with st.form(key="queue_review_form"):
+            st.write("### Review Queue")
+            st.write("Review the images and their text. **Check the box** for any images you want to annotate.")
             st.divider()
             
-        if st.button("🚀 Process Remaining Queue", type="primary"):
-            st.session_state.anno_queue = [os.path.join(folder_path, f) for f in st.session_state.pending_queue]
-            st.session_state.current_idx = 0
-            st.session_state.current_ai_data = None
-            st.session_state.pending_queue = [] 
-            st.rerun()
-
+            for img_file in st.session_state.pending_queue:
+                img_path = os.path.join(folder_path, img_file)
+                txt_path = img_path.replace('.png', '.txt')
+                
+                with open(txt_path, 'r', encoding='utf-8') as f:
+                    txt_content = f.read()
+                    
+                col1, col2, col3 = st.columns([2, 3, 1])
+                with col1:
+                    st.image(img_path, width='stretch')
+                with col2:
+                    st.text_area("Text Content", txt_content, height=200, key=f"txt_{img_file}", disabled=True)
+                with col3:
+                    # Checkbox instead of a remove button
+                    st.checkbox("✅ Select for Annotation", value=False, key=f"check_{img_file}")
+                st.divider()
+                
+            # Submit button for the form
+            submit_queue = st.form_submit_button("🚀 Process Selected Images", type="primary")
+            
+            if submit_queue:
+                # Gather only the files where the checkbox was True
+                selected_files = [f for f in st.session_state.pending_queue if st.session_state.get(f"check_{f}", False)]
+                
+                if selected_files:
+                    st.session_state.anno_queue = [os.path.join(folder_path, f) for f in selected_files]
+                    st.session_state.current_idx = 0
+                    st.session_state.current_ai_data = None
+                    st.session_state.pending_queue = [] 
+                    st.rerun()
+                else:
+                    st.warning("Please select at least one image to process.")
 
 # --- STAGE 1: REVIEW & EDIT ---
 if st.session_state.anno_queue:
