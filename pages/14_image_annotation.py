@@ -312,8 +312,7 @@ if st.session_state.anno_queue:
             color_name = get_color_name(stroke_color)
             box_options.append(f"Box {i+1} ({color_name})")
         
-        with st.form(key=f"map_form_{st.session_state.current_idx}"):
-            # Removed st.form to allow live updates of the thumbnails
+        # Removed st.form to allow live updates of the thumbnails
         final_mappings = {}
         all_names_to_map = ai_data["mapped_names"] + ai_data["manual_names"]
         
