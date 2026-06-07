@@ -192,7 +192,7 @@ if not st.session_state.anno_queue:
                     st.text_area("Text Content", txt_content, height=200, key=f"txt_{img_file}", disabled=True)
                 with col3:
                     # Checkbox instead of a remove button
-                    st.checkbox("✅ Select for Annotation", value=False, key=f"check_{img_file}")
+                    st.checkbox("✅", value=False, key=f"check_{img_file}")
                 st.divider()
                 
             # Submit button for the form
