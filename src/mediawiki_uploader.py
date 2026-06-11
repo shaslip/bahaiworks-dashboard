@@ -109,6 +109,34 @@ def fetch_wikitext(title, session=None, api_url=API_URL):
     
     return None, "Unknown Error"
 
+def get_image_url(title, session=None, api_url=API_URL):
+    """
+    Fetches the direct URL of an image file on the wiki.
+    """
+    requester = session if session else requests
+    if not title.lower().startswith("file:"):
+        title = f"File:{title}"
+        
+    params = {
+        "action": "query",
+        "titles": title,
+        "prop": "imageinfo",
+        "iiprop": "url",
+        "format": "json"
+    }
+    
+    try:
+        response = requester.get(api_url, params=params, timeout=10)
+        data = response.json()
+        pages = data.get("query", {}).get("pages", {})
+        for pid, pdata in pages.items():
+            if "imageinfo" in pdata:
+                return pdata["imageinfo"][0]["url"]
+    except Exception as e:
+        print(f"Error fetching image URL: {e}")
+        
+    return None
+
 def upload_to_mediawiki(title, content, summary="Bot upload", check_exists=False, session=None, api_url=API_URL):
     """
     Generic upload function supporting dynamic API URLs.
