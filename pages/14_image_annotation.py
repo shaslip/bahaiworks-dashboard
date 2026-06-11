@@ -138,10 +138,6 @@ def generate_fabric_json(faces, pil_img, canvas_w, canvas_h):
         }
     }
 
-def append_annotations_to_txt(txt_path, annotations_wikitext):
-    with open(txt_path, 'a', encoding='utf-8') as f:
-        f.write(f"\n\n{annotations_wikitext}")
-
 def load_wiki_batch(files_list, start_idx, batch_size=15):
     """Fetches text and URLs for a batch of wiki files."""
     batch = files_list[start_idx:start_idx + batch_size]
