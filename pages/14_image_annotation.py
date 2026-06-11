@@ -185,8 +185,8 @@ st.title("🏷️ AI-Assisted Image Annotation")
 # --- STAGE 0: SELECT FILES (THE QUEUE REVIEW) ---
 if not st.session_state.anno_queue:
     
-    st.sidebar.header("Configuration")
-    tab_local, tab_wiki = st.sidebar.tabs(["📁 Local Files", "🌐 Wiki Files"])
+    st.header("Configuration")
+    tab_local, tab_wiki = st.tabs(["📁 Local Files", "🌐 Wiki Files"])
     
     with tab_local:
         folder_path = st.text_input("Images Folder Path", value="/home/sarah/Desktop/Projects/Bahai.works/English/images/")
