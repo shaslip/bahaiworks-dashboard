@@ -4,6 +4,7 @@ import sys
 import re
 import json
 import base64
+import requests
 import unicodedata
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
@@ -18,7 +19,14 @@ if project_root not in sys.path:
 # --- Imports ---
 from src.face_detection import detect_faces
 from src.gemini_processor import map_faces_to_caption
-from src.mediawiki_uploader import check_category_exists_on_media, check_categories_batch
+from src.mediawiki_uploader import (
+    check_category_exists_on_media, 
+    check_categories_batch, 
+    get_category_files, 
+    fetch_wikitext, 
+    get_image_url, 
+    upload_to_mediawiki
+)
 
 st.set_page_config(page_title="Image Annotation", page_icon="🏷️", layout="wide")
 
@@ -39,6 +47,8 @@ NAMED_COLORS = [
     ("#FF1493", "Deep Pink")
 ]
 
+MEDIA_API_URL = 'https://bahai.media/api.php'
+
 def normalize_name(name):
     """Removes accents and transliteration marks (like ‘ and ’) from names."""
     if not name: return name
@@ -56,10 +66,9 @@ def get_color_name(hex_code):
             return name
     return "Custom Color"
 
-def get_caption_from_txt(txt_path):
-    if not os.path.exists(txt_path): return ""
-    with open(txt_path, 'r', encoding='utf-8') as f:
-        content = f.read()
+def get_caption_from_text(content):
+    """Extracts caption from wikitext content."""
+    if not content: return ""
     match = re.search(r'\|\s*caption\s*=\s*(.*?)\n\|', content, re.IGNORECASE | re.DOTALL)
     if match:
         return match.group(1).strip()
@@ -133,18 +142,39 @@ def append_annotations_to_txt(txt_path, annotations_wikitext):
     with open(txt_path, 'a', encoding='utf-8') as f:
         f.write(f"\n\n{annotations_wikitext}")
 
+def load_wiki_batch(files_list, start_idx, batch_size=15):
+    """Fetches text and URLs for a batch of wiki files."""
+    batch = files_list[start_idx:start_idx + batch_size]
+    results = []
+    for f in batch:
+        text, _ = fetch_wikitext(f, api_url=MEDIA_API_URL)
+        url = get_image_url(f, api_url=MEDIA_API_URL)
+        results.append({
+            "type": "wiki",
+            "filename": f,
+            "image_url": url,
+            "text_content": text or ""
+        })
+    return results
+
 # ==============================================================================
 # STATE MANAGEMENT
 # ==============================================================================
 
 if "pending_queue" not in st.session_state:
-    st.session_state.pending_queue = []
+    st.session_state.pending_queue = [] # List of dicts
 if "anno_queue" not in st.session_state:
-    st.session_state.anno_queue = []
+    st.session_state.anno_queue = [] # List of dicts
 if "current_idx" not in st.session_state:
     st.session_state.current_idx = 0
 if "current_ai_data" not in st.session_state:
     st.session_state.current_ai_data = None
+    
+# Wiki pagination state
+if "wiki_all_files" not in st.session_state:
+    st.session_state.wiki_all_files = []
+if "wiki_offset" not in st.session_state:
+    st.session_state.wiki_offset = 0
 
 # ==============================================================================
 # UI & MAIN LOGIC
@@ -152,24 +182,64 @@ if "current_ai_data" not in st.session_state:
 
 st.title("🏷️ AI-Assisted Image Annotation")
 
-st.sidebar.header("Configuration")
-folder_path = st.sidebar.text_input("Images Folder Path", value="/home/sarah/Desktop/Projects/Bahai.works/English/images/")
-
 # --- STAGE 0: SELECT FILES (THE QUEUE REVIEW) ---
 if not st.session_state.anno_queue:
     
-    if st.button("Scan Folder"):
-        if os.path.exists(folder_path):
-            valid_files = []
-            for f in sorted(os.listdir(folder_path)):
-                if f.lower().endswith('.png'):
-                    txt_file = f.replace('.png', '.txt')
-                    if os.path.exists(os.path.join(folder_path, txt_file)):
-                        valid_files.append(f)
-            st.session_state.pending_queue = valid_files
-            st.rerun()
-        else:
-            st.error("Invalid folder path.")
+    st.sidebar.header("Configuration")
+    tab_local, tab_wiki = st.sidebar.tabs(["📁 Local Files", "🌐 Wiki Files"])
+    
+    with tab_local:
+        folder_path = st.text_input("Images Folder Path", value="/home/sarah/Desktop/Projects/Bahai.works/English/images/")
+        if st.button("Scan Folder"):
+            if os.path.exists(folder_path):
+                valid_files = []
+                for f in sorted(os.listdir(folder_path)):
+                    if f.lower().endswith('.png'):
+                        txt_file = f.replace('.png', '.txt')
+                        txt_path = os.path.join(folder_path, txt_file)
+                        if os.path.exists(txt_path):
+                            with open(txt_path, 'r', encoding='utf-8') as tf:
+                                txt_content = tf.read()
+                            valid_files.append({
+                                "type": "local",
+                                "filename": f,
+                                "image_path": os.path.join(folder_path, f),
+                                "text_path": txt_path,
+                                "text_content": txt_content
+                            })
+                st.session_state.pending_queue = valid_files
+                st.session_state.wiki_all_files = [] # Clear wiki state
+                st.rerun()
+            else:
+                st.error("Invalid folder path.")
+                
+    with tab_wiki:
+        wiki_cat = st.text_input("Category (e.g. Category:Baha'i News No 548)")
+        wiki_file = st.text_input("Specific File (e.g. File:Albert_Windust_1897.png)")
+        
+        if st.button("Fetch Wiki Files"):
+            with st.spinner("Fetching from bahai.media..."):
+                if wiki_file:
+                    st.session_state.wiki_all_files = [wiki_file]
+                elif wiki_cat:
+                    st.session_state.wiki_all_files = get_category_files(wiki_cat, api_url=MEDIA_API_URL)
+                else:
+                    st.warning("Please enter a category or a file.")
+                    st.stop()
+                
+                st.session_state.wiki_offset = 0
+                st.session_state.pending_queue = load_wiki_batch(st.session_state.wiki_all_files, 0)
+                st.rerun()
+                
+        # Pagination controls for Wiki
+        if st.session_state.wiki_all_files and st.session_state.wiki_offset + 15 < len(st.session_state.wiki_all_files):
+            st.divider()
+            st.write(f"Showing {st.session_state.wiki_offset} to {st.session_state.wiki_offset + 15} of {len(st.session_state.wiki_all_files)} files.")
+            if st.button("Load Next 15 Files"):
+                with st.spinner("Fetching next batch..."):
+                    st.session_state.wiki_offset += 15
+                    st.session_state.pending_queue = load_wiki_batch(st.session_state.wiki_all_files, st.session_state.wiki_offset)
+                    st.rerun()
 
     if st.session_state.pending_queue:
         # Wrap in a form so checking boxes doesn't trigger a slow rerun every time
@@ -178,21 +248,21 @@ if not st.session_state.anno_queue:
             st.write("Review the images and their text. **Check the box** for any images you want to annotate.")
             st.divider()
             
-            for img_file in st.session_state.pending_queue:
-                img_path = os.path.join(folder_path, img_file)
-                txt_path = img_path.replace('.png', '.txt')
-                
-                with open(txt_path, 'r', encoding='utf-8') as f:
-                    txt_content = f.read()
-                    
+            for item in st.session_state.pending_queue:
                 # Adjust column ratios to let the text area fill space and push the checkbox right
                 col1, col2, col3 = st.columns([2, 6, 0.5])
+                
+                display_img = item.get("image_path") if item["type"] == "local" else item.get("image_url")
+                
                 with col1:
-                    st.image(img_path, width='stretch')
+                    if display_img:
+                        st.image(display_img, width='stretch')
+                    else:
+                        st.warning("Image not found")
                 with col2:
-                    st.text_area("Text Content", txt_content, height=250, key=f"txt_{img_file}", disabled=True)
+                    st.text_area("Text Content", item["text_content"], height=250, key=f"txt_{item['filename']}", disabled=True)
                 with col3:
-                    st.checkbox("Select", value=False, key=f"check_{img_file}", label_visibility="collapsed")
+                    st.checkbox("Select", value=False, key=f"check_{item['filename']}", label_visibility="collapsed")
                 st.divider()
                 
             # Submit button for the form
@@ -200,10 +270,10 @@ if not st.session_state.anno_queue:
             
             if submit_queue:
                 # Gather only the files where the checkbox was True
-                selected_files = [f for f in st.session_state.pending_queue if st.session_state.get(f"check_{f}", False)]
+                selected_items = [item for item in st.session_state.pending_queue if st.session_state.get(f"check_{item['filename']}", False)]
                 
-                if selected_files:
-                    st.session_state.anno_queue = [os.path.join(folder_path, f) for f in selected_files]
+                if selected_items:
+                    st.session_state.anno_queue = selected_items
                     st.session_state.current_idx = 0
                     st.session_state.current_ai_data = None
                     st.session_state.pending_queue = [] 
@@ -223,13 +293,19 @@ if st.session_state.anno_queue:
             st.rerun()
         st.stop()
 
-    current_img_path = st.session_state.anno_queue[st.session_state.current_idx]
-    current_txt_path = current_img_path.replace('.png', '.txt')
-    filename = os.path.basename(current_img_path)
+    current_item = st.session_state.anno_queue[st.session_state.current_idx]
+    filename = current_item["filename"]
     
     st.markdown(f"### Image {st.session_state.current_idx + 1} of {len(st.session_state.anno_queue)}: `{filename}`")
     
-    pil_img = Image.open(current_img_path)
+    # Load Image (Local or Wiki)
+    if current_item["type"] == "local":
+        pil_img = Image.open(current_item["image_path"])
+    else:
+        # Fetch image from URL into memory
+        response = requests.get(current_item["image_url"])
+        pil_img = Image.open(BytesIO(response.content))
+        
     orig_w, orig_h = pil_img.size
     
     canvas_display_w = 700
@@ -242,7 +318,7 @@ if st.session_state.anno_queue:
     # 1. AI Processing
     if st.session_state.current_ai_data is None:
         with st.spinner("🤖 AI is detecting faces and reading the caption..."):
-            caption = get_caption_from_txt(current_txt_path)
+            caption = get_caption_from_text(current_item["text_content"])
             
             faces = detect_faces(pil_img)
             
@@ -312,7 +388,6 @@ if st.session_state.anno_queue:
             color_name = get_color_name(stroke_color)
             box_options.append(f"Box {i+1} ({color_name})")
         
-        # Removed st.form to allow live updates of the thumbnails
         final_mappings = {}
         all_names_to_map = ai_data["mapped_names"] + ai_data["manual_names"]
         
@@ -412,9 +487,22 @@ if st.session_state.anno_queue:
             
         final_wikitext = "\n".join(wikitext_blocks)
         
-        append_annotations_to_txt(current_txt_path, final_wikitext)
-        
-        st.success("Saved!")
+        if current_item["type"] == "local":
+            append_annotations_to_txt(current_item["text_path"], final_wikitext)
+            st.success("Saved to local file!")
+        else:
+            with st.spinner("Uploading to bahai.media..."):
+                new_content = current_item["text_content"] + "\n\n" + final_wikitext
+                with requests.Session() as session:
+                    upload_to_mediawiki(
+                        title=current_item["filename"], 
+                        content=new_content, 
+                        summary="Added image annotations via AI tool", 
+                        session=session, 
+                        api_url=MEDIA_API_URL
+                    )
+            st.success("Saved to wiki!")
+            
         st.session_state.current_idx += 1
         st.session_state.current_ai_data = None
         st.rerun()
