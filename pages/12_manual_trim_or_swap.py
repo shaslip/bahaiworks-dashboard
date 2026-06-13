@@ -122,7 +122,7 @@ with tab2:
 
                     # Look for the last parameter in the source template indicating the page number
                     # e.g., | source = {{bns|367|3}} -> captures '3'
-                    match = re.search(r'\|\s*source\s*=\s*\{\{.*?\|(\d+)\}\}', content)
+                    match = re.search(r'\|\s*source\s*=\s*\{\{.*?\|(-?\d+)\}\}', content)
                     
                     if match:
                         page_num = match.group(1)
