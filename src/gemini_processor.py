@@ -484,6 +484,10 @@ def extract_image_caption_and_filename(image, default_name="fallback_image.png",
         # Clean up Gemini's "Bahai_i" or "Baha_i" habit if it still slipped through
         fname = re.sub(r'(?i)baha_i|bahai_i', 'Bahai', fname)
         
+        # Fix overlapping "i" typo (e.g., Bahainternational -> Bahai_international)
+        # Ignores "Bahais" using the negative lookahead
+        fname = re.sub(r'(?i)(bahai)(?!s(?:[^a-z]|$))([a-z]+)', r'\1_i\2', fname)
+        
         if not fname.endswith(".png"): 
             fname += ".png"
             
