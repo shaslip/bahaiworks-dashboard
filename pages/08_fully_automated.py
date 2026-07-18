@@ -192,37 +192,56 @@ def get_all_pdf_files(root_folder):
     pdf_files.sort(key=lambda x: [int(c) if c.isdigit() else c.lower() for c in re.split(r'(\d+)', x)])
     return pdf_files
 
-def get_wiki_title(local_path, root_folder, base_wiki_title):
+def get_wiki_title(local_path, root_folder, base_wiki_title, pattern_override=None):
     """
     Determines the Wiki Page Title based on filename and folder structure.
     """
     filename = os.path.basename(local_path)
     name_no_ext = os.path.splitext(filename)[0]
 
+    # --- STRATEGY 0: UI Pattern Override ---
+    if pattern_override:
+        # Extract all potential numbers
+        nums = re.findall(r'(\d+(?:-\d+)?)', name_no_ext)
+        n = nums[0] if nums else ""
+        
+        v = ""
+        i = ""
+        vol_match = re.search(r'(?:Vol|Volume)[\W_]*(\d+)', name_no_ext, re.IGNORECASE)
+        if vol_match: v = vol_match.group(1)
+        
+        iss_match = re.search(r'(?:No|Issue|Number)[\W_]*(\d+(?:-\d+)?)', name_no_ext, re.IGNORECASE)
+        if iss_match: i = iss_match.group(1)
+        
+        # If standard numbers were found but no explicit prefix, guess based on count
+        if len(nums) >= 2 and not v and not i:
+            v, i = nums[0], nums[1]
+        elif len(nums) == 1 and not v and not i:
+            i = nums[0] 
+            
+        formatted = pattern_override.replace('{base}', base_wiki_title).replace('{v}', v).replace('{i}', i).replace('{n}', n)
+        return formatted
+
     try:
         rel_path = os.path.relpath(local_path, root_folder)
     except ValueError:
         rel_path = local_path
 
-    # --- STRATEGY 0: Canadian Baha'i News Specific (Canadian_Bahai_News_24.pdf) ---
-    # Matches "Canadian_Bahai_News_" followed by digits or digits-digits (24 or 24-25)
+    # --- STRATEGY 1: Canadian Baha'i News Specific (Canadian_Bahai_News_24.pdf) ---
     cbn_match = re.search(r'Canadian_Bahai_News_(\d+(?:-\d+)?)', filename, re.IGNORECASE)
     if cbn_match:
         issue_identifier = cbn_match.group(1)
-        # Note: Input filename is "Bahai", target wiki is "Bahá’í"
-        # We assume base_wiki_title is passed correctly as "Canadian_Bahá’í_News"
-        # or we force it if the file matches this specific pattern.
         target_base = "Canadian_Bahá’í_News" if "Canadian" in base_wiki_title else base_wiki_title
         return f"{target_base}/Issue_{issue_identifier}/Text"
 
-    # --- STRATEGY 1: Explicit Filename (Vol 1 No 1) ---
+    # --- STRATEGY 2: Explicit Filename (Vol 1 No 1) ---
     vol_issue_match = re.search(r'(?:Vol|Volume)[\W_]*(\d+)[\W_]*(?:No|Issue|Number)[\W_]*(\d+(?:-\d+)?)', filename, re.IGNORECASE)
     if vol_issue_match:
         vol = int(vol_issue_match.group(1))
         issue = vol_issue_match.group(2)
         return f"{base_wiki_title}/Volume_{vol}/Issue_{issue}/Text"
 
-    # --- STRATEGY 2: Folder Structure (Volume 1/...) ---
+    # --- STRATEGY 3: Folder Structure (Volume 1/...) ---
     parts = rel_path.split(os.sep)
     path_vol = None
     path_issue = None
@@ -238,30 +257,32 @@ def get_wiki_title(local_path, root_folder, base_wiki_title):
     if path_vol:
         final_issue = path_issue
         if not final_issue:
-            # Fallback: check filename for issue number
             num_match = re.search(r'(\d+)', filename)
             if num_match: final_issue = int(num_match.group(1))
         
         if final_issue:
             return f"{base_wiki_title}/Volume_{path_vol}/Issue_{final_issue}/Text"
 
-    # --- STRATEGY 3: Implicit "04-01" (Volume-Issue) ---
-    # Only triggers if leading zeros are present to avoid confusing "24-25" with "Vol 24 Issue 25"
+    # --- STRATEGY 4: Implicit "04-01" (Volume-Issue) ---
     hyphen_vol_match = re.search(r'(\d+)-(\d+)', name_no_ext)
-    
     if hyphen_vol_match:
         v_str = hyphen_vol_match.group(1)
         i_str = hyphen_vol_match.group(2)
-
-        # Logic: If either part is clearly zero-padded, assume it is Vol-Issue structure.
         if v_str.startswith('0') or i_str.startswith('0'):
             vol_num = int(v_str)
             issue_num = int(i_str)
             return f"{base_wiki_title}/Volume_{vol_num}/Issue_{issue_num}/Text"
 
-    # --- STRATEGY 4: Fallback "Name_24" or "Name_24-25" (No Volume) ---
-    # If no other strategy hit, looks for the last number block in the filename
-    # This catches "Some_Publication_24-25.pdf" as Issue 24-25
+    # --- STRATEGY 5: Explicit Single Number with Prefix (Volume_5 or No_5) ---
+    explicit_vol = re.search(r'(?:Vol|Volume)[\W_]*(\d+)', name_no_ext, re.IGNORECASE)
+    if explicit_vol:
+        return f"{base_wiki_title}/Volume_{explicit_vol.group(1)}/Text"
+        
+    explicit_no = re.search(r'(?:No|Number)[\W_]*(\d+(?:-\d+)?)', name_no_ext, re.IGNORECASE)
+    if explicit_no:
+        return f"{base_wiki_title}/No_{explicit_no.group(1)}/Text"
+
+    # --- STRATEGY 6: Fallback "Name_24" or "Name_24-25" (No Volume) ---
     simple_issue_match = re.search(r'(\d+(?:-\d+)?)', name_no_ext)
     if simple_issue_match:
         return f"{base_wiki_title}/Issue_{simple_issue_match.group(1)}/Text"
@@ -306,6 +327,14 @@ if __name__ == '__main__':
     st.sidebar.header("Configuration")
     input_folder = st.sidebar.text_input("Local PDF Folder", value="/media/sarah/4TB/Projects/Bahai.works/English/Canada/1948-1975_CBN/")
     base_title = st.sidebar.text_input("Base Wiki Title", value="Canadian_Bahá’í_News")
+
+    input_folder = st.sidebar.text_input("Local PDF Folder", value="/media/sarah/4TB/Projects/Bahai.works/English/Canada/1948-1975_CBN/")
+    base_title = st.sidebar.text_input("Base Wiki Title", value="Canadian_Bahá’í_News")
+
+    # --- Pattern Override ---
+    st.sidebar.markdown("### Title Pattern Override")
+    st.sidebar.caption("Leave blank for auto-detect. Variables: `{base}`, `{v}` (Vol), `{i}` (Issue), `{n}` (Any Num).\n\n*Ex: `{base}/Volume_{n}/Text`*")
+    pattern_override = st.sidebar.text_input("Custom Pattern", value="")
 
     run_mode = st.sidebar.radio("Run Mode", ["Test (1 PDF Only)", "Production (All PDFs)"])
 
@@ -396,7 +425,7 @@ if __name__ == '__main__':
             pdf_path = pdf_files[i]
             
             # 4a. Resolve Titles
-            wiki_title = get_wiki_title(pdf_path, input_folder, base_title)
+            wiki_title = get_wiki_title(pdf_path, input_folder, base_title, pattern_override)
             
             if not wiki_title:
                 st.error(f"Could not determine Wiki Title for {pdf_path}. Skipping.")
