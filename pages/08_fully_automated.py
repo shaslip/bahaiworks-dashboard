@@ -328,9 +328,6 @@ if __name__ == '__main__':
     input_folder = st.sidebar.text_input("Local PDF Folder", value="/media/sarah/4TB/Projects/Bahai.works/English/Canada/1948-1975_CBN/")
     base_title = st.sidebar.text_input("Base Wiki Title", value="Canadian_Bahá’í_News")
 
-    input_folder = st.sidebar.text_input("Local PDF Folder", value="/media/sarah/4TB/Projects/Bahai.works/English/Canada/1948-1975_CBN/")
-    base_title = st.sidebar.text_input("Base Wiki Title", value="Canadian_Bahá’í_News")
-
     # --- Pattern Override ---
     st.sidebar.markdown("### Title Pattern Override")
     st.sidebar.caption("Leave blank for auto-detect. Variables: `{base}`, `{v}` (Vol), `{i}` (Issue), `{n}` (Any Num).\n\n*Ex: `{base}/Volume_{n}/Text`*")
