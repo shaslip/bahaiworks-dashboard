@@ -85,28 +85,41 @@ Once the app is running, navigate using the sidebar to move a document through t
 
 ```text
 dashboard/
-├── app.py                       # Main Dashboard (Queue view)
-├── batch_process.py             # Headless script for bulk AI analysis
-├── pages/                       # Streamlit multi-page workflows
-│   ├── 01_ai_analysis.py        # AI scoring & summary generation
-│   ├── 02_ocr_pipeline.py       # Merge, Split, & OCR execution
-│   ├── 03_publication_pipeline.py # MediaWiki upload & text parsing
-│   ├── 04_image_import.py       # Illustration cropping & processing
-│   ├── 05_chapter_items.py      # Wikibase chapter item management
-│   └── 06_misc_tasks.py         # Author creation & system maintenance
-├── src/                         # Core logic modules
-│   ├── config.py                # Paths and settings
-│   ├── crawler.py               # File scanner
-│   ├── database.py              # SQLAlchemy schema
-│   ├── evaluator.py             # Gemini API integration
-│   ├── ocr_engine.py            # OCR logic & image generation
-│   ├── processor.py             # PDF manipulation (PyMuPDF)
-│   ├── wikibase_importer.py     # Bahaidata API hooks
-│   ├── mediawiki_uploader.py    # Bahai.works API hooks
-│   └── ...
-├── bahai_works.db               # SQLite database
+├── app.py                               # Main Dashboard (Queue view)
+├── batch_process.py                     # Headless script for bulk AI analysis
+├── pages/                               # Streamlit multi-page workflows
+│   ├── 01_ai_analysis.py                # AI scoring & summary generation
+│   ├── 02_ocr_pipeline.py               # Merge, Split, & OCR execution
+│   ├── 03_publication_pipeline.py       # MediaWiki upload & text parsing
+│   ├── 04_image_import.py               # Illustration cropping & processing
+│   ├── 05_chapter_items.py              # Wikibase chapter item management
+│   ├── 06_proofread_noisy_pages.py      # Proofread pages with high OCR noise
+│   ├── 07_misc_tasks.py                 # Author creation & system maintenance
+│   ├── 08_fully_automated.py            # Fully automated pipeline execution
+│   ├── 09_category_sweeper.py           # Bulk category updates and maintenance
+│   ├── 10_book_reproofreader.py         # Re-evaluate and correct existing book texts
+│   ├── 11_book_image_extractor.py       # Extract images from book files
+│   ├── 12_manual_trim_or_swap.py        # Manually trim pages or swap images
+│   ├── 13_file_description_updater.py   # Update metadata/descriptions for uploaded files
+│   └── 14_image_annotation.py           # Annotate extracted images
+├── src/                                 # Core logic modules
+│   ├── batch_worker.py                  # Background job processing logic
+│   ├── calibration.py                   # Configuration and calibration logic
+│   ├── chapter_importer.py              # Chapter import logic
+│   ├── config.py                        # Paths and settings
+│   ├── crawler.py                       # File scanner
+│   ├── database.py                      # SQLAlchemy schema
+│   ├── evaluator.py                     # AI evaluation integration
+│   ├── face_detection.py                # Face detection for image processing
+│   ├── gemini_processor.py              # Gemini API processing logic
+│   ├── mediawiki_uploader.py            # Bahai.works API hooks
+│   ├── ocr_engine.py                    # OCR logic & image generation
+│   ├── processor.py                     # PDF manipulation (PyMuPDF)
+│   ├── sitelink_manager.py              # Sitelink management logic
+│   ├── text_processing.py               # Text manipulation and formatting
+│   └── wikibase_importer.py             # Bahaidata API hooks
+├── bahai_works.db                       # SQLite database
 └── requirements.txt
-
 ```
 
 ## Dependencies
@@ -119,5 +132,4 @@ Major libraries used:
 * `pymupdf` (PDF processing)
 * `wikibaseintegrator` (Bahaidata sync)
 * `pandas` (Data manipulation)
-
 ```
