@@ -132,4 +132,3 @@ Major libraries used:
 * `pymupdf` (PDF processing)
 * `wikibaseintegrator` (Bahaidata sync)
 * `pandas` (Data manipulation)
-```
