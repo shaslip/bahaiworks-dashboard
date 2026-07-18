@@ -43,10 +43,19 @@ The application is structured into a main dashboard and several specialized work
 3.  **Configure secrets:**
     Create a `.env` file in the root directory:
     ```env
-    GEMINI_API_KEY=
-    WIKI_USERNAME=
-    WIKI_PASSWORD=
+    # Gemini & Wiki Credentials
+    GEMINI_API_KEY=your_gemini_api_key
+    WIKI_USERNAME=your_bot_username
+    WIKI_PASSWORD=your_bot_password
+
+    # Google Cloud Document AI Credentials
+    GOOGLE_APPLICATION_CREDENTIALS="service_account.json"
+    GCP_PROJECT_ID=your_gcp_project_id
+    GCP_LOCATION=us
+    GCP_PROCESSOR_ID=your_gcp_processor_id
     ```
+
+    Note: Ensure your Google Cloud service_account.json file is downloaded and placed in the root directory alongside the .env file.
 
 ## Usage
 
