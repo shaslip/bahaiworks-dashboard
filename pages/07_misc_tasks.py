@@ -4,7 +4,7 @@ import os
 import requests
 import urllib.parse
 import pandas as pd
-from src.mediawiki_uploader import upload_to_bahaiworks
+from src.mediawiki_uploader import upload_to_bahaiworks, fetch_wikitext, upload_to_mediawiki
 from src.sitelink_manager import set_sitelink
 from src.wikibase_importer import get_or_create_author
 
@@ -36,11 +36,12 @@ with st.expander("ℹ️ Help / Instructions"):
 st.markdown("---")
 
 # --- TABS ---
-tab_create_author, tab_ac, tab_update_author, tab_maintenance = st.tabs([
+tab_create_author, tab_ac, tab_update_author, tab_maintenance, tab_media = st.tabs([
     "👤 Create Author Pages", 
     "📖 AC Messages", 
     "📝 Update Author list",
-    "🔧 Maintenance"
+    "🔧 Maintenance",
+    "🖼️ Bahai.media Images"
 ])
 
 # --- Author page maintenance and exclusions ---
@@ -695,3 +696,74 @@ with tab_maintenance:
                         width='stretch',
                         key="editor_update"
                     )
+
+# ==============================================================================
+# TAB 5: BAHAI.MEDIA IMAGES
+# ==============================================================================
+with tab_media:
+    st.header("🖼️ Baha'i News Image Sync (Bahai.media)")
+    st.info("Updates the Category indicator to 25 and creates the Category Talk page to mark images as completed.")
+    
+    MEDIA_API = "https://bahai.media/api.php"
+    
+    issue_num = st.text_input("Baha'i News Issue Number", placeholder="e.g. 595")
+    
+    if st.button("🚀 Process Baha'i News Issue", type="primary") and issue_num:
+        issue_num = issue_num.strip()
+        cat_title = f"Category:Baha'i News No {issue_num}"
+        talk_title = f"Category talk:Baha'i News No {issue_num}"
+        
+        status_box = st.empty()
+        
+        try:
+            # --- 1. Update Category Page ---
+            status_box.info(f"Fetching {cat_title} from bahai.media...")
+            
+            cat_text, err = fetch_wikitext(cat_title, api_url=MEDIA_API)
+            
+            if err and "does not exist" not in err:
+                st.error(f"Error fetching Category: {err}")
+            else:
+                if not cat_text:
+                    # If page doesn't exist at all, we can create it with defaults
+                    cat_text = f"{{{{PublicationNav/BahaiNews|{issue_num}}}}}{{{{CatIndicator|0}}}}\n{{{{DEFAULTSORT:{issue_num}}}}}\n[[Category:Baha'i News]]"
+                
+                # Replace {{CatIndicator|X}} with {{CatIndicator|25}}
+                # Using regex to catch it even if it's currently 0, 1, etc.
+                new_cat_text = re.sub(r'\{\{CatIndicator\|\d+\}\}', '{{CatIndicator|25}}', cat_text, flags=re.IGNORECASE)
+                
+                if new_cat_text == cat_text and "{{CatIndicator|25}}" not in new_cat_text:
+                    # Fallback if the tag was missing entirely
+                    new_cat_text = cat_text + "\n{{CatIndicator|25}}"
+                
+                status_box.info(f"Updating {cat_title}...")
+                upload_to_mediawiki(
+                    title=cat_title,
+                    content=new_cat_text,
+                    summary="Updated CatIndicator to 25 (Images completed)",
+                    api_url=MEDIA_API
+                )
+                st.success(f"✅ Updated `{cat_title}`")
+
+            # --- 2. Create Talk Page ---
+            status_box.info(f"Creating {talk_title}...")
+            
+            talk_text = """{{Catstatus
+| all_images_present = Yes
+| verify_image_info  = 
+| verify_categories  = 
+}}"""
+            
+            upload_to_mediawiki(
+                title=talk_title,
+                content=talk_text,
+                summary="Marked all images present",
+                api_url=MEDIA_API
+            )
+            st.success(f"✅ Created `{talk_title}`")
+            
+            status_box.success("🎉 All tasks completed successfully on bahai.media!")
+            st.balloons()
+            
+        except Exception as e:
+            st.error(f"❌ An error occurred: {e}")
