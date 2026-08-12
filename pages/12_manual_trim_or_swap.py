@@ -1,6 +1,7 @@
 import streamlit as st
 import os
 import re
+import subprocess
 from PIL import Image
 
 st.set_page_config(page_title="Manual Image Trimmer & Swapper", page_icon="✂️", layout="wide")
@@ -121,7 +122,6 @@ with tab2:
                     with open(txt_path, 'r', encoding='utf-8') as f:
                         content = f.read()
                         if "[CAPTION TOO LONG - INSERT MANUALLY]" in content:
-                            # Attempt to extract page number from source template (e.g., {{bns|367|12}})
                             match = re.search(r'\|\s*source\s*=\s*\{\{.*?\|(-?\d+)\}\}', content)
                             page_key = int(match.group(1)) if match else "Unknown"
                             
@@ -134,15 +134,21 @@ with tab2:
         if missing_captions_by_page:
             st.error("🚨 **ACTION REQUIRED: The following files have missing/truncated captions and need manual editing:**")
             
-            # Sort keys: integers first, then strings ("Unknown")
             sorted_pages = sorted(missing_captions_by_page.keys(), key=lambda x: (isinstance(x, str), x))
             
             for page in sorted_pages:
                 page_label = f"Page {page}" if isinstance(page, int) else "Unknown Page"
                 st.markdown(f"**{page_label}:**")
+                
                 for mc in missing_captions_by_page[page]:
-                    st.write(f"`{mc}`")
-                st.write("") # Add a small gap between groups
+                    col_name, col_btn = st.columns([4, 1])
+                    with col_name:
+                        st.write(f"`{mc}`")
+                    with col_btn:
+                        if st.button("📝 Open in Kate", key=f"kate_{mc}"):
+                            full_path = os.path.join(folder_path, mc)
+                            subprocess.Popen(['kate', full_path])
+                st.write("")
             st.divider()
     # -----------------------------------------------------------------------
 
