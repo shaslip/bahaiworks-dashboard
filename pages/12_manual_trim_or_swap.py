@@ -113,7 +113,7 @@ with tab2:
     
     # --- Check for Long Captions (Runs automatically if folder is valid) ---
     if os.path.exists(folder_path):
-        missing_captions = []
+        missing_captions_by_page = {}
         for filename in os.listdir(folder_path):
             if filename.lower().endswith('.txt'):
                 txt_path = os.path.join(folder_path, filename)
@@ -121,14 +121,28 @@ with tab2:
                     with open(txt_path, 'r', encoding='utf-8') as f:
                         content = f.read()
                         if "[CAPTION TOO LONG - INSERT MANUALLY]" in content:
-                            missing_captions.append(filename)
+                            # Attempt to extract page number from source template (e.g., {{bns|367|12}})
+                            match = re.search(r'\|\s*source\s*=\s*\{\{.*?\|(-?\d+)\}\}', content)
+                            page_key = int(match.group(1)) if match else "Unknown"
+                            
+                            if page_key not in missing_captions_by_page:
+                                missing_captions_by_page[page_key] = []
+                            missing_captions_by_page[page_key].append(filename)
                 except Exception:
                     pass
                     
-        if missing_captions:
+        if missing_captions_by_page:
             st.error("🚨 **ACTION REQUIRED: The following files have missing/truncated captions and need manual editing:**")
-            for mc in missing_captions:
-                st.write(f"- `{mc}`")
+            
+            # Sort keys: integers first, then strings ("Unknown")
+            sorted_pages = sorted(missing_captions_by_page.keys(), key=lambda x: (isinstance(x, str), x))
+            
+            for page in sorted_pages:
+                page_label = f"Page {page}" if isinstance(page, int) else "Unknown Page"
+                st.markdown(f"**{page_label}:**")
+                for mc in missing_captions_by_page[page]:
+                    st.write(f"`{mc}`")
+                st.write("") # Add a small gap between groups
             st.divider()
     # -----------------------------------------------------------------------
 
