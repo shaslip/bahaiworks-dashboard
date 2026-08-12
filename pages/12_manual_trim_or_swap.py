@@ -111,6 +111,27 @@ with tab1:
 with tab2:
     st.write("Automatically detects pages with multiple images and allows you to reassign their filenames.")
     
+    # --- Check for Long Captions (Runs automatically if folder is valid) ---
+    if os.path.exists(folder_path):
+        missing_captions = []
+        for filename in os.listdir(folder_path):
+            if filename.lower().endswith('.txt'):
+                txt_path = os.path.join(folder_path, filename)
+                try:
+                    with open(txt_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                        if "[CAPTION TOO LONG - INSERT MANUALLY]" in content:
+                            missing_captions.append(filename)
+                except Exception:
+                    pass
+                    
+        if missing_captions:
+            st.error("🚨 **ACTION REQUIRED: The following files have missing/truncated captions and need manual editing:**")
+            for mc in missing_captions:
+                st.write(f"- `{mc}`")
+            st.divider()
+    # -----------------------------------------------------------------------
+
     if st.button("Scan Folder for Multi-Image Pages"):
         if os.path.exists(folder_path):
             pages_dict = {}
