@@ -450,6 +450,19 @@ def extract_image_caption_and_filename(image, default_name="fallback_image.png",
             }
         ]
         """
+        prompt_retry = """
+        Analyze this scanned document page. Treat the ENTIRE PAGE as a single image/document.
+        For the caption field, output EXACTLY this string: "[CAPTION TOO LONG - INSERT MANUALLY]"
+        Propose a short, descriptive filename for this document based on its text/type (must end in .png). Omit apostrophes entirely and use underscores instead of spaces.
+        
+        Return ONLY a valid JSON array of objects, containing exactly ONE object in this format:
+        [
+            {
+                "caption": "[CAPTION TOO LONG - INSERT MANUALLY]",
+                "filename": "Proposed_filename.png"
+            }
+        ]
+        """
     else:
         prompt = """
         Analyze this book page. 
@@ -461,6 +474,21 @@ def extract_image_caption_and_filename(image, default_name="fallback_image.png",
         [
             {
                 "caption": "Extracted caption text here",
+                "filename": "Proposed_filename.png"
+            }
+        ]
+        If there are no images, return an empty array [].
+        """
+        prompt_retry = """
+        Analyze this book page. 
+        1. Identify all distinct images/illustrations on the page.
+        2. For the caption field, output EXACTLY this string: "[CAPTION TOO LONG - INSERT MANUALLY]"
+        3. Propose a short, descriptive filename for each image based on its contents (must end in .png). Omit apostrophes entirely and use underscores instead of spaces. Include a year if visible.
+        
+        Return ONLY a valid JSON array of objects, one for each image, in this format:
+        [
+            {
+                "caption": "[CAPTION TOO LONG - INSERT MANUALLY]",
                 "filename": "Proposed_filename.png"
             }
         ]
@@ -495,6 +523,11 @@ def extract_image_caption_and_filename(image, default_name="fallback_image.png",
 
     try:
         response = model.generate_content([prompt, image], safety_settings=safety_settings)
+        
+        # Check for Recitation/Copyright block (finish_reason 4)
+        if response.candidates and response.candidates[0].finish_reason == 4:
+            print("Debug: Caught recitation block (caption too long). Retrying with short caption prompt...")
+            response = model.generate_content([prompt_retry, image], safety_settings=safety_settings)
         
         # Try to match an array first
         match_array = re.search(r'\[.*\]', response.text, re.DOTALL)
