@@ -282,6 +282,9 @@ if st.button("🚀 Process Images", type="primary"):
             caption = img_data.get("caption", "")
             proposed_filename = img_data.get("filename", f"page_{page_num}_image_{i+1}.png")
             
+            if "[CAPTION TOO LONG - INSERT MANUALLY]" in caption:
+                log_container.warning(f"⚠️ Image {i+1} on page {page_num} requires manual caption entry due to length.")
+            
             # Ensure unique filename
             final_img_path = os.path.join(output_dir, proposed_filename)
             counter = 1
@@ -320,6 +323,6 @@ if st.button("🚀 Process Images", type="primary"):
             log_container.success(f"✅ Finished page {page_num}, image {i+1} -> Saved as `{final_filename}`")
             
         progress_bar.progress((idx + 1) / len(pages_to_process))
-        log_container.success(f"✅ Finished page {page_num} -> Saved as `{final_filename}`")
+        log_container.success(f"✅ Finished page {page_num}")
         
     status_text.success("🎉 All images extracted and processed successfully!")
