@@ -482,13 +482,15 @@ def extract_image_caption_and_filename(image, default_name="fallback_image.png",
         prompt_retry = """
         Analyze this book page. 
         1. Identify all distinct images/illustrations on the page.
-        2. For the caption field, output EXACTLY this string: "[CAPTION TOO LONG - INSERT MANUALLY]"
-        3. Propose a short, descriptive filename for each image based on its contents (must end in .png). Omit apostrophes entirely and use underscores instead of spaces. Include a year if visible.
+        2. Extract the text of the image caption for each image.
+           ⚠️ CRITICAL RULE: If a caption is unusually long (e.g., over 40 words) or looks like a large block of text, DO NOT transcribe it. Instead, for THAT specific image, output EXACTLY: "[CAPTION TOO LONG - INSERT MANUALLY]". 
+           For all other images with normal, short captions, extract them normally.
+        3. Propose a short, descriptive filename for each image (must end in .png). Omit apostrophes entirely and use underscores instead of spaces. Include a year if visible.
         
         Return ONLY a valid JSON array of objects, one for each image, in this format:
         [
             {
-                "caption": "[CAPTION TOO LONG - INSERT MANUALLY]",
+                "caption": "Extracted text OR [CAPTION TOO LONG - INSERT MANUALLY]",
                 "filename": "Proposed_filename.png"
             }
         ]
