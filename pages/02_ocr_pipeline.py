@@ -474,6 +474,7 @@ def render_exec_tab():
         # Import here to avoid circular dependencies if any
         from src.ocr_engine import OcrEngine, OcrConfig
         
+        has_error = False
         for i, doc in enumerate(ready_docs):
             status_text = f"Processing {i+1}/{len(ready_docs)}: {doc.filename}..."
             progress_bar.progress(i / len(ready_docs), text=status_text)
@@ -500,7 +501,7 @@ def render_exec_tab():
             # --- B. Initialize Engine ---
             try:
                 config = OcrConfig(
-                    has_cover_image=True, # Assuming True for now
+                    has_cover_image=True, 
                     first_numbered_page_index=start_index,
                     illustration_ranges=ranges_list,
                     language=doc.language or 'eng'
@@ -528,12 +529,16 @@ def render_exec_tab():
                     
             except Exception as e:
                 st.error(f"Failed on {doc.filename}: {e}")
+                has_error = True
                 continue
             
-        progress_bar.progress(1.0, text="Batch Complete!")
-        st.success("OCR Batch Finished! Files moved to 'Digitized'.")
-        time.sleep(2)
-        st.rerun()
+        if not has_error:
+            progress_bar.progress(1.0, text="Batch Complete!")
+            st.success("OCR Batch Finished! Files moved to 'Digitized'.")
+            time.sleep(2)
+            st.rerun()
+        else:
+            st.warning("Batch finished with errors (see above). Page will not auto-refresh so you can read them.")
 
 # --- Main Layout ---
 tab1, tab2, tab3 = st.tabs(["1. Merge", "2. Prep", "3. Execute"])
