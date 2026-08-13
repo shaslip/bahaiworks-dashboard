@@ -54,11 +54,49 @@ def generate_header(title, author, year, language, is_copyright, filename):
 def go_back():
     st.switch_page("app.py")
 
-# --- 1. Load Context ---
-if "selected_doc_id" not in st.session_state or not st.session_state.selected_doc_id:
-    st.warning("No document selected.")
+# --- 1. Load Context & Document Selector ---
+with Session(engine) as session:
+    # Fetch all DIGITIZED documents
+    digitized_docs = session.scalars(
+        select(Document).where(Document.status == "DIGITIZED").order_by(Document.filename)
+    ).all()
+
+if not digitized_docs and not st.session_state.get("selected_doc_id"):
+    st.warning("No digitized documents available for publication.")
     st.button("⬅️ Return to Dashboard", on_click=go_back)
     st.stop()
+
+# --- Document Selector UI ---
+doc_options = {d.id: d.filename for d in digitized_docs}
+
+# Determine default selection
+current_id = st.session_state.get("selected_doc_id")
+default_index = 0
+if current_id in doc_options:
+    default_index = list(doc_options.keys()).index(current_id)
+elif digitized_docs:
+    current_id = digitized_docs[0].id
+    st.session_state["selected_doc_id"] = current_id
+
+# Searchable Dropdown
+new_selected_id = st.selectbox(
+    "🔍 Select a Digitized Document to Publish:",
+    options=list(doc_options.keys()),
+    format_func=lambda x: doc_options[x],
+    index=default_index
+)
+
+# Handle switching documents
+if new_selected_id != st.session_state.get("selected_doc_id"):
+    st.session_state["selected_doc_id"] = new_selected_id
+    st.session_state.pipeline_stage = "setup"
+    
+    # Clear out old book data from memory so it doesn't bleed over
+    keys_to_clear = ["target_page", "meta_result", "talk_text", "meta_json_str", "toc_json_list", "chapter_df", "page_map", "page_order", "splitter_indices", "split_completed"]
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
+    st.rerun()
 
 doc_id = st.session_state.selected_doc_id
 
