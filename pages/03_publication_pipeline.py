@@ -4,6 +4,7 @@ import re
 import json
 import hashlib
 import pandas as pd
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from src.database import engine, Document
 from src.gemini_processor import extract_metadata_from_pdf, extract_toc_from_pdf
