@@ -305,10 +305,18 @@ def render_prep_tab(docs):
     st.header("Step 2: Calibration & Splitting")
     st.info("Analyze page offsets and detect/split double-page spreads.")
 
+    # --- SEARCH FILTER ---
+    search_term = st.text_input("🔍 Search Documents", placeholder="Type filename to filter...", key="prep_search").lower()
+    
+    if search_term:
+        filtered_docs = [d for d in docs if search_term in d.filename.lower()]
+    else:
+        filtered_docs = docs
+
     # --- BATCH CONFIG ---
-    total_count = len(docs)
-    display_batch = docs[:21]      # Show 21 to catch edge cases
-    processing_batch = docs[:20]   # Only process the standard 20
+    total_count = len(filtered_docs)
+    display_batch = filtered_docs[:21]      # Show 21 to catch edge cases
+    processing_batch = filtered_docs[:20]   # Only process the standard 20
 
     # 1. Queue Review Table
     st.subheader(f"📋 Document Queue ({min(len(display_batch), 20)}/{total_count})")
