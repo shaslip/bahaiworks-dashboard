@@ -5,6 +5,7 @@ import platform
 import subprocess
 from sqlalchemy.orm import Session
 from sqlalchemy import select, desc
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Local imports
 from src.database import engine, Document
@@ -164,43 +165,59 @@ else:
     st.info("👈 Select a document from the table to inspect individually.")
     st.markdown("### Bulk Operations")
     
+    # --- Thread-Safe Worker Function ---
+    def process_single_doc(doc_id):
+        """Worker function for threads to process one document safely."""
+        with Session(engine) as session:
+            doc = session.get(Document, doc_id)
+            if not doc or doc.status != 'PENDING':
+                return False
+            
+            try:
+                images = extract_preview_images(doc.file_path)
+                if images:
+                    result = evaluate_document(images)
+                    if result:
+                        doc.priority_score = result['priority_score']
+                        doc.summary = result['summary']
+                        doc.language = result['language']
+                        doc.ai_justification = result['ai_justification']
+                        doc.status = "EVALUATED"
+                        session.commit()
+                        return True
+            except Exception as e:
+                print(f"Failed on {doc_id}: {e}")
+                
+            return False
+
     if pending_count > 0:
         if st.button(f"🚀 Run AI Analysis on ALL Pending ({pending_count} files)", type="primary"):
             progress_bar = st.progress(0, text="Starting Batch Job...")
             status_text = st.empty()
             
-            # Re-fetch strictly pending docs to be safe
+            # Fetch IDs first (closes the main session quickly)
             with Session(engine) as session:
-                # We fetch IDs first to avoid keeping session open too long
                 p_stm = select(Document.id).where(Document.status == 'PENDING')
                 p_ids = session.scalars(p_stm).all()
                 
-                total = len(p_ids)
-                success_count = 0
-                
-                for i, doc_id in enumerate(p_ids):
-                    # Process one by one
-                    doc = session.get(Document, doc_id)
-                    status_text.write(f"Processing ({i+1}/{total}): {doc.filename}...")
+            total = len(p_ids)
+            success_count = 0
+            
+            if total > 0:
+                # Blast up to 50 at a time using your high API limits
+                with ThreadPoolExecutor(max_workers=50) as executor:
+                    # Submit all tasks to the pool
+                    future_to_id = {executor.submit(process_single_doc, pid): pid for pid in p_ids}
                     
-                    try:
-                        images = extract_preview_images(doc.file_path)
-                        if images:
-                            result = evaluate_document(images)
-                            if result:
-                                doc.priority_score = result['priority_score']
-                                doc.summary = result['summary']
-                                doc.language = result['language']
-                                doc.ai_justification = result['ai_justification']
-                                doc.status = "EVALUATED"
-                                session.commit()
-                                success_count += 1
-                    except Exception as e:
-                        print(f"Failed on {doc_id}: {e}")
-                        # Continue to next file even if one fails
-                        continue
-                    
-                    progress_bar.progress((i + 1) / total)
+                    completed = 0
+                    for future in as_completed(future_to_id):
+                        completed += 1
+                        if future.result():
+                            success_count += 1
+                            
+                        # Update UI as threads finish
+                        status_text.write(f"Processing ({completed}/{total})...")
+                        progress_bar.progress(completed / total)
             
             st.success(f"Batch Complete! Successfully analyzed {success_count} documents.")
             st.rerun()
