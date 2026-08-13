@@ -500,11 +500,22 @@ def render_exec_tab():
 
             # --- B. Initialize Engine ---
             try:
+                # Map human-readable AI language to Tesseract 3-letter codes
+                lang_map = {
+                    "english": "eng",
+                    "german": "deu",
+                    "french": "fra",
+                    "persian": "fas",
+                    "arabic": "ara"
+                }
+                human_lang = str(doc.language or "english").strip().lower()
+                tess_lang = lang_map.get(human_lang, "eng") # Default to eng if unknown
+
                 config = OcrConfig(
                     has_cover_image=True, 
                     first_numbered_page_index=start_index,
                     illustration_ranges=ranges_list,
-                    language=doc.language or 'eng'
+                    language=tess_lang
                 )
                 
                 engine_instance = OcrEngine(doc.file_path)
