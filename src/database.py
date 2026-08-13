@@ -1,12 +1,19 @@
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import create_engine, String, Integer, Float, Text, DateTime
+from sqlalchemy import create_engine, String, Integer, Float, Text, DateTime, event
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, Session
-
 from src.config import DB_PATH
 
 # 1. Setup the Database Engine (SQLAlchemy 2.0 style)
-engine = create_engine(f"sqlite:///{DB_PATH}", echo=False)
+engine = create_engine(f"sqlite:///{DB_PATH}", echo=False, connect_args={'timeout': 15})
+
+# Enable WAL mode for better SQLite concurrency
+@event.listens_for(engine, "connect")
+def set_sqlite_pragma(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.close()
 
 # 2. Define the Base Class
 class Base(DeclarativeBase):
