@@ -165,37 +165,45 @@ else:
     st.info("👈 Select a document from the table to inspect individually.")
     st.markdown("### Bulk Operations")
     
+    import threading
+    db_lock = threading.Lock()
+    
     # --- Thread-Safe Worker Function ---
     def process_single_doc(doc_id):
-        """Worker function for threads to process one document safely."""
+        # 1. Fetch file path quickly (no lock needed for reading)
         with Session(engine) as session:
             doc = session.get(Document, doc_id)
             if not doc or doc.status != 'PENDING':
                 return False
+            file_path = doc.file_path
+        
+        # 2. Call Gemini (Takes time, NO database session open)
+        try:
+            images = extract_preview_images(file_path)
+            if images:
+                result = evaluate_document(images)
+                if result:
+                    # 3. Save to DB (Uses lock to prevent SQLite collisions)
+                    with db_lock:
+                        with Session(engine) as session:
+                            doc_to_update = session.get(Document, doc_id)
+                            doc_to_update.priority_score = result['priority_score']
+                            doc_to_update.summary = result['summary']
+                            doc_to_update.language = result['language']
+                            doc_to_update.ai_justification = result['ai_justification']
+                            doc_to_update.status = "EVALUATED"
+                            session.commit()
+                            return True
+        except Exception as e:
+            print(f"Failed on {doc_id}: {e}")
             
-            try:
-                images = extract_preview_images(doc.file_path)
-                if images:
-                    result = evaluate_document(images)
-                    if result:
-                        doc.priority_score = result['priority_score']
-                        doc.summary = result['summary']
-                        doc.language = result['language']
-                        doc.ai_justification = result['ai_justification']
-                        doc.status = "EVALUATED"
-                        session.commit()
-                        return True
-            except Exception as e:
-                print(f"Failed on {doc_id}: {e}")
-                
-            return False
+        return False
 
     if pending_count > 0:
         if st.button(f"🚀 Run AI Analysis on ALL Pending ({pending_count} files)", type="primary"):
             progress_bar = st.progress(0, text="Starting Batch Job...")
             status_text = st.empty()
             
-            # Fetch IDs first (closes the main session quickly)
             with Session(engine) as session:
                 p_stm = select(Document.id).where(Document.status == 'PENDING')
                 p_ids = session.scalars(p_stm).all()
@@ -204,9 +212,7 @@ else:
             success_count = 0
             
             if total > 0:
-                # Blast up to 50 at a time using your high API limits
                 with ThreadPoolExecutor(max_workers=50) as executor:
-                    # Submit all tasks to the pool
                     future_to_id = {executor.submit(process_single_doc, pid): pid for pid in p_ids}
                     
                     completed = 0
@@ -215,7 +221,6 @@ else:
                         if future.result():
                             success_count += 1
                             
-                        # Update UI as threads finish
                         status_text.write(f"Processing ({completed}/{total})...")
                         progress_bar.progress(completed / total)
             
