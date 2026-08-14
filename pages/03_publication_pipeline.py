@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 from src.database import engine, Document
 from src.gemini_processor import extract_metadata_from_pdf, extract_toc_from_pdf
 from src.wikibase_importer import import_book_to_wikibase
-# Add upload_file here
 from src.mediawiki_uploader import upload_to_bahaiworks
 from src.sitelink_manager import set_sitelink
 from src.text_processing import parse_text_file, find_best_match_for_title
@@ -852,25 +851,71 @@ elif st.session_state.pipeline_stage == "split":
         st.divider()
         
         full_toc = st.session_state.get("toc_map", [])
-        # Define variable INSIDE the block
-        has_authors = any(len(item.get("author", [])) > 0 for item in full_toc)
+        
+        # Robust check: ignore empty strings and pandas "nan" or "none" artifacts
+        has_authors = False
+        for item in full_toc:
+            authors = item.get("author", [])
+            valid_authors = [a for a in authors if str(a).strip().lower() not in ["", "nan", "none"]]
+            if valid_authors:
+                has_authors = True
+                break
 
-        # Check variable INSIDE the block (Indented)
         if has_authors:
             st.subheader("4. Chapter Metadata")
+            st.info("Does this book contain chapters authored by different individuals?")
             
-            if st.button("📝 Review & Create Chapter Items", type="primary", width='stretch'):
-                chapter_payload = []
-                # Re-fetch strictly to be safe, though full_toc is already there
-                current_toc = st.session_state.get("toc_map", [])
+            c_yes, c_no = st.columns(2)
+            
+            with c_yes:
+                if st.button("✅ Yes (Review & Create Chapter Items)", type="primary", use_container_width=True):
+                    chapter_payload = []
+                    for item in full_toc:
+                        if item.get("page_name") and str(item.get("page_name")).strip() != "":
+                            chapter_payload.append(item)
+                    
+                    st.session_state["chapter_review_data"] = chapter_payload
+                    st.session_state["chapter_parent_qid"] = st.session_state.get("parent_qid", "")
+                    st.session_state["chapter_target_base"] = st.session_state.get("target_page", "")
+                    
+                    st.switch_page("pages/05_chapter_items.py")
+
+            with c_no:
+                if st.button("❌ No (Complete & Return to Dashboard)", use_container_width=True):
+                    with Session(engine) as session:
+                        rec = session.get(Document, doc_id)
+                        if rec:
+                            rec.status = "COMPLETED"
+                            session.commit()
+                    
+                    keys_to_clear = [
+                        "selected_doc_id", "pipeline_stage", "target_page", "meta_result", 
+                        "talk_text", "meta_json_str", "toc_json_list", "chapter_df", 
+                        "page_map", "page_order", "splitter_indices", "split_completed",
+                        "toc_map", "parent_qid"
+                    ]
+                    for key in keys_to_clear:
+                        if key in st.session_state:
+                            del st.session_state[key]
+                    
+                    go_back()
+        else:
+            st.subheader("4. Completion")
+            if st.button("🏁 Complete Document & Return to Dashboard", type="primary", use_container_width=True):
+                with Session(engine) as session:
+                    rec = session.get(Document, doc_id)
+                    if rec:
+                        rec.status = "COMPLETED"
+                        session.commit()
                 
-                for item in current_toc:
-                    # Filter for items that actually have a page destination
-                    if item.get("page_name") and str(item.get("page_name")).strip() != "":
-                        chapter_payload.append(item)
+                keys_to_clear = [
+                    "selected_doc_id", "pipeline_stage", "target_page", "meta_result", 
+                    "talk_text", "meta_json_str", "toc_json_list", "chapter_df", 
+                    "page_map", "page_order", "splitter_indices", "split_completed",
+                    "toc_map", "parent_qid"
+                ]
+                for key in keys_to_clear:
+                    if key in st.session_state:
+                        del st.session_state[key]
                 
-                st.session_state["chapter_review_data"] = chapter_payload
-                st.session_state["chapter_parent_qid"] = st.session_state.get("parent_qid", "")
-                st.session_state["chapter_target_base"] = st.session_state.get("target_page", "")
-                
-                st.switch_page("pages/05_chapter_items.py")
+                go_back()
