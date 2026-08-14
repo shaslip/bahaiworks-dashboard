@@ -5,8 +5,8 @@ import re
 import subprocess
 import platform
 import time
-import concurrent.futures
 import fitz
+import concurrent.futures
 from sqlalchemy.orm import Session
 from sqlalchemy import select, or_
 
@@ -482,7 +482,7 @@ def render_prep_tab(docs):
                                         current_path = split_path
                                         current_name = split_name
                                         
-                                        import fitz
+                                        # --- Re-run Offset Detection on the NEW file ---
                                         with fitz.open(current_path) as pdf:
                                             recalc_start, _ = calculate_start_offset(current_path, len(pdf))
                                             final_offset = recalc_start if recalc_start else 0
