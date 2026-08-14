@@ -21,7 +21,7 @@ if not api_key:
 
 genai.configure(api_key=api_key)
 
-def extract_single_page(pdf_path, page_num, output_dir):
+def extract_single_page(pdf_path, page_num, output_dir, filename=""):
     """Extracts a single specific page from PDF to PNG."""
     prefix = os.path.join(output_dir, f"calibration_{page_num}")
     
@@ -29,7 +29,7 @@ def extract_single_page(pdf_path, page_num, output_dir):
     if existing: return existing[0]
 
     try:
-        # UPDATED: Increased DPI to 300 for better OCR on old scans
+        # Increased DPI to 300 for better OCR on old scans
         subprocess.run([
             "pdftoppm", "-png", "-f", str(page_num), "-l", str(page_num), 
             "-r", "300", 
@@ -39,12 +39,11 @@ def extract_single_page(pdf_path, page_num, output_dir):
         files = glob.glob(f"{prefix}*.png")
         return files[0] if files else None
     except Exception as e:
-        print(f"      [Error extracting page {page_num}]: {e}")
+        print(f"[{filename}] [Error extracting page {page_num}]: {e}")
         return None
 
 def get_printed_page_number(image_path):
     """Asks Gemini for page number AND double-page detection."""
-    # Using the model string from your file
     model = genai.GenerativeModel('gemini-3-flash-preview') 
     
     try:
@@ -80,7 +79,8 @@ def calculate_start_offset(pdf_path, total_pages):
     Triangulates 'Page 1' index and detects double-page spreads.
     Returns: (offset, is_double_page_bool)
     """
-    temp_dir = f".temp_calib_{os.path.basename(pdf_path)}"
+    filename = os.path.basename(pdf_path)
+    temp_dir = f".temp_calib_{filename}"
     if not os.path.exists(temp_dir):
         os.makedirs(temp_dir)
 
@@ -90,7 +90,7 @@ def calculate_start_offset(pdf_path, total_pages):
         int(total_pages * 0.8)
     ]
     
-    print(f"      Probing PDF pages: {probes}")
+    print(f"[{filename}] Probing PDF pages: {probes}")
     
     offsets = []
     double_page_votes = 0
@@ -100,7 +100,7 @@ def calculate_start_offset(pdf_path, total_pages):
         for pdf_page in probes:
             if pdf_page < 1: continue
             
-            img_path = extract_single_page(pdf_path, pdf_page, temp_dir)
+            img_path = extract_single_page(pdf_path, pdf_page, temp_dir, filename)
             
             if img_path:
                 printed_num, raw_response, is_double = get_printed_page_number(img_path)
@@ -112,9 +112,9 @@ def calculate_start_offset(pdf_path, total_pages):
                 if printed_num is not None:
                     offset = pdf_page - printed_num
                     offsets.append(offset)
-                    print(f"      - PDF Pg {pdf_page} -> printed '{printed_num}' (Offset: {offset}) [Double: {is_double}]")
+                    print(f"[{filename}] - PDF Pg {pdf_page} -> printed '{printed_num}' (Offset: {offset}) [Double: {is_double}]")
                 else:
-                    print(f"      - PDF Pg {pdf_page} -> printed 'None' | Raw: '{raw_response}'")
+                    print(f"[{filename}] - PDF Pg {pdf_page} -> printed 'None' | Raw: '{raw_response}'")
 
         # Determine Double Page Consensus (>50%)
         is_double_page_detected = False
@@ -128,18 +128,17 @@ def calculate_start_offset(pdf_path, total_pages):
         most_common_offset, frequency = counts.most_common(1)[0]
         
         if frequency >= 2:
-            final_start = 1 + most_common_offset
-            print(f"      > Consensus found! Offset {most_common_offset}. Double Page: {is_double_page_detected}")
+            # FIX: Removed the "1 + " so it accurately reflects the 0-based index
+            final_start = most_common_offset
+            print(f"[{filename}] > Consensus found! Offset {final_start}. Double Page: {is_double_page_detected}")
             shutil.rmtree(temp_dir, ignore_errors=True)
             return final_start, is_double_page_detected
         else:
-             print(f"      > No consensus. Offsets found: {offsets}")
-             print(f"      > DEBUG: Kept images in {temp_dir} for inspection.")
-             # CHANGED: Return the detected status even if offsets failed
+             print(f"[{filename}] > No consensus. Offsets found: {offsets}")
+             print(f"[{filename}] > DEBUG: Kept images in {temp_dir} for inspection.")
              return None, is_double_page_detected
             
     except Exception as e:
-        print(f"      Calibration crash: {e}")
+        print(f"[{filename}] Calibration crash: {e}")
             
-    # CHANGED: Fallback return
     return None, is_double_page_detected
