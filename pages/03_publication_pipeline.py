@@ -819,6 +819,26 @@ elif st.session_state.pipeline_stage == "split":
                 with open(toc_path, "w", encoding="utf-8") as f:
                     json.dump(st.session_state["toc_map"], f, indent=2, ensure_ascii=False)
                 
+                # --- ADD TO RE-PROOFREADER QUEUE ---
+                import time
+                queue_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "book_sweeper_queue.json")
+                try:
+                    queue_data = {}
+                    if os.path.exists(queue_file):
+                        with open(queue_file, "r") as qf:
+                            queue_data = json.load(qf)
+                    
+                    queue_data[target_base] = {
+                        "status": "PENDING",
+                        "last_updated": time.time()
+                    }
+                    
+                    with open(queue_file, "w") as qf:
+                        json.dump(queue_data, qf, indent=4)
+                    status_box.write("✅ Added to Re-proofreader Queue!")
+                except Exception as e:
+                    st.error(f"Failed to add to Re-proofreader queue: {e}")
+
                 status_box.success("✅ All chapters split, uploaded, and JSON updated!")
                 st.balloons()
                 st.session_state["split_completed"] = True
