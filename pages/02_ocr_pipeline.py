@@ -306,6 +306,10 @@ def render_prep_tab(docs):
     st.header("Step 2: Calibration & Splitting")
     st.info("Analyze page offsets and detect/split double-page spreads.")
 
+    # Initialize staging state
+    if 'prep_staged_ids' not in st.session_state:
+        st.session_state.prep_staged_ids = set()
+
     # --- SEARCH FILTER ---
     search_term = st.text_input("🔍 Search Documents", placeholder="Type filename to filter...", key="prep_search").lower()
     
@@ -314,158 +318,177 @@ def render_prep_tab(docs):
     else:
         filtered_docs = docs
 
-    # --- BATCH CONFIG ---
-    total_count = len(filtered_docs)
-    display_batch = filtered_docs[:21]      # Show 21 to catch edge cases
-    processing_batch = filtered_docs[:20]   # Only process the standard 20
+    # --- 1. SELECTION TABLE ---
+    st.subheader("1. Find & Select Documents")
+    st.caption("Search and select documents, then add them to your processing batch.")
 
-    # 1. Queue Review Table
-    st.subheader(f"📋 Document Queue ({min(len(display_batch), 20)}/{total_count})")
+    # Show up to 100 results to prevent UI lag, user can narrow down via search
+    queue_data = [{
+        "ID": d.id,
+        "Filename": d.filename,
+        "Priority": d.priority_score,
+        "Language": d.language
+    } for d in filtered_docs[:100]]
     
-    selected_doc_id = None
+    event = st.dataframe(
+        queue_data,
+        column_order=["ID", "Filename", "Priority", "Language"],
+        width="stretch",
+        hide_index=True,
+        selection_mode="multi-row",
+        on_select="rerun",
+        key="prep_queue_table"
+    )
     
-    if display_batch:
-        queue_data = [{
-            "ID": d.id,
-            "Filename": d.filename,
-            "Priority": d.priority_score,
-            "Language": d.language
-        } for d in display_batch]
-        
-        event = st.dataframe(
-            queue_data,
-            column_order=["ID", "Filename", "Priority", "Language"],
-            width="stretch",
-            hide_index=True,
-            selection_mode="single-row",
-            on_select="rerun",
-            key="prep_queue_table"
-        )
-        
-        if len(event.selection['rows']) > 0:
-            idx = event.selection['rows'][0]
-            selected_doc_id = queue_data[idx]["ID"]
-            
+    selected_indices = event.selection['rows']
+    selected_table_ids = [queue_data[i]["ID"] for i in selected_indices]
+    
+    # Action bar for selection
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button(f"➕ Add {len(selected_table_ids)} to Batch", disabled=len(selected_table_ids) == 0, type="primary"):
+            st.session_state.prep_staged_ids.update(selected_table_ids)
+            st.toast(f"Added {len(selected_table_ids)} documents to batch.")
+            st.rerun()
+    with col2:
+        if len(selected_table_ids) == 1:
+            st.info("💡 Document details are shown in the sidebar.")
+
+    # Render sidebar details only if exactly one document is selected in the search table
+    if len(selected_table_ids) == 1:
+        render_details(selected_table_ids[0])
     else:
-        st.warning("No documents ready for processing. Check Step 1.")
-        return
+        st.sidebar.info("Select exactly one document in the table to view details.")
 
     st.divider()
 
-    # 2. Render Sidebar if Selected
-    if selected_doc_id:
-        render_details(selected_doc_id)
-    else:
-        st.sidebar.info("Select a document in the table to view details.")
+    # --- 2. STAGED BATCH ---
+    st.subheader(f"🛒 Selected Batch ({len(st.session_state.prep_staged_ids)})")
 
-    # 3. Analysis Action (Uses batch_docs only)
-    if st.button(
-        f"🔍 Auto-Detect Offsets & Layouts ({len(processing_batch)})", 
-        type="primary",
-        help="Opens each PDF to guess the starting page number and detect 2-up spreads. Does not modify files yet."
-    ):
-        progress = st.progress(0)
-        results = []
+    staged_docs = [d for d in docs if d.id in st.session_state.prep_staged_ids]
+
+    if staged_docs:
+        # Display exactly what is selected so you aren't guessing
+        staged_df = pd.DataFrame([{
+            "ID": d.id,
+            "Filename": d.filename
+        } for d in staged_docs])
         
-        for i, doc in enumerate(processing_batch):
-            import fitz
-            try:
-                with fitz.open(doc.file_path) as pdf:
-                    total = len(pdf)
+        st.dataframe(staged_df, hide_index=True, width="stretch")
+
+        bc1, bc2 = st.columns([1, 4])
+        with bc1:
+            if st.button("🗑️ Clear Batch"):
+                st.session_state.prep_staged_ids = set()
+                st.session_state.pop('prep_results', None)
+                st.rerun()
                 
-                start, is_double = calculate_start_offset(doc.file_path, total)
+        with bc2:
+            if st.button(
+                "🔍 Auto-Detect Offsets & Layouts for Batch", 
+                type="primary",
+                help="Opens each PDF to guess the starting page number and detect 2-up spreads."
+            ):
+                progress = st.progress(0)
+                results = []
                 
-                results.append({
-                    "doc": doc,
-                    "offset": start,
-                    "is_double": is_double,
-                    "status": "Ready" if start else "Failed"
-                })
-            except Exception as e:
-                st.error(f"Error reading {doc.filename}: {e}")
-            
-            progress.progress((i + 1) / len(processing_batch))
-            
-        st.session_state['prep_results'] = results
-
-    # 4. Results Grid
-    if 'prep_results' in st.session_state:
-        results = st.session_state['prep_results']
-        
-        for item in results:
-            doc = item['doc']
-            
-            # Check the real-time DB status to see if it was already processed
-            with Session(engine) as session:
-                current_db_doc = session.get(Document, doc.id)
-                is_ready = current_db_doc.status == "READY_FOR_OCR"
-
-            with st.container(border=True):
-                c1, c2, c3, c4 = st.columns([4, 2, 2, 2])
-                c1.write(f"**{doc.filename}**")
-                
-                if is_ready:
-                    # VISUAL CUE: Show success state instead of inputs
-                    c2.success("✅ Prepared")
-                    c3.empty()
-                    c4.markdown("<div style='margin-top: 15px; color: gray;'>➡️ <i>Move to Execute tab</i></div>", unsafe_allow_html=True)
-                else:
-                    # Editable Offset
-                    new_offset = c2.number_input("Offset", value=item['offset'] if item['offset'] else 0, key=f"off_{doc.id}")
-                    
-                    # Double Page Indicator
-                    is_dbl = c3.checkbox("Double Page?", value=item['is_double'], key=f"dbl_{doc.id}")
-                    
-                    # Dynamic Button Label
-                    btn_label = "✂️ Split & Mark Ready" if is_dbl else "✅ Confirm & Mark Ready"
-                    
-                    # Action
-                    if c4.button(btn_label, key=f"proc_{doc.id}", help="Applies settings and queues for OCR."):
-                        current_path = doc.file_path
-                        current_name = doc.filename
-                        final_offset = new_offset # Default to user input
-
-                        # 1. Handle Split
-                        if is_dbl:
-                            with st.spinner("Splitting & Re-calibrating..."):
-                                s_start, s_end = analyze_split_boundaries(current_path)
-                                split_name = f"split_{doc.filename}"
-                                split_path = os.path.join(os.path.dirname(current_path), split_name)
-                                
-                                if split_pdf_doubles(current_path, split_path, s_start, s_end):
-                                    current_path = split_path
-                                    current_name = split_name
-                                    
-                                    # --- Re-run Offset Detection on the NEW file ---
-                                    import fitz
-                                    with fitz.open(current_path) as pdf:
-                                        recalc_start, _ = calculate_start_offset(current_path, len(pdf))
-                                        final_offset = recalc_start if recalc_start else 0
-                                        st.toast(f"🔄 Re-calculated Offset: {final_offset}")
-                                    
-                                    st.success("Split Complete!")
-                                else:
-                                    st.error("Split Failed")
-                                    return 
-
-                        # 2. Persist State & Offset
-                        with Session(engine) as session:
-                            d = session.get(Document, doc.id)
-                            d.file_path = current_path
-                            d.filename = current_name
-                            d.status = "READY_FOR_OCR"
-                            
-                            clean_just = d.ai_justification or ""
-                            clean_just = re.sub(r"\[OFFSET:\d+\]", "", clean_just).strip()
-                            
-                            # Use final_offset (the re-calculated one)
-                            d.ai_justification = f"{clean_just}\n[OFFSET:{final_offset}]"
-                            
-                            session.commit()
+                for i, doc in enumerate(staged_docs):
+                    import fitz
+                    try:
+                        with fitz.open(doc.file_path) as pdf:
+                            total = len(pdf)
                         
-                        st.toast("✅ Document prepared! Go to the Execute tab to run OCR.")
-                        time.sleep(1.0) # Give user time to see the toast
-                        st.rerun()
+                        start, is_double = calculate_start_offset(doc.file_path, total)
+                        
+                        results.append({
+                            "doc": doc,
+                            "offset": start,
+                            "is_double": is_double,
+                            "status": "Ready" if start else "Failed"
+                        })
+                    except Exception as e:
+                        st.error(f"Error reading {doc.filename}: {e}")
+                    
+                    progress.progress((i + 1) / len(staged_docs))
+                    
+                st.session_state['prep_results'] = results
+
+        # --- 3. RESULTS GRID ---
+        if 'prep_results' in st.session_state:
+            st.subheader("⚙️ Processing Results")
+            results = st.session_state['prep_results']
+            
+            for item in results:
+                doc = item['doc']
+                
+                # Skip rendering if it was already processed and removed from the batch
+                if doc.id not in st.session_state.prep_staged_ids:
+                    continue
+                
+                with Session(engine) as session:
+                    current_db_doc = session.get(Document, doc.id)
+                    is_ready = current_db_doc.status == "READY_FOR_OCR"
+
+                with st.container(border=True):
+                    c1, c2, c3, c4 = st.columns([4, 2, 2, 2])
+                    c1.write(f"**{doc.filename}**")
+                    
+                    if is_ready:
+                        c2.success("✅ Prepared")
+                        c3.empty()
+                        c4.markdown("<div style='margin-top: 15px; color: gray;'>➡️ <i>Move to Execute tab</i></div>", unsafe_allow_html=True)
+                    else:
+                        new_offset = c2.number_input("Offset", value=item['offset'] if item['offset'] else 0, key=f"off_{doc.id}")
+                        is_dbl = c3.checkbox("Double Page?", value=item['is_double'], key=f"dbl_{doc.id}")
+                        btn_label = "✂️ Split & Mark Ready" if is_dbl else "✅ Confirm & Mark Ready"
+                        
+                        if c4.button(btn_label, key=f"proc_{doc.id}", help="Applies settings and queues for OCR."):
+                            current_path = doc.file_path
+                            current_name = doc.filename
+                            final_offset = new_offset 
+
+                            if is_dbl:
+                                with st.spinner("Splitting & Re-calibrating..."):
+                                    s_start, s_end = analyze_split_boundaries(current_path)
+                                    split_name = f"split_{doc.filename}"
+                                    split_path = os.path.join(os.path.dirname(current_path), split_name)
+                                    
+                                    if split_pdf_doubles(current_path, split_path, s_start, s_end):
+                                        current_path = split_path
+                                        current_name = split_name
+                                        
+                                        import fitz
+                                        with fitz.open(current_path) as pdf:
+                                            recalc_start, _ = calculate_start_offset(current_path, len(pdf))
+                                            final_offset = recalc_start if recalc_start else 0
+                                            st.toast(f"🔄 Re-calculated Offset: {final_offset}")
+                                        
+                                        st.success("Split Complete!")
+                                    else:
+                                        st.error("Split Failed")
+                                        return 
+
+                            with Session(engine) as session:
+                                d = session.get(Document, doc.id)
+                                d.file_path = current_path
+                                d.filename = current_name
+                                d.status = "READY_FOR_OCR"
+                                
+                                clean_just = d.ai_justification or ""
+                                clean_just = re.sub(r"\[OFFSET:\d+\]", "", clean_just).strip()
+                                d.ai_justification = f"{clean_just}\n[OFFSET:{final_offset}]"
+                                
+                                session.commit()
+                            
+                            # Remove from batch so it disappears cleanly from the queue
+                            st.session_state.prep_staged_ids.discard(doc.id)
+                            
+                            st.toast("✅ Document prepared! Go to the Execute tab to run OCR.")
+                            time.sleep(1.0) 
+                            st.rerun()
+
+    else:
+        st.info("Select documents from the table above and click 'Add to Batch'.")
 
 # --- TAB 3: EXECUTION ---
 def render_exec_tab():
