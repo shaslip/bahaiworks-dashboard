@@ -3,6 +3,8 @@ import subprocess
 import glob
 import re
 import shutil
+import concurrent.futures
+import fitz
 from dataclasses import dataclass
 from typing import List, Tuple, Optional, Callable
 import pytesseract
@@ -78,26 +80,48 @@ class OcrEngine:
             label = str(real_page_counter)
             return label, illus_counter, real_page_counter + 1
 
-    def generate_images(self) -> int:
+    def generate_images(self, chunk_size: int = 20) -> int:
         """
-        Runs pdftoppm to generate PNGs.
+        Runs pdftoppm to generate PNGs in parallel chunks.
         ALWAYS starts fresh to prevent corrupted cache issues.
         """
-        # 1. Force Clean Start: If dir exists, nuke it.
+        # 1. Force Clean Start
         if os.path.exists(self.cache_dir):
             shutil.rmtree(self.cache_dir)
-        
-        # 2. Re-create empty dir
         os.makedirs(self.cache_dir)
         
-        # Output prefix for pdftoppm
         prefix = os.path.join(self.cache_dir, "page")
-        
-        print(f"Generating images for {self.filename}...")
-        
-        # Using subprocess to call system pdftoppm
-        cmd = ["pdftoppm", "-png", "-r", "300", self.file_path, prefix]
-        subprocess.run(cmd, check=True)
+        print(f"Generating images for {self.filename} in parallel chunks...")
+
+        # 2. Get total pages to calculate chunks
+        with fitz.open(self.file_path) as pdf:
+            total_pages = len(pdf)
+
+        # 3. Define the start and end pages for each chunk (e.g., 1-20, 21-40)
+        chunks = []
+        for start in range(1, total_pages + 1, chunk_size):
+            end = min(start + chunk_size - 1, total_pages)
+            chunks.append((start, end))
+
+        # 4. Worker function for a single chunk
+        def process_chunk(start_page: int, end_page: int):
+            cmd = [
+                "pdftoppm", 
+                "-png", 
+                "-r", "300", 
+                "-f", str(start_page), 
+                "-l", str(end_page), 
+                self.file_path, 
+                prefix
+            ]
+            subprocess.run(cmd, check=True)
+
+        # 5. Execute chunks in parallel
+        # pdftoppm automatically names files with their absolute page number even when chunked
+        max_workers = min(len(chunks), (os.cpu_count() or 4))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(process_chunk, c[0], c[1]) for c in chunks]
+            concurrent.futures.wait(futures)
         
         # Return count
         return len(glob.glob(os.path.join(self.cache_dir, "*.png")))
