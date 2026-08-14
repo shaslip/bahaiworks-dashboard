@@ -5,6 +5,7 @@ import re
 import subprocess
 import platform
 import time
+import concurrent.futures
 from sqlalchemy.orm import Session
 from sqlalchemy import select, or_
 
@@ -387,30 +388,54 @@ def render_prep_tab(docs):
             if st.button(
                 "🔍 Auto-Detect Offsets & Layouts for Batch", 
                 type="primary",
-                help="Opens each PDF to guess the starting page number and detect 2-up spreads."
+                help="Opens each PDF to guess the starting page number and detect 2-up spreads in parallel."
             ):
-                progress = st.progress(0)
+                
+                progress = st.progress(0, text="Starting parallel analysis...")
                 results = []
                 
-                for i, doc in enumerate(staged_docs):
+                # Helper function for the thread worker
+                def analyze_doc(doc):
                     import fitz
                     try:
                         with fitz.open(doc.file_path) as pdf:
                             total = len(pdf)
-                        
                         start, is_double = calculate_start_offset(doc.file_path, total)
-                        
-                        results.append({
+                        return {
                             "doc": doc,
                             "offset": start,
                             "is_double": is_double,
-                            "status": "Ready" if start else "Failed"
-                        })
+                            "status": "Ready" if start else "Failed",
+                            "error": None
+                        }
                     except Exception as e:
-                        st.error(f"Error reading {doc.filename}: {e}")
+                        return {
+                            "doc": doc,
+                            "offset": 0,
+                            "is_double": False,
+                            "status": "Failed",
+                            "error": str(e)
+                        }
+
+                # Run in parallel using a ThreadPool
+                # max_workers=4 is a safe default, you can increase it based on your CPU cores
+                with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                    future_to_doc = {executor.submit(analyze_doc, doc): doc for doc in staged_docs}
                     
-                    progress.progress((i + 1) / len(staged_docs))
-                    
+                    completed = 0
+                    for future in concurrent.futures.as_completed(future_to_doc):
+                        res = future.result()
+                        
+                        if res["error"]:
+                            st.error(f"Error reading {res['doc'].filename}: {res['error']}")
+                        else:
+                            results.append(res)
+                            
+                        completed += 1
+                        progress.progress(completed / len(staged_docs), text=f"Analyzed {completed}/{len(staged_docs)}...")
+
+                # Threads finish out of order, so we sort by ID to keep the UI predictable
+                results.sort(key=lambda x: x["doc"].id)
                 st.session_state['prep_results'] = results
 
         # --- 3. RESULTS GRID ---
