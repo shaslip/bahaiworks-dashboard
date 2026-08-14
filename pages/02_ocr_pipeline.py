@@ -6,6 +6,7 @@ import subprocess
 import platform
 import time
 import concurrent.futures
+import fitz
 from sqlalchemy.orm import Session
 from sqlalchemy import select, or_
 
@@ -396,7 +397,6 @@ def render_prep_tab(docs):
                 
                 # Helper function for the thread worker
                 def analyze_doc(doc):
-                    import fitz
                     try:
                         with fitz.open(doc.file_path) as pdf:
                             total = len(pdf)
