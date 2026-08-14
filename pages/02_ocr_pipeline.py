@@ -359,7 +359,11 @@ def render_prep_tab(docs):
         st.sidebar.info("Select a document in the table to view details.")
 
     # 3. Analysis Action (Uses batch_docs only)
-    if st.button(f"🕵️ Run Analysis on Batch ({len(processing_batch)})", type="primary"):
+    if st.button(
+        f"🔍 Auto-Detect Offsets & Layouts ({len(processing_batch)})", 
+        type="primary",
+        help="Opens each PDF to guess the starting page number and detect 2-up spreads. Does not modify files yet."
+    ):
         progress = st.progress(0)
         results = []
         
@@ -390,62 +394,78 @@ def render_prep_tab(docs):
         
         for item in results:
             doc = item['doc']
+            
+            # Check the real-time DB status to see if it was already processed
+            with Session(engine) as session:
+                current_db_doc = session.get(Document, doc.id)
+                is_ready = current_db_doc.status == "READY_FOR_OCR"
+
             with st.container(border=True):
                 c1, c2, c3, c4 = st.columns([4, 2, 2, 2])
                 c1.write(f"**{doc.filename}**")
                 
-                # Editable Offset
-                new_offset = c2.number_input("Offset", value=item['offset'] if item['offset'] else 0, key=f"off_{doc.id}")
-                
-                # Double Page Indicator
-                is_dbl = c3.checkbox("Double Page?", value=item['is_double'], key=f"dbl_{doc.id}")
-                
-                # Action
-                if c4.button("Process", key=f"proc_{doc.id}"):
-                    current_path = doc.file_path
-                    current_name = doc.filename
-                    final_offset = new_offset # Default to user input
-
-                    # 1. Handle Split
-                    if is_dbl:
-                        with st.spinner("Splitting & Re-calibrating..."):
-                            s_start, s_end = analyze_split_boundaries(current_path)
-                            split_name = f"split_{doc.filename}"
-                            split_path = os.path.join(os.path.dirname(current_path), split_name)
-                            
-                            if split_pdf_doubles(current_path, split_path, s_start, s_end):
-                                current_path = split_path
-                                current_name = split_name
-                                
-                                # --- FIX: Re-run Offset Detection on the NEW file ---
-                                with fitz.open(current_path) as pdf:
-                                    recalc_start, _ = calculate_start_offset(current_path, len(pdf))
-                                    final_offset = recalc_start if recalc_start else 0
-                                    st.toast(f"🔄 Re-calculated Offset: {final_offset}")
-                                # ----------------------------------------------------
-                                
-                                st.success("Split Complete!")
-                            else:
-                                st.error("Split Failed")
-                                return 
-
-                    # 2. Persist State & Offset
-                    with Session(engine) as session:
-                        d = session.get(Document, doc.id)
-                        d.file_path = current_path
-                        d.filename = current_name
-                        d.status = "READY_FOR_OCR"
-                        
-                        clean_just = d.ai_justification or ""
-                        clean_just = re.sub(r"\[OFFSET:\d+\]", "", clean_just).strip()
-                        
-                        # Use final_offset (the re-calculated one)
-                        d.ai_justification = f"{clean_just}\n[OFFSET:{final_offset}]"
-                        
-                        session.commit()
+                if is_ready:
+                    # VISUAL CUE: Show success state instead of inputs
+                    c2.success("✅ Prepared")
+                    c3.empty()
+                    c4.markdown("<div style='margin-top: 15px; color: gray;'>➡️ <i>Move to Execute tab</i></div>", unsafe_allow_html=True)
+                else:
+                    # Editable Offset
+                    new_offset = c2.number_input("Offset", value=item['offset'] if item['offset'] else 0, key=f"off_{doc.id}")
                     
-                    time.sleep(1.0) # Give user time to see the toast
-                    st.rerun()
+                    # Double Page Indicator
+                    is_dbl = c3.checkbox("Double Page?", value=item['is_double'], key=f"dbl_{doc.id}")
+                    
+                    # Dynamic Button Label
+                    btn_label = "✂️ Split & Mark Ready" if is_dbl else "✅ Confirm & Mark Ready"
+                    
+                    # Action
+                    if c4.button(btn_label, key=f"proc_{doc.id}", help="Applies settings and queues for OCR."):
+                        current_path = doc.file_path
+                        current_name = doc.filename
+                        final_offset = new_offset # Default to user input
+
+                        # 1. Handle Split
+                        if is_dbl:
+                            with st.spinner("Splitting & Re-calibrating..."):
+                                s_start, s_end = analyze_split_boundaries(current_path)
+                                split_name = f"split_{doc.filename}"
+                                split_path = os.path.join(os.path.dirname(current_path), split_name)
+                                
+                                if split_pdf_doubles(current_path, split_path, s_start, s_end):
+                                    current_path = split_path
+                                    current_name = split_name
+                                    
+                                    # --- Re-run Offset Detection on the NEW file ---
+                                    import fitz
+                                    with fitz.open(current_path) as pdf:
+                                        recalc_start, _ = calculate_start_offset(current_path, len(pdf))
+                                        final_offset = recalc_start if recalc_start else 0
+                                        st.toast(f"🔄 Re-calculated Offset: {final_offset}")
+                                    
+                                    st.success("Split Complete!")
+                                else:
+                                    st.error("Split Failed")
+                                    return 
+
+                        # 2. Persist State & Offset
+                        with Session(engine) as session:
+                            d = session.get(Document, doc.id)
+                            d.file_path = current_path
+                            d.filename = current_name
+                            d.status = "READY_FOR_OCR"
+                            
+                            clean_just = d.ai_justification or ""
+                            clean_just = re.sub(r"\[OFFSET:\d+\]", "", clean_just).strip()
+                            
+                            # Use final_offset (the re-calculated one)
+                            d.ai_justification = f"{clean_just}\n[OFFSET:{final_offset}]"
+                            
+                            session.commit()
+                        
+                        st.toast("✅ Document prepared! Go to the Execute tab to run OCR.")
+                        time.sleep(1.0) # Give user time to see the toast
+                        st.rerun()
 
 # --- TAB 3: EXECUTION ---
 def render_exec_tab():
