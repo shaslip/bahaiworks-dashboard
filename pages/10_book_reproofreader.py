@@ -1046,7 +1046,10 @@ if subpages_to_process:
                 last_page_text = all_extracted_text.get(last_page_num, "")
                 
                 if last_page_text:
-                    log_container.write(f"🧠 Asking LLM to check for chapter splits on page {last_page_num}...")
+                    if next_chapter_needs_split:
+                        log_container.write(f"🧠 Asking LLM to split page {last_page_num} (Next chapter requires split)...")
+                    else:
+                        log_container.write(f"🧠 Asking LLM to scan page {last_page_num} (Because {len(pending_ghosts)} unmapped ghost chapter(s) exist)...")
                     
                     # Pass the next chapter AND the remaining unfound ghost chapters
                     unmapped_to_pass = [ch for ch in pending_ghosts if ch != next_chapter]
