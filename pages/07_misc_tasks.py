@@ -4,7 +4,7 @@ import os
 import requests
 import urllib.parse
 import pandas as pd
-from src.mediawiki_uploader import upload_to_bahaiworks, fetch_wikitext, upload_to_mediawiki
+from src.mediawiki_uploader import upload_to_bahaiworks, fetch_wikitext, upload_to_mediawiki, get_csrf_token
 from src.sitelink_manager import set_sitelink
 from src.wikibase_importer import get_or_create_author
 
@@ -788,6 +788,14 @@ with tab_fix_pages:
         elif offset == 0:
             st.warning("Offset is 0. No changes will be made.")
         else:
+            # 1. Authenticate Session for Access-Controlled Pages
+            session = requests.Session()
+            try:
+                get_csrf_token(session)
+            except Exception as e:
+                st.error(f"Authentication Failed: {e}")
+                st.stop()
+
             api_url = "https://bahai.works/api.php"
             params = {
                 "action": "query",
@@ -800,7 +808,8 @@ with tab_fix_pages:
             with st.spinner("Fetching subpages..."):
                 pages_to_process = []
                 while True:
-                    resp = requests.get(api_url, params=params).json()
+                    # Use the authenticated session here
+                    resp = session.get(api_url, params=params).json()
                     pages_to_process.extend([p['title'] for p in resp.get('query', {}).get('allpages', [])])
                     if 'continue' not in resp:
                         break
@@ -816,7 +825,8 @@ with tab_fix_pages:
                 for i, page_title in enumerate(pages_to_process):
                     status_box.write(f"Processing **{page_title}**...")
                     
-                    text, err = fetch_wikitext(page_title)
+                    # Pass the authenticated session to read access-controlled pages
+                    text, err = fetch_wikitext(page_title, session=session)
                     if err:
                         st.error(f"Error fetching {page_title}: {err}")
                         continue
@@ -836,11 +846,13 @@ with tab_fix_pages:
                         
                         if new_text != text:
                             try:
+                                # Pass the authenticated session to upload
                                 upload_to_bahaiworks(
                                     page_title, 
                                     new_text, 
                                     f"Adjusted {{page|...}} numbering by {offset} (Misc Tool)", 
-                                    check_exists=False
+                                    check_exists=False,
+                                    session=session
                                 )
                                 success_count += 1
                             except Exception as e:
