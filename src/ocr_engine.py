@@ -64,7 +64,7 @@ class OcrEngine:
                 is_illustration = True
                 break
 
-        if image_index < config.first_numbered_page_index:
+        if image_index <= config.first_numbered_page_index:
             # Roman Numerals (Front Matter)
             # Offset by 1 if cover image exists
             roman_val = image_index - (1 if config.has_cover_image else 0)
@@ -174,19 +174,26 @@ class OcrEngine:
 
         print(f"Starting OCR for {self.book_name} ({config.language})...")
 
-        for i, img_path in enumerate(image_files, start=1):
+        for loop_idx, img_path in enumerate(image_files, start=1):
             # Update Progress Bar (if provided)
             if progress_callback:
-                progress_callback(i, total_images)
+                progress_callback(loop_idx, total_images)
+
+            # Extract the actual physical page number from the filename (e.g., "page-57.png" -> 57)
+            filename_only = os.path.basename(img_path)
+            page_num_match = re.findall(r'\d+', filename_only)
+            if not page_num_match:
+                continue
+            physical_page = int(page_num_match[-1])
 
             # Skip cover image if configured
-            if config.has_cover_image and i == 1:
-                print(f"Skipping cover image {i}")
+            if config.has_cover_image and physical_page == 1:
+                print(f"Skipping cover image {physical_page}")
                 continue
 
             # A. Calculate Page Label
             label, illus_counter, real_page_counter = self._get_page_label(
-                i, config, illus_counter, real_page_counter
+                physical_page, config, illus_counter, real_page_counter
             )
 
             # B. Perform OCR
@@ -201,7 +208,7 @@ class OcrEngine:
 
             # C. Format Template
             # {{page|label|file=Filename.pdf|page=index}}
-            template = f"{{{{page|{label}|file={self.filename}|page={i}}}}}"
+            template = f"{{{{page|{label}|file={self.filename}|page={physical_page}}}}}"
             
             # Combine
             page_content = f"{template}\n{text}\n"
