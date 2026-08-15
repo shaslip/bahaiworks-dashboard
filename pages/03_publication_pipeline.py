@@ -61,16 +61,23 @@ with Session(engine) as session:
         select(Document).where(Document.status == "DIGITIZED").order_by(Document.filename)
     ).all()
 
-if not digitized_docs and not st.session_state.get("selected_doc_id"):
+doc_options = {d.id: d.filename for d in digitized_docs}
+current_id = st.session_state.get("selected_doc_id")
+
+# Prevent crash if the document was just marked COMPLETED and removed from the list
+if current_id and current_id not in doc_options:
+    st.success("🎉 The previously selected document has been successfully processed and removed from the queue.")
+    if st.button("⬅️ Return to Dashboard"):
+        del st.session_state["selected_doc_id"]
+        go_back()
+    st.stop()
+
+if not digitized_docs and not current_id:
     st.warning("No digitized documents available for publication.")
     st.button("⬅️ Return to Dashboard", on_click=go_back)
     st.stop()
 
-# --- Document Selector UI ---
-doc_options = {d.id: d.filename for d in digitized_docs}
-
 # Determine default selection
-current_id = st.session_state.get("selected_doc_id")
 default_index = 0
 if current_id in doc_options:
     default_index = list(doc_options.keys()).index(current_id)
@@ -92,7 +99,7 @@ if new_selected_id != st.session_state.get("selected_doc_id"):
     st.session_state.pipeline_stage = "setup"
     
     # Clear out old book data from memory so it doesn't bleed over
-    keys_to_clear = ["target_page", "meta_result", "talk_text", "meta_json_str", "toc_json_list", "chapter_df", "page_map", "page_order", "splitter_indices", "split_completed"]
+    keys_to_clear = ["target_page", "meta_result", "talk_text", "meta_json_str", "toc_json_list", "chapter_df", "page_map", "page_order", "splitter_indices", "split_completed", "parent_qid"]
     for key in keys_to_clear:
         if key in st.session_state:
             del st.session_state[key]
@@ -144,6 +151,7 @@ with g4:
 
 if not has_txt:
     st.error(f"❌ Critical: No OCR text file found at {txt_path}.")
+    st.info("Please ensure the text file exists, or select a different document.")
     st.stop()
 
 st.divider()
@@ -265,20 +273,13 @@ elif st.session_state.pipeline_stage == "proof":
                 st.subheader("Wikibase Item")
                 json_text = st.text_area("Item JSON", value=st.session_state.get("meta_json_str", "{}"), height=500, key="meta_edit")
                 
-                c_btn1, c_btn2 = st.columns(2)
-                with c_btn1:
-                    if st.button("1. Create Item", type="primary", width='stretch'):
-                        try:
-                            qid = import_book_to_wikibase(json.loads(json_text))
-                            st.session_state["parent_qid"] = qid
-                            st.success(f"Created: {qid}")
-                        except Exception as e: st.error(str(e))
-                with c_btn2:
-                    if "parent_qid" in st.session_state:
-                        if st.button("2. Link Page", width='stretch'):
-                            ok, msg = set_sitelink(st.session_state["parent_qid"], st.session_state['target_page'])
-                            if ok: st.success("Linked")
-                            else: st.error(msg)
+                if st.button("1. Create Item", type="primary", width='stretch'):
+                    try:
+                        qid = import_book_to_wikibase(json.loads(json_text))
+                        st.session_state["parent_qid"] = qid
+                        st.success(f"Created: {qid}")
+                    except Exception as e: st.error(str(e))
+                st.caption("Note: Linking to the Wiki page happens in Tab 2 after the page is created.")
 
             # COLUMN 3: TOC JSON (Source)
             with c_toc:
@@ -577,20 +578,13 @@ elif st.session_state.pipeline_stage == "proof":
             st.subheader("Wikibase Item")
             json_text = st.text_area("Item JSON", value=st.session_state.get("meta_json_str", "{}"), height=300, key="meta_edit")
             
-            c_btn1, c_btn2 = st.columns(2)
-            with c_btn1:
-                if st.button("1. Create Item", type="primary", width='stretch'):
-                    try:
-                        qid = import_book_to_wikibase(json.loads(json_text))
-                        st.session_state["parent_qid"] = qid
-                        st.success(f"Created: {qid}")
-                    except Exception as e: st.error(str(e))
-            with c_btn2:
-                if "parent_qid" in st.session_state:
-                    if st.button("2. Link Page", width='stretch'):
-                        ok, msg = set_sitelink(st.session_state["parent_qid"], st.session_state['target_page'])
-                        if ok: st.success("Linked")
-                        else: st.error(msg)
+            if st.button("1. Create Item", type="primary", width='stretch'):
+                try:
+                    qid = import_book_to_wikibase(json.loads(json_text))
+                    st.session_state["parent_qid"] = qid
+                    st.success(f"Created: {qid}")
+                except Exception as e: st.error(str(e))
+            st.caption("Note: The Wikibase item will be automatically linked to the Wiki page when you click 'Upload All & Complete'.")
                         
         # COLUMN 3: PREVIEW & UPLOAD
         with c_preview:
@@ -667,14 +661,21 @@ elif st.session_state.pipeline_stage == "proof":
                                 check_exists=False 
                             )
                             
-                        # 4. Mark DB as Complete
+                        # 4. Link Wikibase Item
+                        if st.session_state.get("parent_qid"):
+                            ok, msg = set_sitelink(st.session_state["parent_qid"], target_title)
+                            if ok:
+                                st.success("✅ Linked to Wikibase Item")
+                            else:
+                                st.warning(f"⚠️ Wikibase link failed: {msg}")
+                            
+                        # 5. Mark DB as Complete
                         with Session(engine) as session:
                             rec = session.get(Document, doc_id)
                             rec.status = "COMPLETED"
                             session.commit()
                         
                         st.success("✅ All pages created and document marked as COMPLETED.")
-                        if st.button("Return to Dashboard"): go_back()
                         
                     except Exception as e:
                         st.error(f"Upload failed: {e}")
