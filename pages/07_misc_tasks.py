@@ -36,12 +36,13 @@ with st.expander("ℹ️ Help / Instructions"):
 st.markdown("---")
 
 # --- TABS ---
-tab_create_author, tab_ac, tab_update_author, tab_maintenance, tab_media = st.tabs([
+tab_create_author, tab_ac, tab_update_author, tab_maintenance, tab_media, tab_fix_pages = st.tabs([
     "👤 Create Author Pages", 
     "📖 AC Messages", 
     "📝 Update Author list",
     "🔧 Maintenance",
-    "🖼️ Bahai.media Images"
+    "🖼️ Bahai.media Images",
+    "📄 Fix Page Numbering"
 ])
 
 # --- Author page maintenance and exclusions ---
@@ -767,3 +768,86 @@ with tab_media:
             
         except Exception as e:
             st.error(f"❌ An error occurred: {e}")
+
+# ==============================================================================
+# TAB 6: FIX PAGE NUMBERING
+# ==============================================================================
+with tab_fix_pages:
+    st.header("📄 Fix Page Numbering")
+    st.info("Adjusts the displayed page number in {{page|...}} templates across all subpages of a given work. Roman numerals are ignored.")
+    
+    col_p1, col_p2 = st.columns(2)
+    with col_p1:
+        parent_title = st.text_input("Parent Page Title", placeholder="e.g. Foundations of World Unity")
+    with col_p2:
+        offset = st.number_input("Page Number Offset", value=0, step=1, help="Positive or negative integer to adjust the page numbers by.")
+        
+    if st.button("🚀 Process Pages", type="primary"):
+        if not parent_title.strip():
+            st.warning("Please enter a Parent Page Title.")
+        elif offset == 0:
+            st.warning("Offset is 0. No changes will be made.")
+        else:
+            api_url = "https://bahai.works/api.php"
+            params = {
+                "action": "query",
+                "list": "allpages",
+                "apprefix": f"{parent_title.strip()}/",
+                "aplimit": "max",
+                "format": "json"
+            }
+            
+            with st.spinner("Fetching subpages..."):
+                pages_to_process = []
+                while True:
+                    resp = requests.get(api_url, params=params).json()
+                    pages_to_process.extend([p['title'] for p in resp.get('query', {}).get('allpages', [])])
+                    if 'continue' not in resp:
+                        break
+                    params['apcontinue'] = resp['continue']['apcontinue']
+                    
+            if not pages_to_process:
+                st.warning("No subpages found for that title.")
+            else:
+                progress_bar = st.progress(0)
+                status_box = st.empty()
+                
+                success_count = 0
+                for i, page_title in enumerate(pages_to_process):
+                    status_box.write(f"Processing **{page_title}**...")
+                    
+                    text, err = fetch_wikitext(page_title)
+                    if err:
+                        st.error(f"Error fetching {page_title}: {err}")
+                        continue
+                        
+                    if text and re.search(r'\{\{[pP]age\|', text):
+                        
+                        # Regex captures 3 groups: 1) {{page| 2) The number 3) The closing | or }
+                        def replacer(match):
+                            prefix = match.group(1)
+                            current_num = int(match.group(2))
+                            suffix = match.group(3)
+                            new_num = current_num + offset
+                            return f"{prefix}{new_num}{suffix}"
+                            
+                        # \d+ ensures we only match Arabic numerals, naturally ignoring Roman numerals
+                        new_text = re.sub(r'(\{\{[pP]age\|)(\d+)(\||\})', replacer, text)
+                        
+                        if new_text != text:
+                            try:
+                                upload_to_bahaiworks(
+                                    page_title, 
+                                    new_text, 
+                                    f"Adjusted {{page|...}} numbering by {offset} (Misc Tool)", 
+                                    check_exists=False
+                                )
+                                success_count += 1
+                            except Exception as e:
+                                st.error(f"Error saving {page_title}: {e}")
+                                
+                    progress_bar.progress((i + 1) / len(pages_to_process))
+                    
+                status_box.success(f"✅ Complete! Updated templates on {success_count} pages.")
+                if success_count > 0:
+                    st.balloons()
