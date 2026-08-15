@@ -134,11 +134,8 @@ g1, g2, g3, g4 = st.columns(4)
 with g1:
     st.session_state["target_page"] = st.text_input("🎯 Page Title", value=st.session_state["target_page"])
 with g2:
-    # CHANGED: Radio -> Selectbox with Smart Default
     pub_language = st.selectbox("Language", lang_options, index=default_lang_index, key="cfg_lang")
 with g3:
-    # CHANGED: Radio -> Selectbox, Default to Unstructured
-    # Note: If you want Unstructured as default, it must be 0th index
     type_options = ["Unstructured", "Book", "Periodical"]
     pub_type = st.selectbox("Type", type_options, index=0, key="cfg_type")
 with g4:
@@ -156,8 +153,8 @@ st.divider()
 # ==============================================================================
 if st.session_state.pipeline_stage == "setup":
     
-    # Only show extraction tools for Books
-    if pub_type == "Book":
+    # Show extraction tools for Books and Unstructured
+    if pub_type in ["Book", "Unstructured"]:
         st.info("Configure extraction or enter data manually.")
         
         c_cr, c_toc = st.columns(2)
@@ -165,8 +162,12 @@ if st.session_state.pipeline_stage == "setup":
             st.subheader("©️ Copyright Pages")
             cr_pages = st.text_input("Range (e.g. 1-2)", key="cr_input")
         with c_toc:
-            st.subheader("📑 TOC Pages")
-            toc_pages = st.text_input("Range (e.g. 5-8)", key="toc_input")
+            if pub_type == "Book":
+                st.subheader("📑 TOC Pages")
+                toc_pages = st.text_input("Range (e.g. 5-8)", key="toc_input")
+            else:
+                st.write("*(TOC Extraction not applicable for Unstructured)*")
+                toc_pages = ""
 
         st.markdown("---")
 
@@ -187,15 +188,20 @@ if st.session_state.pipeline_stage == "setup":
                         else:
                             st.error(f"Metadata Extraction Failed: {res['error']}")
 
-                    # 2. Extract TOC
-                    if toc_pages:
-                        res = extract_toc_from_pdf(file_path, toc_pages)
-                        if "error" not in res:
-                            st.session_state["toc_json_list"] = res.get("toc_json", [])
-                            st.session_state.pipeline_stage = "proof"
-                            st.rerun()
-                        else:
-                            st.error(f"TOC Extraction Failed: {res['error']}")
+                    # 2. Extract TOC (Book only)
+                    if pub_type == "Book":
+                        if toc_pages:
+                            res = extract_toc_from_pdf(file_path, toc_pages)
+                            if "error" not in res:
+                                st.session_state["toc_json_list"] = res.get("toc_json", [])
+                                st.session_state.pipeline_stage = "proof"
+                                st.rerun()
+                            else:
+                                st.error(f"TOC Extraction Failed: {res['error']}")
+                    else:
+                        # Unstructured proceeds immediately after metadata
+                        st.session_state.pipeline_stage = "proof"
+                        st.rerun()
         
         # B. Manual Entry (Bypass)
         with b_manual:
@@ -208,7 +214,7 @@ if st.session_state.pipeline_stage == "setup":
                 st.rerun()
 
     else:
-        # Non-Book Flow (Immediate Jump)
+        # Periodical Flow (Immediate Jump)
         st.info(f"Simple workflow selected for **{pub_type}**. Proceeding to editor.")
         if st.button("Proceed", type="primary"):
             st.session_state.pipeline_stage = "proof"
@@ -223,7 +229,7 @@ elif st.session_state.pipeline_stage == "proof":
     if "toc_version" not in st.session_state:
         st.session_state["toc_version"] = 0
 
-    # NEW: Navigation to return to Setup
+    # Navigation to return to Setup
     if st.button("⬅️ Back to Setup", key="back_to_setup"):
         st.session_state.pipeline_stage = "setup"
         st.rerun()
@@ -543,9 +549,140 @@ elif st.session_state.pipeline_stage == "proof":
                     st.rerun()
 
     # --------------------------
-    # BRANCH: SIMPLE WORKFLOW (Periodical / Unstructured)
+    # BRANCH: UNSTRUCTURED WORKFLOW
     # --------------------------
-    else:
+    elif pub_type == "Unstructured":
+        st.subheader("📝 Unstructured Booklet Workflow")
+        
+        c_talk, c_item, c_preview = st.columns(3)
+        
+        # COLUMN 1: TALK PAGE
+        with c_talk:
+            st.subheader(f"Talk:{st.session_state['target_page']}")
+            talk_text = st.text_area("Copyright / Talk Page Text", value=st.session_state.get("talk_text", ""), height=300, key="talk_edit")
+            
+            if st.button(f"☁️ Upload Talk Page", type="primary", width='stretch'):
+                try:
+                    upload_to_bahaiworks(
+                        f"Talk:{st.session_state['target_page']}", 
+                        talk_text, 
+                        "Init OCR", 
+                        check_exists=True
+                    )
+                    st.success("✅ Uploaded Talk Page")
+                except Exception as e: st.error(str(e))
+
+        # COLUMN 2: WIKIBASE ITEM
+        with c_item:
+            st.subheader("Wikibase Item")
+            json_text = st.text_area("Item JSON", value=st.session_state.get("meta_json_str", "{}"), height=300, key="meta_edit")
+            
+            c_btn1, c_btn2 = st.columns(2)
+            with c_btn1:
+                if st.button("1. Create Item", type="primary", width='stretch'):
+                    try:
+                        qid = import_book_to_wikibase(json.loads(json_text))
+                        st.session_state["parent_qid"] = qid
+                        st.success(f"Created: {qid}")
+                    except Exception as e: st.error(str(e))
+            with c_btn2:
+                if "parent_qid" in st.session_state:
+                    if st.button("2. Link Page", width='stretch'):
+                        ok, msg = set_sitelink(st.session_state["parent_qid"], st.session_state['target_page'])
+                        if ok: st.success("Linked")
+                        else: st.error(msg)
+                        
+        # COLUMN 3: PREVIEW & UPLOAD
+        with c_preview:
+            st.subheader("Preview & Execute")
+            
+            target_title = st.session_state['target_page']
+            base_filename = filename.replace(".pdf", "")
+            cover_filename = f"{base_filename}_cover.png"
+            
+            if is_copyright:
+                main_wikitext = f"""{{{{restricted use|where=us|until= }}}}
+{{{{header
+ | title      = 
+ | author     = 
+ | translator = 
+ | compiler   = 
+ | publisher  = 
+ | section    = 
+ | previous   = 
+ | next       = 
+ | year       = 
+ | notes      = {{{{home |link= | pdf= | media= }}}}
+ | categories = All publications/Booklets
+ | portal     =
+}}}}
+
+{{{{coversearch|{cover_filename}}}}}"""
+            else:
+                main_wikitext = f"""{{{{header
+ | title      = 
+ | author     = 
+ | translator = 
+ | compiler   = 
+ | section    = 
+ | previous   = 
+ | next       = 
+ | publisher  = 
+ | year       = 
+ | notes      = {{{{home |link= | pdf=[{{{{filepath:{filename}}}}} PDF] | media= }}}}
+ | categories = All publications/Booklets
+ | portal     = 
+}}}}
+
+<pdf>File:{filename}</pdf>"""
+
+            st.code(main_wikitext, language="mediawiki")
+            
+            if st.button("🚀 Upload All & Complete", type="primary", width='stretch'):
+                with st.spinner("Uploading pages..."):
+                    try:
+                        # 1. Upload Main Page
+                        upload_to_bahaiworks(target_title, main_wikitext, "Init Unstructured Booklet")
+                        
+                        # 2. Read full text & Upload /Text page
+                        with open(txt_path, "r", encoding="utf-8") as f:
+                            full_txt_content = f.read()
+                            
+                        if is_copyright:
+                            access_group = target_title.replace(" ", "")
+                            text_wikitext = f"<accesscontrol>Access:{access_group}</accesscontrol>{{{{Publicationinfo}}}}\n\n{full_txt_content}"
+                        else:
+                            text_wikitext = f"{{{{Publicationinfo}}}}\n\n{full_txt_content}"
+                            
+                        upload_to_bahaiworks(f"{target_title}/Text", text_wikitext, "Init Unstructured Booklet Text")
+                        
+                        # 3. Apply protection to PDF if copyrighted
+                        if is_copyright:
+                            file_page_title = f"File:{filename}"
+                            file_page_text = f"<accesscontrol>Access:{access_group}</accesscontrol>"
+                            upload_to_bahaiworks(
+                                file_page_title, 
+                                file_page_text, 
+                                "Automated: Applied Access Control tag to File page",
+                                check_exists=False 
+                            )
+                            
+                        # 4. Mark DB as Complete
+                        with Session(engine) as session:
+                            rec = session.get(Document, doc_id)
+                            rec.status = "COMPLETED"
+                            session.commit()
+                        
+                        st.success("✅ All pages created and document marked as COMPLETED.")
+                        if st.button("Return to Dashboard"): go_back()
+                        
+                    except Exception as e:
+                        st.error(f"Upload failed: {e}")
+
+    # --------------------------
+    # BRANCH: PERIODICAL WORKFLOW
+    # --------------------------
+    elif pub_type == "Periodical":
         st.subheader(f"📝 {pub_type} Details")
         
         c_sim1, c_sim2 = st.columns(2)
@@ -596,17 +733,7 @@ elif st.session_state.pipeline_stage == "proof":
             if is_copyright:
                 header_text = "{{restricted use|where=|until=}}\n" + header_text
             
-            wiki_body = ""
-            if pub_type == "Periodical":
-                wiki_body = f"<pdf>File:{filename}</pdf>"
-            else:
-                # Unstructured / Booklet
-                summary_block = f"{{{{ai|{sim_summary}}}}}" if sim_summary else ""
-                
-                if pub_language == "German":
-                     wiki_body = f"{summary_block}\n\n== Zugang ==\n* [{{{{filepath:{filename}}}}} PDF]\n* Für den Volltext siehe [[/Text]]."
-                else:
-                     wiki_body = f"{summary_block}\n\n* [{{{{filepath:{filename}}}}} PDF]"
+            wiki_body = f"<pdf>File:{filename}</pdf>"
 
             final_wikitext = f"{header_text}\n\n{wiki_body}"
             st.code(final_wikitext, language="mediawiki")
