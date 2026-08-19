@@ -463,6 +463,8 @@ def extract_image_caption_and_filename(image, default_name="fallback_image.png",
             }
         ]
         """
+        # For document mode, retry and fallback are the same (no text extraction)
+        prompt_fallback = prompt_retry 
     else:
         prompt = """
         Analyze this book page. 
@@ -491,6 +493,21 @@ def extract_image_caption_and_filename(image, default_name="fallback_image.png",
         [
             {
                 "caption": "Extracted text OR [CAPTION TOO LONG - INSERT MANUALLY]",
+                "filename": "Proposed_filename.png"
+            }
+        ]
+        If there are no images, return an empty array [].
+        """
+        prompt_fallback = """
+        Analyze this book page. 
+        1. Identify all distinct images/illustrations on the page.
+        2. DO NOT EXTRACT ANY CAPTIONS. For the caption field of EVERY image, output EXACTLY this string: "[CAPTION TOO LONG - INSERT MANUALLY]"
+        3. Propose a short, descriptive filename for each image based on its visual contents (must end in .png). Omit apostrophes entirely and use underscores instead of spaces. Include a year if visible.
+        
+        Return ONLY a valid JSON array of objects, one for each image, in this format:
+        [
+            {
+                "caption": "[CAPTION TOO LONG - INSERT MANUALLY]",
                 "filename": "Proposed_filename.png"
             }
         ]
@@ -526,10 +543,15 @@ def extract_image_caption_and_filename(image, default_name="fallback_image.png",
     try:
         response = model.generate_content([prompt, image], safety_settings=safety_settings)
         
-        # Check for Recitation/Copyright block (finish_reason 4)
+        # 1st Check for Recitation/Copyright block (finish_reason 4)
         if response.candidates and response.candidates[0].finish_reason == 4:
-            print("Debug: Caught recitation block (caption too long). Retrying with short caption prompt...")
+            print("Debug: Caught recitation block. Retrying with selective short caption prompt...")
             response = model.generate_content([prompt_retry, image], safety_settings=safety_settings)
+            
+            # 2nd Check for Recitation/Copyright block
+            if response.candidates and response.candidates[0].finish_reason == 4:
+                print("Debug: Caught recitation block AGAIN. Retrying with strict no-caption fallback...")
+                response = model.generate_content([prompt_fallback, image], safety_settings=safety_settings)
         
         # Try to match an array first
         match_array = re.search(r'\[.*\]', response.text, re.DOTALL)
