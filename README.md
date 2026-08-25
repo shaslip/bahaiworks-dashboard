@@ -31,7 +31,7 @@ The application is structured into a main dashboard and several specialized work
 
 1.  **Clone the repository:**
     ```bash
-    git clone [https://github.com/shaslip/bahaiworks-dashboard.git](https://github.com/shaslip/bahaiworks-dashboard.git) dashboard
+    git clone https://github.com/shaslip/bahaiworks-dashboard.git dashboard
     cd dashboard
     ```
 
