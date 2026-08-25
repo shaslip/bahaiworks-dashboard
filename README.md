@@ -50,12 +50,12 @@ The application is structured into a main dashboard and several specialized work
     ```
     *(Note: If your system default is Python 3.13+, you will need to install an older version and explicitly call it, e.g., `python3.12 -m venv venv`).*
 
-2.  **Install Python dependencies:**
+3.  **Install Python dependencies:**
     ```bash
     pip install -r requirements.txt
     ```
 
-3.  **Configure secrets:**
+4.  **Configure secrets:**
     Create a `.env` file in the root directory:
     ```env
     # Gemini & Wiki Credentials
