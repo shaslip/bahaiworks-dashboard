@@ -19,7 +19,7 @@ The application is structured into a main dashboard and several specialized work
 
 ## Requirements
 
-* **Python 3.10+**
+* **Python 3.10 to 3.12** *(Note: Python 3.13+ is not currently supported due to TensorFlow dependencies).*
 * **Google Gemini API Key**
 * **Tesseract OCR Engine:**
     * *Linux:* `sudo apt install tesseract-ocr`
@@ -34,6 +34,21 @@ The application is structured into a main dashboard and several specialized work
     git clone [https://github.com/shaslip/bahaiworks-dashboard.git](https://github.com/shaslip/bahaiworks-dashboard.git) dashboard
     cd dashboard
     ```
+
+2.  **Create and activate a virtual environment (Recommended):**
+    Ensure your default Python version is compatible (3.10 to 3.12) by checking `python3 --version`. 
+    
+    *Linux / MacOS:*
+    ```bash
+    python3 -m venv venv
+    source venv/bin/activate
+    ```
+    *Windows:*
+    ```cmd
+    python -m venv venv
+    venv\Scripts\activate
+    ```
+    *(Note: If your system default is Python 3.13+, you will need to install an older version and explicitly call it, e.g., `python3.12 -m venv venv`).*
 
 2.  **Install Python dependencies:**
     ```bash
