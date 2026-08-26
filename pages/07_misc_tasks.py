@@ -870,7 +870,9 @@ with tab_fix_pages:
 # ==============================================================================
 with tab_periodicals:
     st.header("📰 Create Periodical Issue Categories")
-    st.info("Batch create category pages for periodical issues (e.g., AB Volume X No Y).")
+    st.info("Batch create category pages for periodical issues on bahai.media (e.g., AB Volume X No Y).")
+    
+    MEDIA_API = "https://bahai.media/api.php"
     
     default_data = """AB Volume 1 (1 C, 7 F)
 AB Volume 2 (1 C, 12 F)
@@ -913,7 +915,7 @@ AB Volume 32 (1 C, 10 F)"""
         parent_cat_prefix = st.text_input("Parent Category Prefix", value="AB Volume")
         
     with col_per2:
-        if st.button("🚀 Generate Categories", type="primary"):
+        if st.button("🚀 Generate Categories on bahai.media", type="primary"):
             # Regex to extract Volume number and max 'F' issues
             volumes = []
             for line in raw_data.split('\n'):
@@ -948,19 +950,20 @@ AB Volume 32 (1 C, 10 F)"""
                         status_box.write(f"Creating `{cat_title}`...")
                         
                         try:
-                            upload_to_bahaiworks(
-                                cat_title,
-                                content,
-                                "Batch created periodical issue category (Misc Tool)",
-                                check_exists=True
+                            # Correctly targeting bahai.media
+                            upload_to_mediawiki(
+                                title=cat_title,
+                                content=content,
+                                summary="Batch created periodical issue category (Misc Tool)",
+                                api_url=MEDIA_API
                             )
                             success_count += 1
-                        except FileExistsError:
-                            pass # Silently skip if it already exists
                         except Exception as e:
-                            st.error(f"Error on {cat_title}: {e}")
+                            # Catching general exceptions since upload_to_mediawiki might not raise FileExistsError exactly like upload_to_bahaiworks
+                            if "already exists" not in str(e).lower():
+                                st.error(f"Error on {cat_title}: {e}")
                             
                         progress_bar.progress(current_issue / total_issues)
                         
-                status_box.success(f"✅ Finished! Created {success_count} new categories.")
+                status_box.success(f"✅ Finished! Created/Verified {success_count} categories on bahai.media.")
                 st.balloons()
