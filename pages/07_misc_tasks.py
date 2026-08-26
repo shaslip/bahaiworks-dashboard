@@ -703,17 +703,24 @@ with tab_maintenance:
 # TAB 5: BAHAI.MEDIA IMAGES
 # ==============================================================================
 with tab_media:
-    st.header("🖼️ Baha'i News Image Sync (Bahai.media)")
+    st.header("🖼️ American Baha'i Image Sync (Bahai.media)")
     st.info("Updates the Category indicator to 25 and creates the Category Talk page to mark images as completed.")
     
     MEDIA_API = "https://bahai.media/api.php"
     
-    issue_num = st.text_input("Baha'i News Issue Number", placeholder="e.g. 595")
+    col_img1, col_img2 = st.columns(2)
+    with col_img1:
+        vol_num = st.text_input("Volume Number", value="1", placeholder="e.g. 1")
+    with col_img2:
+        issue_num = st.text_input("Issue Number (No)", placeholder="e.g. 7")
     
-    if st.button("🚀 Process Baha'i News Issue", type="primary") and issue_num:
+    if st.button("🚀 Process American Baha'i Issue", type="primary") and vol_num and issue_num:
+        vol_num = vol_num.strip()
         issue_num = issue_num.strip()
-        cat_title = f"Category:Baha'i News No {issue_num}"
-        talk_title = f"Category talk:Baha'i News No {issue_num}"
+        issue_padded = str(issue_num).zfill(2)
+        
+        cat_title = f"Category:AB Volume {vol_num} No {issue_num}"
+        talk_title = f"Category talk:AB Volume {vol_num} No {issue_num}"
         
         status_box = st.empty()
         
@@ -728,10 +735,9 @@ with tab_media:
             else:
                 if not cat_text:
                     # If page doesn't exist at all, we can create it with defaults
-                    cat_text = f"{{{{PublicationNav/BahaiNews|{issue_num}}}}}{{{{CatIndicator|0}}}}\n{{{{DEFAULTSORT:{issue_num}}}}}\n[[Category:Baha'i News]]"
+                    cat_text = f"{{{{PublicationNav/AmericanBahaiIssue|{vol_num}|{issue_num}}}}}{{{{CatIndicator|0}}}}\n{{{{DEFAULTSORT:{issue_padded}}}}}\n[[Category:AB Volume {vol_num}|{issue_padded}]]"
                 
                 # Replace {{CatIndicator|X}} with {{CatIndicator|25}}
-                # Using regex to catch it even if it's currently 0, 1, etc.
                 new_cat_text = re.sub(r'\{\{CatIndicator\|\d+\}\}', '{{CatIndicator|25}}', cat_text, flags=re.IGNORECASE)
                 
                 if new_cat_text == cat_text and "{{CatIndicator|25}}" not in new_cat_text:
