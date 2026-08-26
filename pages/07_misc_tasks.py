@@ -36,13 +36,14 @@ with st.expander("ℹ️ Help / Instructions"):
 st.markdown("---")
 
 # --- TABS ---
-tab_create_author, tab_ac, tab_update_author, tab_maintenance, tab_media, tab_fix_pages = st.tabs([
+tab_create_author, tab_ac, tab_update_author, tab_maintenance, tab_media, tab_fix_pages, tab_periodicals = st.tabs([
     "👤 Create Author Pages", 
     "📖 AC Messages", 
     "📝 Update Author list",
     "🔧 Maintenance",
     "🖼️ Bahai.media Images",
-    "📄 Fix Page Numbering"
+    "📄 Fix Page Numbering",
+    "📰 Periodical Categories"
 ])
 
 # --- Author page maintenance and exclusions ---
@@ -863,3 +864,103 @@ with tab_fix_pages:
                 status_box.success(f"✅ Complete! Updated templates on {success_count} pages.")
                 if success_count > 0:
                     st.balloons()
+
+# ==============================================================================
+# TAB 7: PERIODICAL CATEGORIES
+# ==============================================================================
+with tab_periodicals:
+    st.header("📰 Create Periodical Issue Categories")
+    st.info("Batch create category pages for periodical issues (e.g., AB Volume X No Y).")
+    
+    default_data = """AB Volume 1 (1 C, 7 F)
+AB Volume 2 (1 C, 12 F)
+AB Volume 3 (1 C, 12 F)
+AB Volume 4 (1 C, 11 F)
+AB Volume 5 (1 C, 12 F)
+AB Volume 6 (1 C, 12 F)
+AB Volume 7 (1 C, 12 F)
+AB Volume 8 (1 C, 12 F)
+AB Volume 9 (1 C, 19 F)
+AB Volume 10 (1 C, 14 F)
+AB Volume 11 (1 C, 12 F)
+AB Volume 12 (1 C, 12 F)
+AB Volume 13 (1 C, 12 F)
+AB Volume 14 (1 C, 12 F)
+AB Volume 15 (1 C, 12 F)
+AB Volume 16 (1 C, 13 F)
+AB Volume 17 (12 F)
+AB Volume 18 (13 F)
+AB Volume 19 (11 F)
+AB Volume 20 (12 F)
+AB Volume 21 (12 F)
+AB Volume 22 (13 F)
+AB Volume 23 (20 F)
+AB Volume 24 (18 F)
+AB Volume 25 (15 F)
+AB Volume 26 (10 F)
+AB Volume 27 (10 F)
+AB Volume 28 (10 F)
+AB Volume 29 (10 F)
+AB Volume 30 (10 F)
+AB Volume 31 (9 F)
+AB Volume 32 (1 C, 10 F)"""
+    
+    col_per1, col_per2 = st.columns(2)
+    with col_per1:
+        raw_data = st.text_area("Volume Data List", value=default_data, height=300)
+        pub_nav_template = st.text_input("PublicationNav Template", value="PublicationNav/AmericanBahaiIssue")
+        cat_prefix = st.text_input("Category Prefix (e.g., 'AB Volume')", value="AB Volume")
+        parent_cat_prefix = st.text_input("Parent Category Prefix", value="AB Volume")
+        
+    with col_per2:
+        if st.button("🚀 Generate Categories", type="primary"):
+            # Regex to extract Volume number and max 'F' issues
+            volumes = []
+            for line in raw_data.split('\n'):
+                match = re.search(r'Volume\s+(\d+).*?(\d+)\s*F', line)
+                if match:
+                    volumes.append((int(match.group(1)), int(match.group(2))))
+            
+            if not volumes:
+                st.error("Could not parse any volume data from the list.")
+            else:
+                total_issues = sum(v[1] for v in volumes)
+                st.write(f"Found {len(volumes)} volumes containing {total_issues} total issues.")
+                
+                progress_bar = st.progress(0)
+                status_box = st.empty()
+                
+                current_issue = 0
+                success_count = 0
+                
+                for vol, max_issue in volumes:
+                    for issue in range(1, max_issue + 1):
+                        current_issue += 1
+                        issue_padded = str(issue).zfill(2)
+                        
+                        cat_title = f"Category:{cat_prefix} {vol} No {issue}"
+                        
+                        # Build the exact Wikitext required
+                        content = f"{{{{{pub_nav_template}|{vol}|{issue}}}}}{{{{CatIndicator|0}}}}\n"
+                        content += f"{{{{DEFAULTSORT:{issue_padded}}}}}\n"
+                        content += f"[[Category:{parent_cat_prefix} {vol}|{issue_padded}]]"
+                        
+                        status_box.write(f"Creating `{cat_title}`...")
+                        
+                        try:
+                            upload_to_bahaiworks(
+                                cat_title,
+                                content,
+                                "Batch created periodical issue category (Misc Tool)",
+                                check_exists=True
+                            )
+                            success_count += 1
+                        except FileExistsError:
+                            pass # Silently skip if it already exists
+                        except Exception as e:
+                            st.error(f"Error on {cat_title}: {e}")
+                            
+                        progress_bar.progress(current_issue / total_issues)
+                        
+                status_box.success(f"✅ Finished! Created {success_count} new categories.")
+                st.balloons()
