@@ -22,10 +22,9 @@ st.set_page_config(page_title="Book Image Extractor", page_icon="🖼️", layou
 # HELPER FUNCTIONS
 # ==============================================================================
 
-# --- Constants / Wiki Data Fetching ---
-@st.cache_data(ttl=3600)  # Cache for 1 hour to avoid spamming the wiki API
-def fetch_offset_map(module_name):
-    """Fetches and parses a Lua offset map from a specified MediaWiki module."""
+@st.cache_data(ttl=3600)
+def fetch_bw_offset_map(module_name):
+    """Fetches and parses a simple 1D Lua offset map for Baha'i World."""
     url = "https://bahai.media/api.php"
     params = {
         "action": "query",
@@ -45,17 +44,12 @@ def fetch_offset_map(module_name):
             return {}
             
         content = pages[page_id]["revisions"][0]["slots"]["main"]["*"]
-        
-        # Regex to locate the local pdfOffset_map block
-        map_match = re.search(r'local pdfOffset_map\s*=\s*\{([^}]+)\}', content)
+        map_match = re.search(r'pdfOffset_map\s*=\s*\{([^}]+)\}', content)
         if not map_match:
             return {}
             
         map_str = map_match.group(1)
         offset_map = {}
-        
-        # Extract Lua table integer key/value pairs, allowing for optional quotes around the value
-        # e.g., [1] = 0 or [519] = "2"
         pairs = re.findall(r'\[\s*(\d+)\s*\]\s*=\s*[\'"]?(-?\d+)[\'"]?', map_str)
         for k, v in pairs:
             offset_map[int(k)] = int(v)
@@ -65,6 +59,61 @@ def fetch_offset_map(module_name):
         print(f"Error fetching {module_name} offset map: {e}")
         return {}
 
+@st.cache_data(ttl=3600)
+def fetch_ab_maps(module_name):
+    """Fetches both the double page map and offset map for American Baha'i."""
+    url = "https://bahai.media/api.php"
+    params = {
+        "action": "query",
+        "prop": "revisions",
+        "rvprop": "content",
+        "titles": module_name,
+        "format": "json",
+        "rvslots": "main"
+    }
+    try:
+        response = requests.get(url, params=params)
+        content = list(response.json().get("query", {}).get("pages", {}).values())[0]["revisions"][0]["slots"]["main"]["*"]
+        
+        dp_map = {}
+        dp_match = re.search(r'pdfDoublePage_map\s*=\s*\{([^}]+)\}', content)
+        if dp_match:
+            pairs = re.findall(r'\[\s*(\d+)\s*\]\s*=\s*(-?\d+)', dp_match.group(1))
+            dp_map = {int(k): int(v) for k, v in pairs}
+            
+        off_map = {}
+        off_match = re.search(r'pdfOffset_map\s*=\s*\{([^}]+)\}', content)
+        if off_match:
+            pairs = re.findall(r'\[\s*(\d+)\s*\]\s*=\s*(-?\d+)', off_match.group(1))
+            off_map = {int(k): int(v) for k, v in pairs}
+            
+        return dp_map, off_map
+    except Exception as e:
+        print(f"Error fetching {module_name} maps: {e}")
+        return {}, {}
+
+def calculate_ab_physical_page(pdf_page, vol, issue, dp_map, off_map):
+    """Reverses the Lua logic to find the physical page from the PDF page."""
+    # Replicate Lua string.format("%02d%02d", vol, issue)
+    key = int(f"{vol:02d}{issue:02d}")
+    
+    double_page_val = dp_map.get(key, 0)
+    base_offset = off_map.get(key, 0)
+    
+    # Fallback just in case of a typo in the Lua module (e.g. [351] instead of [3501])
+    if base_offset == 0 and int(f"{vol}{issue}") in off_map:
+        base_offset = off_map.get(int(f"{vol}{issue}"), 0)
+        
+    if double_page_val > 0:
+        # Calculate where the double page occurs in the PDF
+        threshold_pdf_page = double_page_val + base_offset
+        if pdf_page <= threshold_pdf_page:
+            return pdf_page - base_offset
+        else:
+            return pdf_page - base_offset + 1
+    else:
+        return pdf_page - base_offset
+
 def find_local_pdf(filename, root_folder):
     for dirpath, _, filenames in os.walk(root_folder):
         for f in filenames:
@@ -73,16 +122,13 @@ def find_local_pdf(filename, root_folder):
     return None
 
 def crop_illustrations(pil_img, expected_count=1):
-    """Uses OpenCV to find contours and crop out the illustrations. Returns a list of cropped images."""
+    """Uses OpenCV to find contours and crop out the illustrations."""
     img = np.array(pil_img)
     img = img[:, :, ::-1].copy() 
     
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    
-    # Invert the image
     _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
     
-    # Dilate to group parts of the illustration together
     kernel = np.ones((5,5), np.uint8)
     dilated = cv2.dilate(thresh, kernel, iterations=2)
     
@@ -91,35 +137,24 @@ def crop_illustrations(pil_img, expected_count=1):
     if not contours:
         return []
         
-    # Sort by area descending and take the top `expected_count` contours
     sorted_by_area = sorted(contours, key=cv2.contourArea, reverse=True)
     top_contours = sorted_by_area[:expected_count]
-    
-    # Sort top-to-bottom (Y), and left-to-right (X) for side-by-side images.
-    # We divide Y by 100 to group images roughly on the same row, preventing 
-    # slight vertical offsets from ruining the left-to-right order.
     top_contours = sorted(top_contours, key=lambda c: (cv2.boundingRect(c)[1] // 100, cv2.boundingRect(c)[0]))
     
     cropped_images = []
     for c in top_contours:
-        # 1. Get the rough bounding box from the dilated contour
         x, y, w, h = cv2.boundingRect(c)
         rough_crop = img[y:y+h, x:x+w]
         
-        # 2. Apply OpenCV equivalent of ImageMagick's 10% fuzz trim
         gray_cropped = cv2.cvtColor(rough_crop, cv2.COLOR_BGR2GRAY)
-        
-        # 10% of 255 is ~25. 255 - 25 = 230.
-        # Anything > 230 is background noise. Anything <= 230 is the illustration.
         _, thresh_cropped = cv2.threshold(gray_cropped, 230, 255, cv2.THRESH_BINARY_INV)
         coords = cv2.findNonZero(thresh_cropped)
         
-        # 3. Perform the final tight crop
         if coords is not None:
             tx, ty, tw, th = cv2.boundingRect(coords)
             final_crop = rough_crop[ty:ty+th, tx:tx+tw]
         else:
-            final_crop = rough_crop # Fallback if image is completely blank
+            final_crop = rough_crop 
             
         cropped_images.append(final_crop)
         
@@ -127,10 +162,8 @@ def crop_illustrations(pil_img, expected_count=1):
 
 def create_wiki_text_file(txt_path, caption, book_title, access_control="", 
                           is_bw_volume=False, bw_volume=None, 
-                          is_bn_issue=False, bn_issue=None, physical_page=None):
+                          is_ab_issue=False, ab_vol=None, ab_issue=None, physical_page=None):
     clean_title = re.sub(r'\.pdf$', '', book_title, flags=re.IGNORECASE).replace('_', ' ')
-    
-    # Add a newline after the tag if it exists, otherwise leave blank
     access_block = f"{access_control.strip()}\n" if access_control.strip() else ""
     
     if is_bw_volume and bw_volume is not None and physical_page is not None:
@@ -143,15 +176,15 @@ def create_wiki_text_file(txt_path, caption, book_title, access_control="",
 == File license ==
 {{{{Baha'i World excerpt}}}}
 """
-    elif is_bn_issue and bn_issue is not None and physical_page is not None:
+    elif is_ab_issue and ab_vol is not None and ab_issue is not None and physical_page is not None:
         content = f"""{access_block}== File info ==
 {{{{cs
 | caption = {caption}
-| source = {{{{bns|{bn_issue}|{physical_page}}}}}
+| source = {{{{ab|{ab_vol}|{ab_issue}|{physical_page}}}}}
 }}}}
 
 == File license ==
-{{{{Bn-excerpt}}}}
+{{{{Abn-copyright}}}}
 """
     else:
         content = f"""{access_block}== File info ==
@@ -174,20 +207,18 @@ st.title("🖼️ Book Image Extractor")
 st.sidebar.header("Configuration")
 input_folder = st.sidebar.text_input("Local PDF Root Folder", value="/home/sarah/Desktop/Projects/Bahai.works/English/")
 
-pdf_filename = st.text_input("PDF Filename", placeholder="e.g., A_Day_for_Very_Great_Things.pdf")
+pdf_filename = st.text_input("PDF Filename", placeholder="e.g., The_American_Bahá’í_Vol2_No1.pdf")
 page_ranges = st.text_input("Page Ranges", placeholder="e.g., 527-546, 12, 15-20")
 skip_crop_ranges = st.text_input("Full Page Document Ranges (Skip Cropping)", placeholder="e.g., 5, 10-12")
 access_control = st.text_input("Access Control (Optional)", placeholder="e.g., <accesscontrol>Access:DayVeryGreatThings</accesscontrol>")
 
 if st.button("🚀 Process Images", type="primary"):
-    # 1. Check if we at least have a filename
     if not pdf_filename:
         st.warning("Please provide a PDF filename.")
         st.stop()
         
-    # 2. Check if AT LEAST ONE of the range boxes has text
     if not page_ranges and not skip_crop_ranges:
-        st.warning("Please provide at least one page range (Standard or Full Page Document).")
+        st.warning("Please provide at least one page range.")
         st.stop()
         
     local_pdf_path = find_local_pdf(pdf_filename, input_folder)
@@ -196,11 +227,8 @@ if st.button("🚀 Process Images", type="primary"):
         st.error(f"❌ Could not find {pdf_filename} in {input_folder}")
         st.stop()
         
-    # 3. Parse both ranges safely (returns empty list if string is empty)
     standard_pages = parse_range_string(page_ranges) if page_ranges else []
     skip_crop_pages = parse_range_string(skip_crop_ranges) if skip_crop_ranges else []
-    
-    # 4. Combine them into one master list, removing duplicates and sorting
     pages_to_process = sorted(list(set(standard_pages + skip_crop_pages)))
     
     if not pages_to_process:
@@ -220,30 +248,32 @@ if st.button("🚀 Process Images", type="primary"):
     status_text = st.empty()
     log_container = st.container(border=True)
     
-    # --- Detect publication type & fetch offsets ---
+    # --- Detect publication type ---
     bw_match = re.search(r'BW_Volume(\d+)\.pdf', pdf_filename, re.IGNORECASE)
     is_bw_volume = bool(bw_match)
     bw_volume_num = int(bw_match.group(1)) if is_bw_volume else None
 
-    # Handles Baha'i_News_354.pdf or Bahai_News_354.pdf
-    bn_match = re.search(r'Baha\'?i_News_(\d+)\.pdf', pdf_filename, re.IGNORECASE)
-    is_bn_issue = bool(bn_match)
-    bn_issue_num = int(bn_match.group(1)) if is_bn_issue else None
+    # Handles The_American_Bahá’í_Vol2_No1.pdf (allows optional apostrophe for safety)
+    ab_match = re.search(r'The_American_Bahá[’\']í_Vol(\d+)_No(\d+)', pdf_filename, re.IGNORECASE)
+    is_ab_issue = bool(ab_match)
+    ab_vol_num = int(ab_match.group(1)) if is_ab_issue else None
+    ab_issue_num = int(ab_match.group(2)) if is_ab_issue else None
 
-    page_offset = 0
+    # --- Fetch Maps ---
+    bw_offset_map = {}
+    ab_dp_map = {}
+    ab_off_map = {}
+    
     if is_bw_volume:
         log_container.info(f"📚 Detected Bahá'í World Volume {bw_volume_num}. Fetching offset map...")
-        bw_offset_map = fetch_offset_map("Module:BahaiWorld")
-        page_offset = bw_offset_map.get(bw_volume_num, 0)
-    elif is_bn_issue:
-        log_container.info(f"📰 Detected Bahá'í News Issue {bn_issue_num}. Fetching offset map...")
-        bn_offset_map = fetch_offset_map("Module:BahaiNews")
-        page_offset = bn_offset_map.get(bn_issue_num, 0)
+        bw_offset_map = fetch_bw_offset_map("Module:BahaiWorld")
+    elif is_ab_issue:
+        log_container.info(f"📰 Detected American Bahá'í Vol {ab_vol_num} No {ab_issue_num}. Fetching offset maps...")
+        ab_dp_map, ab_off_map = fetch_ab_maps("Module:AmericanBahai")
 
     for idx, page_num in enumerate(pages_to_process):
         status_text.markdown(f"**Processing Page {page_num} ({idx+1}/{len(pages_to_process)})...**")
 
-        # 1. Extract Page using pdf2image
         log_container.write(f"📄 Extracting page {page_num}...")
         try:
             images = convert_from_path(local_pdf_path, first_page=page_num, last_page=page_num, dpi=300)
@@ -257,7 +287,6 @@ if st.button("🚀 Process Images", type="primary"):
 
         is_skip_crop = page_num in skip_crop_pages
 
-        # 2. Ask Gemini for Captions and Filenames
         if is_skip_crop:
             log_container.write("🧠 Requesting captions and filenames from Gemini (Document Mode)...")
             gemini_data_list = extract_image_caption_and_filename(pil_img, default_name=f"page_{page_num}_image.png", is_full_page_doc=True)
@@ -269,10 +298,8 @@ if st.button("🚀 Process Images", type="primary"):
             log_container.warning(f"⚠️ No images detected by Gemini on page {page_num}. Skipping.")
             continue
             
-        # 3. Crop Illustrations using OpenCV (or skip)
         if is_skip_crop:
             log_container.write("⏭️ Skipping auto-crop (full page document mode).")
-            # Convert the full PIL image to cv2 format so it matches the downstream save logic
             cropped_cv2_images = [cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)]
         else:
             log_container.write(f"✂️ Auto-cropping {len(gemini_data_list)} image(s) from page...")
@@ -285,7 +312,6 @@ if st.button("🚀 Process Images", type="primary"):
             if "[CAPTION TOO LONG - INSERT MANUALLY]" in caption:
                 log_container.warning(f"⚠️ Image {i+1} on page {page_num} requires manual caption entry due to length.")
             
-            # Ensure unique filename
             final_img_path = os.path.join(output_dir, proposed_filename)
             counter = 1
             while os.path.exists(final_img_path):
@@ -296,17 +322,20 @@ if st.button("🚀 Process Images", type="primary"):
             final_filename = os.path.basename(final_img_path)
             final_txt_path = os.path.join(output_dir, final_filename.replace(".png", ".txt"))
             
-            # Match the cropped image to the Gemini data (fallback to full page if crop fails)
             if i < len(cropped_cv2_images):
                 cv2.imwrite(final_img_path, cropped_cv2_images[i])
             else:
                 log_container.warning(f"⚠️ Could not auto-crop image {i+1}. Saving uncropped page.")
                 pil_img.save(final_img_path) 
                 
-            # 4. Generate .txt file
             log_container.write(f"📝 Generating MediaWiki text file for {final_filename}...")
             
-            physical_page = page_num - page_offset if (is_bw_volume or is_bn_issue) else None
+            # --- Calculate Physical Page ---
+            physical_page = None
+            if is_bw_volume:
+                physical_page = page_num - bw_offset_map.get(bw_volume_num, 0)
+            elif is_ab_issue:
+                physical_page = calculate_ab_physical_page(page_num, ab_vol_num, ab_issue_num, ab_dp_map, ab_off_map)
             
             create_wiki_text_file(
                 final_txt_path, 
@@ -315,8 +344,9 @@ if st.button("🚀 Process Images", type="primary"):
                 access_control,
                 is_bw_volume=is_bw_volume,
                 bw_volume=bw_volume_num,
-                is_bn_issue=is_bn_issue,
-                bn_issue=bn_issue_num,
+                is_ab_issue=is_ab_issue,
+                ab_vol=ab_vol_num,
+                ab_issue=ab_issue_num,
                 physical_page=physical_page
             )
             
