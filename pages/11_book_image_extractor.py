@@ -208,8 +208,8 @@ st.sidebar.header("Configuration")
 input_folder = st.sidebar.text_input("Local PDF Root Folder", value="/home/sarah/Desktop/Projects/Bahai.works/English/")
 
 pdf_filename = st.text_input("PDF Filename", placeholder="e.g., The_American_Bahá’í_Vol2_No1.pdf")
-page_ranges = st.text_input("Page Ranges", placeholder="e.g., 527-546, 12, 15-20")
-skip_crop_ranges = st.text_input("Full Page Document Ranges (Skip Cropping)", placeholder="e.g., 5, 10-12")
+page_ranges = st.text_input("Page Ranges", placeholder="e.g., 1-10, 12, 14-15")
+skip_crop_ranges = st.text_input("Full Page Document Ranges (Skip Cropping)", placeholder="e.g., 11, 16")
 access_control = st.text_input("Access Control (Optional)", placeholder="e.g., <accesscontrol>Access:DayVeryGreatThings</accesscontrol>")
 
 if st.button("🚀 Process Images", type="primary"):
