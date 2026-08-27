@@ -127,7 +127,9 @@ def crop_illustrations(pil_img, expected_count=1):
     img = img[:, :, ::-1].copy() 
     
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
+    
+    # Use Otsu's method to automatically find the threshold for the beige background
+    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     
     kernel = np.ones((5,5), np.uint8)
     dilated = cv2.dilate(thresh, kernel, iterations=2)
@@ -147,7 +149,9 @@ def crop_illustrations(pil_img, expected_count=1):
         rough_crop = img[y:y+h, x:x+w]
         
         gray_cropped = cv2.cvtColor(rough_crop, cv2.COLOR_BGR2GRAY)
-        _, thresh_cropped = cv2.threshold(gray_cropped, 230, 255, cv2.THRESH_BINARY_INV)
+        
+        # Apply Otsu's to the tight crop as well
+        _, thresh_cropped = cv2.threshold(gray_cropped, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
         coords = cv2.findNonZero(thresh_cropped)
         
         if coords is not None:
