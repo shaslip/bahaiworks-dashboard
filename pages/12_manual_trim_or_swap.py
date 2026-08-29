@@ -19,7 +19,7 @@ st.sidebar.header("Configuration")
 folder_path = st.sidebar.text_input("Images Folder Path", value="/home/sarah/Desktop/Projects/Bahai.works/English/images/")
 
 # Create Tabs
-tab1, tab2 = st.tabs(["✂️ Manual Trimmer", "🔄 Swap Misnamed Images"])
+tab1, tab2, tab3 = st.tabs(["✂️ Manual Trimmer", "🔄 Swap Misnamed Images", "📝 Rename & Caption"])
 
 # ==========================================
 # TAB 1: EXISTING MANUAL TRIMMER
@@ -247,3 +247,100 @@ with tab2:
                         else:
                             st.info("No file names were changed.")
             st.divider()
+
+# ==========================================
+# TAB 3: RENAME & CAPTION
+# ==========================================
+with tab3:
+    st.write("Find all images on a specific page to quickly rename them and update their captions.")
+    
+    target_page = st.text_input("Enter Page Number:")
+    
+    if target_page and os.path.exists(folder_path):
+        page_files = []
+        
+        # Find all files for this page
+        for filename in os.listdir(folder_path):
+            if filename.lower().endswith('.txt'):
+                txt_path = os.path.join(folder_path, filename)
+                try:
+                    with open(txt_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    
+                    # Match the source parameter to get the page number
+                    match = re.search(r'\|\s*source\s*=\s*\{\{.*?\|(-?\d+)\}\}', content)
+                    if match and match.group(1) == target_page.strip():
+                        base_name = os.path.splitext(filename)[0]
+                        
+                        # Find corresponding image
+                        img_path = None
+                        for ext in ['.png', '.jpg', '.jpeg']:
+                            p = os.path.join(folder_path, base_name + ext)
+                            if os.path.exists(p):
+                                img_path = p
+                                break
+                                
+                        if img_path:
+                            page_files.append((base_name, txt_path, img_path))
+                except Exception:
+                    pass
+                    
+        if not page_files:
+            st.info(f"No images found for page {target_page}.")
+        else:
+            with st.form(key=f"rename_form_{target_page}"):
+                updates = {}
+                
+                for base_name, txt_path, img_path in page_files:
+                    col_img, col_name, col_cap = st.columns([1, 2, 2])
+                    
+                    with col_img:
+                        st.image(img_path, width=150)
+                    with col_name:
+                        new_name = st.text_input("New Filename (without extension)", value=base_name, key=f"name_{base_name}")
+                    with col_cap:
+                        # Left empty by default as requested; will only overwrite if user types something
+                        new_caption = st.text_area("New Caption", key=f"cap_{base_name}")
+                        
+                    updates[base_name] = {
+                        "txt_path": txt_path,
+                        "img_path": img_path,
+                        "new_name": new_name,
+                        "new_caption": new_caption
+                    }
+                    st.divider()
+                    
+                if st.form_submit_button("Save Changes"):
+                    for base_name, data in updates.items():
+                        # Replace spaces with underscores for the filename
+                        n_name = data["new_name"].strip().replace(" ", "_")
+                        n_cap = data["new_caption"].strip()
+                        
+                        with open(data["txt_path"], 'r', encoding='utf-8') as f:
+                            content = f.read()
+                            
+                        # Update caption if user typed something
+                        if n_cap:
+                            # Overwrite existing caption field up to the next parameter '|' or closing '}}'
+                            content = re.sub(
+                                r'(\|\s*caption\s*=).*?(?=\n\s*\||\n\s*\}\}|$)', 
+                                r'\g<1> ' + n_cap, 
+                                content, 
+                                flags=re.DOTALL
+                            )
+                            
+                        # Save txt file
+                        new_txt_path = os.path.join(folder_path, f"{n_name}.txt")
+                        with open(new_txt_path, 'w', encoding='utf-8') as f:
+                            f.write(content)
+                            
+                        # Rename image and clean up old txt if the name changed
+                        if n_name != base_name:
+                            ext = os.path.splitext(data["img_path"])[1]
+                            new_img_path = os.path.join(folder_path, f"{n_name}{ext}")
+                            os.rename(data["img_path"], new_img_path)
+                            
+                            if data["txt_path"] != new_txt_path and os.path.exists(data["txt_path"]):
+                                os.remove(data["txt_path"])
+                                
+                    st.success("Files updated successfully!")
