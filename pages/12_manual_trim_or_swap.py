@@ -412,13 +412,18 @@ with tab4:
                         
                         temp_files = []
                         for i, (base_name, txt_path, img_path) in enumerate(page_files, start=1):
+                            # Grab the original extension BEFORE appending .tmp
+                            orig_ext = os.path.splitext(img_path)[1]
+                            
                             temp_img = img_path + ".tmp"
                             temp_txt = txt_path + ".tmp"
                             os.rename(img_path, temp_img)
                             os.rename(txt_path, temp_txt)
-                            temp_files.append((base_name, temp_txt, temp_img, i))
+                            
+                            # Store the orig_ext in the tuple
+                            temp_files.append((base_name, temp_txt, temp_img, i, orig_ext))
                         
-                        for base_name, temp_txt, temp_img, i in temp_files:
+                        for base_name, temp_txt, temp_img, i, orig_ext in temp_files:
                             n_name = f"{clean_base}-{i}"
                             
                             with open(temp_txt, 'r', encoding='utf-8') as f:
@@ -430,8 +435,8 @@ with tab4:
                             with open(new_txt_path, 'w', encoding='utf-8') as f:
                                 f.write(content)
                                 
-                            ext = os.path.splitext(temp_img)[1].replace(".tmp", "")
-                            new_img_path = os.path.join(folder_path, f"{n_name}{ext}")
+                            # Use the original extension we saved earlier
+                            new_img_path = os.path.join(folder_path, f"{n_name}{orig_ext}")
                             os.rename(temp_img, new_img_path)
                             os.remove(temp_txt)
                                 
