@@ -19,7 +19,7 @@ st.sidebar.header("Configuration")
 folder_path = st.sidebar.text_input("Images Folder Path", value="/home/sarah/Desktop/Projects/Bahai.works/English/images/")
 
 # Create Tabs
-tab1, tab2, tab3 = st.tabs(["✂️ Manual Trimmer", "🔄 Swap Misnamed Images", "📝 Rename & Caption"])
+tab1, tab2, tab3, tab4 = st.tabs(["✂️ Manual Trimmer", "🔄 Swap Misnamed Images", "📝 Rename & Caption", "🗂️ Bulk Rename"])
 
 # ==========================================
 # TAB 1: EXISTING MANUAL TRIMMER
@@ -369,3 +369,100 @@ with tab3:
                                     os.remove(data["txt_path"])
                                     
                         st.success("Files updated successfully!")
+
+# ==========================================
+# TAB 4: BULK RENAME
+# ==========================================
+with tab4:
+    st.write("Apply a single base filename and caption to all images on a specific page. Files will be numbered sequentially (e.g., -1, -2).")
+    
+    target_page_bulk = st.text_input("Enter Page Number:", key="bulk_target_page")
+    
+    if target_page_bulk and os.path.exists(folder_path):
+        page_files = []
+        
+        # Find all files for this page
+        for filename in os.listdir(folder_path):
+            if filename.lower().endswith('.txt'):
+                txt_path = os.path.join(folder_path, filename)
+                try:
+                    with open(txt_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    
+                    # Match the source parameter to get the page number
+                    match = re.search(r'\|\s*source\s*=\s*\{\{.*?\|(-?\d+)\}\}', content)
+                    if match and match.group(1) == target_page_bulk.strip():
+                        base_name = os.path.splitext(filename)[0]
+                        
+                        # Find corresponding image
+                        img_path = None
+                        for ext in ['.png', '.jpg', '.jpeg']:
+                            p = os.path.join(folder_path, base_name + ext)
+                            if os.path.exists(p):
+                                img_path = p
+                                break
+                                
+                        if img_path:
+                            # Sort by base_name so they apply -1, -2 in alphabetical order of their current names
+                            page_files.append((base_name, txt_path, img_path))
+                except Exception:
+                    pass
+                    
+        if not page_files:
+            st.info(f"No images found for page {target_page_bulk}.")
+        else:
+            page_files.sort(key=lambda x: x[0])
+            st.write(f"### Found {len(page_files)} images")
+            
+            # Display a quick row of thumbnails so you know what you are bulk renaming
+            cols = st.columns(min(len(page_files), 6))
+            for idx, (_, _, img_path) in enumerate(page_files):
+                with cols[idx % len(cols)]:
+                    st.image(img_path, use_container_width=True)
+                    
+            with st.form(key=f"bulk_rename_form_{target_page_bulk}"):
+                bulk_name = st.text_input("Base Filename (spaces will be converted to underscores)")
+                bulk_caption = st.text_area("Caption (applied to all images)")
+                
+                if st.form_submit_button("Apply Bulk Rename & Caption"):
+                    if not bulk_name.strip():
+                        st.error("Action blocked: Base filename cannot be blank.")
+                    else:
+                        clean_base = bulk_name.strip().replace(" ", "_")
+                        
+                        # Pass 1: Rename to temporary names to avoid file collision during the loop
+                        temp_files = []
+                        for i, (base_name, txt_path, img_path) in enumerate(page_files, start=1):
+                            temp_img = img_path + ".tmp"
+                            temp_txt = txt_path + ".tmp"
+                            os.rename(img_path, temp_img)
+                            os.rename(txt_path, temp_txt)
+                            temp_files.append((base_name, temp_txt, temp_img, i))
+                        
+                        # Pass 2: Apply final names and update txt contents
+                        for base_name, temp_txt, temp_img, i in temp_files:
+                            n_name = f"{clean_base}-{i}"
+                            
+                            with open(temp_txt, 'r', encoding='utf-8') as f:
+                                content = f.read()
+                                
+                            # Update the caption field
+                            content = re.sub(
+                                r'(\|\s*caption\s*=).*?(?=\r?\n\s*\||\r?\n\s*\}\}|$)', 
+                                r'\g<1> ' + bulk_caption.strip(), 
+                                content, 
+                                flags=re.DOTALL
+                            )
+                                
+                            # Save new txt file
+                            new_txt_path = os.path.join(folder_path, f"{n_name}.txt")
+                            with open(new_txt_path, 'w', encoding='utf-8') as f:
+                                f.write(content)
+                                
+                            # Rename image and remove temp txt
+                            ext = os.path.splitext(temp_img)[1].replace(".tmp", "")
+                            new_img_path = os.path.join(folder_path, f"{n_name}{ext}")
+                            os.rename(temp_img, new_img_path)
+                            os.remove(temp_txt)
+                                
+                        st.success(f"Successfully bulk-renamed {len(page_files)} files!")
