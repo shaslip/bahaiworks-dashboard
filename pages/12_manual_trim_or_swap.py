@@ -271,9 +271,9 @@ with tab3:
                     match = re.search(r'\|\s*source\s*=\s*\{\{.*?\|(-?\d+)\}\}', content)
                     if match and match.group(1) == target_page.strip():
                         base_name = os.path.splitext(filename)[0]
+                        current_page_val = match.group(1)
                         
                         # Extract existing caption if it exists
-                        # Removed \s* after the = so it doesn't consume the newline on blank captions
                         cap_match = re.search(r'\|\s*caption\s*=(.*?)(?=\r?\n\s*\||\r?\n\s*\}\}|$)', content, flags=re.DOTALL)
                         existing_caption = cap_match.group(1).strip() if cap_match else ""
                         
@@ -286,7 +286,7 @@ with tab3:
                                 break
                                 
                         if img_path:
-                            page_files.append((base_name, txt_path, img_path, existing_caption))
+                            page_files.append((base_name, txt_path, img_path, existing_caption, current_page_val))
                 except Exception:
                     pass
                     
@@ -296,48 +296,62 @@ with tab3:
             with st.form(key=f"rename_form_{target_page}"):
                 updates = {}
                 
-                for base_name, txt_path, img_path, existing_caption in page_files:
-                    col_img, col_name, col_cap = st.columns([1, 2, 2])
+                for base_name, txt_path, img_path, existing_caption, current_page_val in page_files:
+                    # Added a 4th column for the page number
+                    col_img, col_name, col_cap, col_page = st.columns([1.5, 2, 2.5, 1])
                     
                     with col_img:
                         st.image(img_path, width=150)
                     with col_name:
-                        new_name = st.text_input("New Filename (without extension)", value=base_name, key=f"name_{base_name}")
+                        new_name = st.text_input("New Filename (no ext)", value=base_name, key=f"name_{base_name}")
                     with col_cap:
-                        # Pre-fill with existing caption
                         new_caption = st.text_area("Caption", value=existing_caption, key=f"cap_{base_name}")
+                    with col_page:
+                        new_page = st.text_input("Page #", value=current_page_val, key=f"page_{base_name}")
                         
                     updates[base_name] = {
                         "txt_path": txt_path,
                         "img_path": img_path,
                         "new_name": new_name,
-                        "new_caption": new_caption
+                        "new_caption": new_caption,
+                        "new_page": new_page
                     }
                     st.divider()
                     
                 if st.form_submit_button("Save Changes"):
                     # --- Validation ---
                     new_names = [data["new_name"].strip().replace(" ", "_") for data in updates.values()]
+                    new_pages = [data["new_page"].strip() for data in updates.values()]
                     
                     if any(name == "" for name in new_names):
                         st.error("Action blocked: Filenames cannot be blank.")
                     elif len(new_names) != len(set(new_names)):
                         st.error("Action blocked: You entered duplicate filenames. Each image must have a unique name.")
+                    elif any(page == "" for page in new_pages):
+                        st.error("Action blocked: Page numbers cannot be blank.")
                     else:
                         # --- Processing ---
                         for base_name, data in updates.items():
                             n_name = data["new_name"].strip().replace(" ", "_")
                             n_cap = data["new_caption"].strip()
+                            n_page = data["new_page"].strip()
                             
                             with open(data["txt_path"], 'r', encoding='utf-8') as f:
                                 content = f.read()
                                 
-                            # Update the caption field using the same corrected regex pattern
+                            # 1. Update the caption field
                             content = re.sub(
                                 r'(\|\s*caption\s*=).*?(?=\r?\n\s*\||\r?\n\s*\}\}|$)', 
                                 r'\g<1> ' + n_cap, 
                                 content, 
                                 flags=re.DOTALL
+                            )
+                            
+                            # 2. Update the page number in the source field
+                            content = re.sub(
+                                r'(\|\s*source\s*=\s*\{\{.*?\|)\s*-?\d+\s*(\}\})', 
+                                r'\g<1>' + n_page + r'\2', 
+                                content
                             )
                                 
                             # Save txt file
