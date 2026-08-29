@@ -266,13 +266,14 @@ with tab3:
                     with open(txt_path, 'r', encoding='utf-8') as f:
                         content = f.read()
                     
-                    match = re.search(r'\|\s*source\s*=\s*\{\{[^}]*?\|\s*(-?\d+)\s*\}\}', content)
+                    # Reverted to the exact regex used in Tab 2 that is proven to work
+                    match = re.search(r'\|\s*source\s*=\s*\{\{.*?\|(-?\d+)\}\}', content)
                     if match and match.group(1) == target_page.strip():
                         base_name = os.path.splitext(filename)[0]
                         current_page_val = match.group(1)
                         
-                        # Simplified caption extraction: grab everything until a pipe or closing brace
-                        cap_match = re.search(r'\|\s*caption\s*=([^|}]*)', content)
+                        # Simplest possible regex: grab everything after "=" until the next "|"
+                        cap_match = re.search(r'\|\s*caption\s*=([^|]*)', content)
                         existing_caption = cap_match.group(1).strip() if cap_match else ""
                         
                         img_path = None
@@ -333,11 +334,11 @@ with tab3:
                             with open(data["txt_path"], 'r', encoding='utf-8') as f:
                                 content = f.read()
                                 
-                            # Simplified caption replacement
-                            content = re.sub(r'(\|\s*caption\s*=)[^|}]*', r'\g<1> ' + n_cap + '\n', content)
+                            # Replaces everything up to the next pipe with the new caption
+                            content = re.sub(r'(\|\s*caption\s*=)[^|]*', lambda m, cap=n_cap: f"{m.group(1)} {cap}\n", content)
                             
-                            # Update page number
-                            content = re.sub(r'(\|\s*source\s*=\s*\{\{[^}]*?\|)\s*-?\d+\s*(\}\})', r'\g<1>' + n_page + r'\2', content)
+                            # Updates the page number safely
+                            content = re.sub(r'(\|\s*source\s*=\s*\{\{.*?\|)-?\d+(\}\})', lambda m, p=n_page: f"{m.group(1)}{p}{m.group(2)}", content)
                                 
                             new_txt_path = os.path.join(folder_path, f"{n_name}.txt")
                             with open(new_txt_path, 'w', encoding='utf-8') as f:
@@ -372,7 +373,7 @@ with tab4:
                     with open(txt_path, 'r', encoding='utf-8') as f:
                         content = f.read()
                     
-                    match = re.search(r'\|\s*source\s*=\s*\{\{[^}]*?\|\s*(-?\d+)\s*\}\}', content)
+                    match = re.search(r'\|\s*source\s*=\s*\{\{.*?\|(-?\d+)\}\}', content)
                     if match and match.group(1) == target_page_bulk.strip():
                         base_name = os.path.splitext(filename)[0]
                         
@@ -423,8 +424,7 @@ with tab4:
                             with open(temp_txt, 'r', encoding='utf-8') as f:
                                 content = f.read()
                                 
-                            # Simplified caption replacement
-                            content = re.sub(r'(\|\s*caption\s*=)[^|}]*', r'\g<1> ' + bulk_caption.strip() + '\n', content)
+                            content = re.sub(r'(\|\s*caption\s*=)[^|]*', lambda m, cap=bulk_caption.strip(): f"{m.group(1)} {cap}\n", content)
                                 
                             new_txt_path = os.path.join(folder_path, f"{n_name}.txt")
                             with open(new_txt_path, 'w', encoding='utf-8') as f:
