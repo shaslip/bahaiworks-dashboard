@@ -272,6 +272,10 @@ with tab3:
                     if match and match.group(1) == target_page.strip():
                         base_name = os.path.splitext(filename)[0]
                         
+                        # Extract existing caption if it exists
+                        cap_match = re.search(r'\|\s*caption\s*=\s*(.*?)(?=\n\s*\||\n\s*\}\}|$)', content, flags=re.DOTALL)
+                        existing_caption = cap_match.group(1).strip() if cap_match else ""
+                        
                         # Find corresponding image
                         img_path = None
                         for ext in ['.png', '.jpg', '.jpeg']:
@@ -281,7 +285,7 @@ with tab3:
                                 break
                                 
                         if img_path:
-                            page_files.append((base_name, txt_path, img_path))
+                            page_files.append((base_name, txt_path, img_path, existing_caption))
                 except Exception:
                     pass
                     
@@ -291,7 +295,7 @@ with tab3:
             with st.form(key=f"rename_form_{target_page}"):
                 updates = {}
                 
-                for base_name, txt_path, img_path in page_files:
+                for base_name, txt_path, img_path, existing_caption in page_files:
                     col_img, col_name, col_cap = st.columns([1, 2, 2])
                     
                     with col_img:
@@ -299,8 +303,8 @@ with tab3:
                     with col_name:
                         new_name = st.text_input("New Filename (without extension)", value=base_name, key=f"name_{base_name}")
                     with col_cap:
-                        # Left empty by default as requested; will only overwrite if user types something
-                        new_caption = st.text_area("New Caption", key=f"cap_{base_name}")
+                        # Pre-fill with existing caption
+                        new_caption = st.text_area("Caption", value=existing_caption, key=f"cap_{base_name}")
                         
                     updates[base_name] = {
                         "txt_path": txt_path,
@@ -319,15 +323,13 @@ with tab3:
                         with open(data["txt_path"], 'r', encoding='utf-8') as f:
                             content = f.read()
                             
-                        # Update caption if user typed something
-                        if n_cap:
-                            # Overwrite existing caption field up to the next parameter '|' or closing '}}'
-                            content = re.sub(
-                                r'(\|\s*caption\s*=).*?(?=\n\s*\||\n\s*\}\}|$)', 
-                                r'\g<1> ' + n_cap, 
-                                content, 
-                                flags=re.DOTALL
-                            )
+                        # Always update the caption field with the text area content
+                        content = re.sub(
+                            r'(\|\s*caption\s*=).*?(?=\n\s*\||\n\s*\}\}|$)', 
+                            r'\g<1> ' + n_cap, 
+                            content, 
+                            flags=re.DOTALL
+                        )
                             
                         # Save txt file
                         new_txt_path = os.path.join(folder_path, f"{n_name}.txt")
