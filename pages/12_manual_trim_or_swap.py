@@ -273,7 +273,8 @@ with tab3:
                         base_name = os.path.splitext(filename)[0]
                         
                         # Extract existing caption if it exists
-                        cap_match = re.search(r'\|\s*caption\s*=\s*(.*?)(?=\n\s*\||\n\s*\}\}|$)', content, flags=re.DOTALL)
+                        # Removed \s* after the = so it doesn't consume the newline on blank captions
+                        cap_match = re.search(r'\|\s*caption\s*=(.*?)(?=\r?\n\s*\||\r?\n\s*\}\}|$)', content, flags=re.DOTALL)
                         existing_caption = cap_match.group(1).strip() if cap_match else ""
                         
                         # Find corresponding image
@@ -331,9 +332,9 @@ with tab3:
                             with open(data["txt_path"], 'r', encoding='utf-8') as f:
                                 content = f.read()
                                 
-                            # Always update the caption field with the text area content
+                            # Update the caption field using the same corrected regex pattern
                             content = re.sub(
-                                r'(\|\s*caption\s*=).*?(?=\n\s*\||\n\s*\}\}|$)', 
+                                r'(\|\s*caption\s*=).*?(?=\r?\n\s*\||\r?\n\s*\}\}|$)', 
                                 r'\g<1> ' + n_cap, 
                                 content, 
                                 flags=re.DOTALL
