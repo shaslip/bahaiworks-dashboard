@@ -315,34 +315,42 @@ with tab3:
                     st.divider()
                     
                 if st.form_submit_button("Save Changes"):
-                    for base_name, data in updates.items():
-                        # Replace spaces with underscores for the filename
-                        n_name = data["new_name"].strip().replace(" ", "_")
-                        n_cap = data["new_caption"].strip()
-                        
-                        with open(data["txt_path"], 'r', encoding='utf-8') as f:
-                            content = f.read()
+                    # --- Validation ---
+                    new_names = [data["new_name"].strip().replace(" ", "_") for data in updates.values()]
+                    
+                    if any(name == "" for name in new_names):
+                        st.error("Action blocked: Filenames cannot be blank.")
+                    elif len(new_names) != len(set(new_names)):
+                        st.error("Action blocked: You entered duplicate filenames. Each image must have a unique name.")
+                    else:
+                        # --- Processing ---
+                        for base_name, data in updates.items():
+                            n_name = data["new_name"].strip().replace(" ", "_")
+                            n_cap = data["new_caption"].strip()
                             
-                        # Always update the caption field with the text area content
-                        content = re.sub(
-                            r'(\|\s*caption\s*=).*?(?=\n\s*\||\n\s*\}\}|$)', 
-                            r'\g<1> ' + n_cap, 
-                            content, 
-                            flags=re.DOTALL
-                        )
-                            
-                        # Save txt file
-                        new_txt_path = os.path.join(folder_path, f"{n_name}.txt")
-                        with open(new_txt_path, 'w', encoding='utf-8') as f:
-                            f.write(content)
-                            
-                        # Rename image and clean up old txt if the name changed
-                        if n_name != base_name:
-                            ext = os.path.splitext(data["img_path"])[1]
-                            new_img_path = os.path.join(folder_path, f"{n_name}{ext}")
-                            os.rename(data["img_path"], new_img_path)
-                            
-                            if data["txt_path"] != new_txt_path and os.path.exists(data["txt_path"]):
-                                os.remove(data["txt_path"])
+                            with open(data["txt_path"], 'r', encoding='utf-8') as f:
+                                content = f.read()
                                 
-                    st.success("Files updated successfully!")
+                            # Always update the caption field with the text area content
+                            content = re.sub(
+                                r'(\|\s*caption\s*=).*?(?=\n\s*\||\n\s*\}\}|$)', 
+                                r'\g<1> ' + n_cap, 
+                                content, 
+                                flags=re.DOTALL
+                            )
+                                
+                            # Save txt file
+                            new_txt_path = os.path.join(folder_path, f"{n_name}.txt")
+                            with open(new_txt_path, 'w', encoding='utf-8') as f:
+                                f.write(content)
+                                
+                            # Rename image and clean up old txt if the name changed
+                            if n_name != base_name:
+                                ext = os.path.splitext(data["img_path"])[1]
+                                new_img_path = os.path.join(folder_path, f"{n_name}{ext}")
+                                os.rename(data["img_path"], new_img_path)
+                                
+                                if data["txt_path"] != new_txt_path and os.path.exists(data["txt_path"]):
+                                    os.remove(data["txt_path"])
+                                    
+                        st.success("Files updated successfully!")
