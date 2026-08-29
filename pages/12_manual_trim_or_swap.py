@@ -298,7 +298,7 @@ with tab3:
                 
                 for base_name, txt_path, img_path, existing_caption, current_page_val in page_files:
                     # Added a 4th column for the page number
-                    col_img, col_name, col_cap, col_page = st.columns([1.5, 2, 2.5, 1])
+                    col_img, col_name, col_cap, col_page = st.columns([1.5, 2.5, 3, 0.5])
                     
                     with col_img:
                         st.image(img_path, width=150)
