@@ -259,7 +259,6 @@ with tab3:
     if target_page and os.path.exists(folder_path):
         page_files = []
         
-        # Find all files for this page
         for filename in os.listdir(folder_path):
             if filename.lower().endswith('.txt'):
                 txt_path = os.path.join(folder_path, filename)
@@ -267,19 +266,17 @@ with tab3:
                     with open(txt_path, 'r', encoding='utf-8') as f:
                         content = f.read()
                     
-                    # Match the source parameter to get the page number
-                    match = re.search(r'\|\s*source\s*=\s*\{\{.*?\|(-?\d+)\}\}', content)
+                    match = re.search(r'\|\s*source\s*=\s*\{\{[^}]*?\|\s*(-?\d+)\s*\}\}', content)
                     if match and match.group(1) == target_page.strip():
                         base_name = os.path.splitext(filename)[0]
                         current_page_val = match.group(1)
                         
-                        # Extract existing caption if it exists
-                        cap_match = re.search(r'\|\s*caption\s*=(.*?)(?=\r?\n\s*\||\r?\n\s*\}\}|$)', content, flags=re.DOTALL)
+                        # Simplified caption extraction: grab everything until a pipe or closing brace
+                        cap_match = re.search(r'\|\s*caption\s*=([^|}]*)', content)
                         existing_caption = cap_match.group(1).strip() if cap_match else ""
                         
-                        # Find corresponding image
                         img_path = None
-                        for ext in ['.png', '.jpg', '.jpeg']:
+                        for ext in ['.png', '.jpg', '.jpeg', '.PNG', '.JPG', '.JPEG']:
                             p = os.path.join(folder_path, base_name + ext)
                             if os.path.exists(p):
                                 img_path = p
@@ -297,7 +294,6 @@ with tab3:
                 updates = {}
                 
                 for base_name, txt_path, img_path, existing_caption, current_page_val in page_files:
-                    # Added a 4th column for the page number
                     col_img, col_name, col_cap, col_page = st.columns([1.5, 2.5, 3, 0.5])
                     
                     with col_img:
@@ -319,7 +315,6 @@ with tab3:
                     st.divider()
                     
                 if st.form_submit_button("Save Changes"):
-                    # --- Validation ---
                     new_names = [data["new_name"].strip().replace(" ", "_") for data in updates.values()]
                     new_pages = [data["new_page"].strip() for data in updates.values()]
                     
@@ -330,7 +325,6 @@ with tab3:
                     elif any(page == "" for page in new_pages):
                         st.error("Action blocked: Page numbers cannot be blank.")
                     else:
-                        # --- Processing ---
                         for base_name, data in updates.items():
                             n_name = data["new_name"].strip().replace(" ", "_")
                             n_cap = data["new_caption"].strip()
@@ -339,27 +333,16 @@ with tab3:
                             with open(data["txt_path"], 'r', encoding='utf-8') as f:
                                 content = f.read()
                                 
-                            # 1. Update the caption field
-                            content = re.sub(
-                                r'(\|\s*caption\s*=).*?(?=\r?\n\s*\||\r?\n\s*\}\}|$)', 
-                                r'\g<1> ' + n_cap, 
-                                content, 
-                                flags=re.DOTALL
-                            )
+                            # Simplified caption replacement
+                            content = re.sub(r'(\|\s*caption\s*=)[^|}]*', r'\g<1> ' + n_cap + '\n', content)
                             
-                            # 2. Update the page number in the source field
-                            content = re.sub(
-                                r'(\|\s*source\s*=\s*\{\{.*?\|)\s*-?\d+\s*(\}\})', 
-                                r'\g<1>' + n_page + r'\2', 
-                                content
-                            )
+                            # Update page number
+                            content = re.sub(r'(\|\s*source\s*=\s*\{\{[^}]*?\|)\s*-?\d+\s*(\}\})', r'\g<1>' + n_page + r'\2', content)
                                 
-                            # Save txt file
                             new_txt_path = os.path.join(folder_path, f"{n_name}.txt")
                             with open(new_txt_path, 'w', encoding='utf-8') as f:
                                 f.write(content)
                                 
-                            # Rename image and clean up old txt if the name changed
                             if n_name != base_name:
                                 ext = os.path.splitext(data["img_path"])[1]
                                 new_img_path = os.path.join(folder_path, f"{n_name}{ext}")
@@ -369,6 +352,7 @@ with tab3:
                                     os.remove(data["txt_path"])
                                     
                         st.success("Files updated successfully!")
+
 
 # ==========================================
 # TAB 4: BULK RENAME
@@ -381,7 +365,6 @@ with tab4:
     if target_page_bulk and os.path.exists(folder_path):
         page_files = []
         
-        # Find all files for this page
         for filename in os.listdir(folder_path):
             if filename.lower().endswith('.txt'):
                 txt_path = os.path.join(folder_path, filename)
@@ -389,21 +372,18 @@ with tab4:
                     with open(txt_path, 'r', encoding='utf-8') as f:
                         content = f.read()
                     
-                    # Match the source parameter to get the page number
-                    match = re.search(r'\|\s*source\s*=\s*\{\{.*?\|(-?\d+)\}\}', content)
+                    match = re.search(r'\|\s*source\s*=\s*\{\{[^}]*?\|\s*(-?\d+)\s*\}\}', content)
                     if match and match.group(1) == target_page_bulk.strip():
                         base_name = os.path.splitext(filename)[0]
                         
-                        # Find corresponding image
                         img_path = None
-                        for ext in ['.png', '.jpg', '.jpeg']:
+                        for ext in ['.png', '.jpg', '.jpeg', '.PNG', '.JPG', '.JPEG']:
                             p = os.path.join(folder_path, base_name + ext)
                             if os.path.exists(p):
                                 img_path = p
                                 break
                                 
                         if img_path:
-                            # Sort by base_name so they apply -1, -2 in alphabetical order of their current names
                             page_files.append((base_name, txt_path, img_path))
                 except Exception:
                     pass
@@ -414,7 +394,6 @@ with tab4:
             page_files.sort(key=lambda x: x[0])
             st.write(f"### Found {len(page_files)} images")
             
-            # Display a quick row of thumbnails so you know what you are bulk renaming
             cols = st.columns(min(len(page_files), 6))
             for idx, (_, _, img_path) in enumerate(page_files):
                 with cols[idx % len(cols)]:
@@ -430,7 +409,6 @@ with tab4:
                     else:
                         clean_base = bulk_name.strip().replace(" ", "_")
                         
-                        # Pass 1: Rename to temporary names to avoid file collision during the loop
                         temp_files = []
                         for i, (base_name, txt_path, img_path) in enumerate(page_files, start=1):
                             temp_img = img_path + ".tmp"
@@ -439,27 +417,19 @@ with tab4:
                             os.rename(txt_path, temp_txt)
                             temp_files.append((base_name, temp_txt, temp_img, i))
                         
-                        # Pass 2: Apply final names and update txt contents
                         for base_name, temp_txt, temp_img, i in temp_files:
                             n_name = f"{clean_base}-{i}"
                             
                             with open(temp_txt, 'r', encoding='utf-8') as f:
                                 content = f.read()
                                 
-                            # Update the caption field
-                            content = re.sub(
-                                r'(\|\s*caption\s*=).*?(?=\r?\n\s*\||\r?\n\s*\}\}|$)', 
-                                r'\g<1> ' + bulk_caption.strip(), 
-                                content, 
-                                flags=re.DOTALL
-                            )
+                            # Simplified caption replacement
+                            content = re.sub(r'(\|\s*caption\s*=)[^|}]*', r'\g<1> ' + bulk_caption.strip() + '\n', content)
                                 
-                            # Save new txt file
                             new_txt_path = os.path.join(folder_path, f"{n_name}.txt")
                             with open(new_txt_path, 'w', encoding='utf-8') as f:
                                 f.write(content)
                                 
-                            # Rename image and remove temp txt
                             ext = os.path.splitext(temp_img)[1].replace(".tmp", "")
                             new_img_path = os.path.join(folder_path, f"{n_name}{ext}")
                             os.rename(temp_img, new_img_path)
