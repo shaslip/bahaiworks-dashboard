@@ -398,7 +398,7 @@ with tab4:
             cols = st.columns(min(len(page_files), 6))
             for idx, (_, _, img_path) in enumerate(page_files):
                 with cols[idx % len(cols)]:
-                    st.image(img_path, use_container_width=True)
+                    st.image(img_path, width='stretch')
                     
             with st.form(key=f"bulk_rename_form_{target_page_bulk}"):
                 bulk_name = st.text_input("Base Filename (spaces will be converted to underscores)")
