@@ -35,6 +35,12 @@ with tab1:
             st.error("Invalid folder path.")
 
     if st.session_state.image_queue:
+        # Filter out files deleted in the background
+        valid_queue = [img for img in st.session_state.image_queue if os.path.exists(img)]
+        if len(valid_queue) != len(st.session_state.image_queue):
+            st.session_state.image_queue = valid_queue
+            st.rerun()
+
         st.write(f"### {len(st.session_state.image_queue)} Images in Queue")
         
         # Iterate over a copy so we can safely remove items during the loop
@@ -69,6 +75,9 @@ with tab1:
         # --- Processing Execution ---
         if st.button("🚀 Apply Crops & Save", type="primary"):
             for img_path in st.session_state.image_queue:
+                if not os.path.exists(img_path):
+                    continue # Skip if deleted in background
+                    
                 t = st.session_state[f"t_{img_path}"]
                 b = st.session_state[f"b_{img_path}"]
                 l = st.session_state[f"l_{img_path}"]
@@ -109,6 +118,20 @@ with tab1:
 # ==========================================
 # TAB 2: SWAP MISNAMED IMAGES
 # ==========================================
+def on_swap_change(page, changed_img, base_names):
+    """Callback to automatically swap the other image's selectbox value."""
+    new_val = st.session_state[f"swap_{page}_{changed_img}"]
+    old_val = st.session_state[f"prev_swap_{page}_{changed_img}"]
+    
+    if new_val != old_val:
+        for img in base_names:
+            if img != changed_img and st.session_state.get(f"swap_{page}_{img}") == new_val:
+                # Assign the old value to the image that previously held the new value
+                st.session_state[f"swap_{page}_{img}"] = old_val
+                st.session_state[f"prev_swap_{page}_{img}"] = old_val
+                break
+        st.session_state[f"prev_swap_{page}_{changed_img}"] = new_val
+
 with tab2:
     st.write("Automatically detects pages with multiple images and allows you to reassign their filenames.")
     
@@ -153,6 +176,11 @@ with tab2:
     # -----------------------------------------------------------------------
 
     if st.button("Scan Folder for Multi-Image Pages"):
+        # Clear previous swap states to prevent staleness
+        for key in list(st.session_state.keys()):
+            if key.startswith("swap_") or key.startswith("prev_swap_"):
+                del st.session_state[key]
+                
         if os.path.exists(folder_path):
             pages_dict = {}
             for filename in os.listdir(folder_path):
@@ -196,56 +224,78 @@ with tab2:
 
     # Display UI for Swapping
     if st.session_state.multi_image_pages:
+        # Pre-filter to remove pages where files were deleted in background
+        valid_pages = {}
+        for page, img_paths in st.session_state.multi_image_pages.items():
+            valid_paths = [p for p in img_paths if os.path.exists(p)]
+            if len(valid_paths) > 1:
+                valid_pages[page] = valid_paths
+        st.session_state.multi_image_pages = valid_pages
+
         for page, img_paths in st.session_state.multi_image_pages.items():
             base_names = [os.path.basename(p) for p in img_paths]
             
             st.markdown(f"### Page {page}")
             
-            # Using a form per page so swaps happen atomically
-            with st.form(key=f"form_page_{page}"):
-                selections = {}
+            # Initialize session state for the selectboxes
+            for img in base_names:
+                key = f"swap_{page}_{img}"
+                prev_key = f"prev_swap_{page}_{img}"
+                if key not in st.session_state:
+                    st.session_state[key] = img
+                if prev_key not in st.session_state:
+                    st.session_state[prev_key] = img
+            
+            # Replaced st.form with standard columns to allow real-time callbacks for auto-swapping
+            # Chunk images into rows of 2 to prevent overcrowding
+            for i in range(0, len(img_paths), 2):
+                cols = st.columns(2)
+                chunk = img_paths[i:i+2]
                 
-                # Chunk images into rows of 2 to prevent overcrowding
-                for i in range(0, len(img_paths), 2):
-                    cols = st.columns(2)
-                    chunk = img_paths[i:i+2]
-                    
-                    for j, img_path in enumerate(chunk):
-                        current_name = os.path.basename(img_path)
-                        with cols[j]:
-                            st.image(img_path, width='stretch')
-                            
-                            # The user selects the TRUE filename for the image displayed above
-                            selections[current_name] = st.selectbox(
-                                f"True filename",
-                                options=base_names,
-                                index=base_names.index(current_name),
-                                key=f"swap_{page}_{current_name}"
-                            )
-                
-                if st.form_submit_button("Apply File Name Changes"):
-                    # Validate that the user didn't assign the same name to two different images
-                    if len(set(selections.values())) != len(base_names):
-                        st.error("Action blocked: You must select a unique filename for each image.")
-                    else:
-                        temp_map = {}
+                for j, img_path in enumerate(chunk):
+                    current_name = os.path.basename(img_path)
+                    with cols[j]:
+                        st.image(img_path, width='stretch')
                         
-                        # Pass 1: Rename to temporary names to prevent overwriting during swap chains
-                        for orig_name, new_name in selections.items():
-                            if orig_name != new_name:
-                                orig_path = os.path.join(folder_path, orig_name)
-                                temp_path = os.path.join(folder_path, f"temp_swap_{orig_name}")
-                                os.rename(orig_path, temp_path)
-                                temp_map[temp_path] = os.path.join(folder_path, new_name)
+                        # The user selects the TRUE filename for the image displayed above
+                        st.selectbox(
+                            "True filename",
+                            options=base_names,
+                            key=f"swap_{page}_{current_name}",
+                            on_change=on_swap_change,
+                            args=(page, current_name, base_names)
+                        )
+            
+            if st.button("Apply File Name Changes", key=f"apply_swap_{page}"):
+                selections = {img: st.session_state[f"swap_{page}_{img}"] for img in base_names}
+                
+                # Validate that the user didn't assign the same name to two different images
+                if len(set(selections.values())) != len(base_names):
+                    st.error("Action blocked: You must select a unique filename for each image.")
+                else:
+                    temp_map = {}
+                    
+                    # Pass 1: Rename to temporary names to prevent overwriting during swap chains
+                    for orig_name, new_name in selections.items():
+                        if orig_name != new_name:
+                            orig_path = os.path.join(folder_path, orig_name)
+                            if not os.path.exists(orig_path):
+                                st.error(f"File {orig_name} was missing. Aborting swap for this page.")
+                                temp_map = {}
+                                break
                                 
-                        # Pass 2: Rename from temporary to final target names
-                        for temp_path, final_path in temp_map.items():
-                            os.rename(temp_path, final_path)
+                            temp_path = os.path.join(folder_path, f"temp_swap_{orig_name}")
+                            os.rename(orig_path, temp_path)
+                            temp_map[temp_path] = os.path.join(folder_path, new_name)
+                            
+                    # Pass 2: Rename from temporary to final target names
+                    for temp_path, final_path in temp_map.items():
+                        os.rename(temp_path, final_path)
 
-                        if temp_map:
-                            st.success(f"Successfully reassigned images on Page {page}! Please re-scan the folder.")
-                        else:
-                            st.info("No file names were changed.")
+                    if temp_map:
+                        st.success(f"Successfully reassigned images on Page {page}! Please re-scan the folder.")
+                    else:
+                        st.info("No file names were changed.")
             st.divider()
 
 # ==========================================
@@ -327,6 +377,11 @@ with tab3:
                         st.error("Action blocked: Page numbers cannot be blank.")
                     else:
                         for base_name, data in updates.items():
+                            # Existence check right before modifying
+                            if not os.path.exists(data["txt_path"]) or not os.path.exists(data["img_path"]):
+                                st.warning(f"Skipped {base_name}: File was deleted in the background.")
+                                continue
+                                
                             n_name = data["new_name"].strip().replace(" ", "_")
                             n_cap = data["new_caption"].strip()
                             n_page = data["new_page"].strip()
@@ -411,33 +466,43 @@ with tab4:
                         clean_base = bulk_name.strip().replace(" ", "_")
                         
                         temp_files = []
-                        for i, (base_name, txt_path, img_path) in enumerate(page_files, start=1):
-                            # Grab the original extension BEFORE appending .tmp
-                            orig_ext = os.path.splitext(img_path)[1]
+                        # Validate all files exist before starting any renames
+                        missing_files = False
+                        for _, txt_path, img_path in page_files:
+                            if not os.path.exists(txt_path) or not os.path.exists(img_path):
+                                missing_files = True
+                                break
+                                
+                        if missing_files:
+                            st.error("Action blocked: Some files were deleted in the background. Please refresh the page.")
+                        else:
+                            for i, (base_name, txt_path, img_path) in enumerate(page_files, start=1):
+                                # Grab the original extension BEFORE appending .tmp
+                                orig_ext = os.path.splitext(img_path)[1]
+                                
+                                temp_img = img_path + ".tmp"
+                                temp_txt = txt_path + ".tmp"
+                                os.rename(img_path, temp_img)
+                                os.rename(txt_path, temp_txt)
+                                
+                                # Store the orig_ext in the tuple
+                                temp_files.append((base_name, temp_txt, temp_img, i, orig_ext))
                             
-                            temp_img = img_path + ".tmp"
-                            temp_txt = txt_path + ".tmp"
-                            os.rename(img_path, temp_img)
-                            os.rename(txt_path, temp_txt)
-                            
-                            # Store the orig_ext in the tuple
-                            temp_files.append((base_name, temp_txt, temp_img, i, orig_ext))
-                        
-                        for base_name, temp_txt, temp_img, i, orig_ext in temp_files:
-                            n_name = f"{clean_base}-{i}"
-                            
-                            with open(temp_txt, 'r', encoding='utf-8') as f:
-                                content = f.read()
+                            for base_name, temp_txt, temp_img, i, orig_ext in temp_files:
+                                n_name = f"{clean_base}-{i}"
                                 
-                            content = re.sub(r'(\|\s*caption\s*=)[^|]*', lambda m, cap=bulk_caption.strip(): f"{m.group(1)} {cap}\n", content)
-                                
-                            new_txt_path = os.path.join(folder_path, f"{n_name}.txt")
-                            with open(new_txt_path, 'w', encoding='utf-8') as f:
-                                f.write(content)
-                                
-                            # Use the original extension we saved earlier
-                            new_img_path = os.path.join(folder_path, f"{n_name}{orig_ext}")
-                            os.rename(temp_img, new_img_path)
-                            os.remove(temp_txt)
-                                
-                        st.success(f"Successfully bulk-renamed {len(page_files)} files!")
+                                with open(temp_txt, 'r', encoding='utf-8') as f:
+                                    content = f.read()
+                                    
+                                content = re.sub(r'(\|\s*caption\s*=)[^|]*', lambda m, cap=bulk_caption.strip(): f"{m.group(1)} {cap}\n", content)
+                                    
+                                new_txt_path = os.path.join(folder_path, f"{n_name}.txt")
+                                with open(new_txt_path, 'w', encoding='utf-8') as f:
+                                    f.write(content)
+                                    
+                                # Use the original extension we saved earlier
+                                new_img_path = os.path.join(folder_path, f"{n_name}{orig_ext}")
+                                os.rename(temp_img, new_img_path)
+                                os.remove(temp_txt)
+                                    
+                            st.success(f"Successfully bulk-renamed {len(page_files)} files!")
