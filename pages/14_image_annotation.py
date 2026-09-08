@@ -50,8 +50,12 @@ NAMED_COLORS = [
 MEDIA_API_URL = 'https://bahai.media/api.php'
 
 def normalize_name(name):
-    """Removes accents and transliteration marks (like ‘ and ’) from names."""
+    """Removes titles, accents, and transliteration marks from names."""
     if not name: return name
+    
+    # Strip common titles (Mr., Mrs., Ms., Dr., Prof., Miss) case-insensitively
+    name = re.sub(r'\b(?:Mr\.?|Mrs\.?|Ms\.?|Dr\.?|Prof\.?|Miss)\s+', '', name, flags=re.IGNORECASE)
+    
     # Remove standard accents (á -> a, í -> i, etc.)
     n = unicodedata.normalize('NFKD', name).encode('ASCII', 'ignore').decode('utf-8')
     # Remove specific apostrophes/quotes
@@ -73,6 +77,18 @@ def get_caption_from_text(content):
     if match:
         return match.group(1).strip()
     return ""
+
+def verify_edited_name(list_type, list_idx, widget_key):
+    """Callback to re-verify a category when the user edits the text input."""
+    new_name = st.session_state[widget_key]
+    norm_name = normalize_name(new_name)
+    
+    # Re-check if the new category exists
+    exists = check_category_exists_on_media(norm_name)
+    
+    # Update the session state with the new name and existence status
+    st.session_state.current_ai_data[list_type][list_idx]["name"] = norm_name
+    st.session_state.current_ai_data[list_type][list_idx]["exists"] = exists
 
 def draw_numbered_boxes(pil_img, faces):
     img_copy = pil_img.copy()
@@ -388,6 +404,10 @@ if st.session_state.anno_queue:
         all_names_to_map = ai_data["mapped_names"] + ai_data["manual_names"]
         
         for i, item in enumerate(all_names_to_map):
+            # Determine if this is a mapped name or a manually added name so the callback updates the right list
+            list_type = "mapped_names" if i < len(ai_data["mapped_names"]) else "manual_names"
+            list_idx = i if list_type == "mapped_names" else i - len(ai_data["mapped_names"])
+            
             orig_name = item["name"]
             ai_box_id = item.get("box_id")
             is_verified = item.get("exists", False)
@@ -427,13 +447,20 @@ if st.session_state.anno_queue:
                 else:
                     st.markdown("<div style='height:80px; width:80px; background-color:#333; display:flex; align-items:center; justify-content:center; border-radius:5px; color:#fff; font-size:12px;'>No Face</div>", unsafe_allow_html=True)
 
-            # 3. Render the Name editor
+            # 3. Render the Name editor with Callback
             with col_name:
                 if is_verified:
                     st.markdown(f"<div style='padding-top:20px;'>✅ <b>{orig_name}</b></div>", unsafe_allow_html=True)
                     final_name = orig_name
                 else:
-                    final_name = st.text_input(f"⚠️ Category not found. Edit:", value=orig_name, key=f"edit_name_{i}")
+                    widget_key = f"edit_name_{i}"
+                    final_name = st.text_input(
+                        f"⚠️ Category not found. Edit (Press Enter to verify):", 
+                        value=orig_name, 
+                        key=widget_key,
+                        on_change=verify_edited_name,
+                        args=(list_type, list_idx, widget_key)
+                    )
             
             # 4. Save the mapping
             if selected_box != "None":
