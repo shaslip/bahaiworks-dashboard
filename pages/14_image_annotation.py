@@ -307,7 +307,7 @@ if not st.session_state.anno_queue:
     with tab_fix:
         st.write("Fix existing annotations when an image is cropped or resized.")
         fix_file = st.text_input("Wiki File Name (e.g. File:First_National_Spiritual_Assembly.png)")
-        fix_mode = st.selectbox("Adjustment Type (where was the image removed from?)", ["Right", "Left", "Top", "Bottom", "Scaled"])
+        fix_mode = st.selectbox("Adjustment Type (what part of the image was cropped?)", ["Right", "Left", "Top", "Bottom", "Scaled"])
         
         st.write("Leave dimensions at 0 to automatically fetch the new size from the Wiki API.")
         col1, col2 = st.columns(2)
