@@ -113,6 +113,57 @@ def pil_to_base64(pil_img):
     img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
     return f"data:image/png;base64,{img_str}"
 
+def get_image_dimensions(filename, api_url):
+    """Fetches the current width and height of an image from the MediaWiki API."""
+    params = {
+        "action": "query",
+        "titles": filename,
+        "prop": "imageinfo",
+        "iiprop": "size",
+        "format": "json"
+    }
+    try:
+        res = requests.get(api_url, params=params).json()
+        pages = res.get("query", {}).get("pages", {})
+        for page_id, page_info in pages.items():
+            if "imageinfo" in page_info:
+                return page_info["imageinfo"][0]["width"], page_info["imageinfo"][0]["height"]
+    except Exception as e:
+        st.error(f"Error fetching dimensions: {e}")
+    return None, None
+
+def adjust_annotations(text, mode, new_w, new_h):
+    """Adjusts wikitext ImageNote coordinates based on the crop/scale mode."""
+    pattern = re.compile(r'\{\{ImageNote\|id=(\d+)\|x=(\d+)\|y=(\d+)\|w=(\d+)\|h=(\d+)\|dimx=(\d+)\|dimy=(\d+)(.*?)\}\}', re.IGNORECASE)
+    
+    def replacer(match):
+        id_val = match.group(1)
+        x, y, w, h, dimx, dimy = map(int, match.groups()[1:7])
+        rest = match.group(8)
+        
+        diff_w = dimx - new_w
+        diff_h = dimy - new_h
+        
+        if mode == "Right":
+            pass # x, y, w, h unchanged
+        elif mode == "Left":
+            x = max(0, x - diff_w)
+        elif mode == "Bottom":
+            pass # x, y, w, h unchanged
+        elif mode == "Top":
+            y = max(0, y - diff_h)
+        elif mode == "Scaled":
+            scale_x = new_w / dimx if dimx else 1
+            scale_y = new_h / dimy if dimy else 1
+            x = int(x * scale_x)
+            y = int(y * scale_y)
+            w = int(w * scale_x)
+            h = int(h * scale_y)
+            
+        return f"{{{{ImageNote|id={id_val}|x={x}|y={y}|w={w}|h={h}|dimx={new_w}|dimy={new_h}{rest}}}}}"
+
+    return pattern.sub(replacer, text)
+
 def generate_fabric_json(faces, pil_img, canvas_w, canvas_h):
     orig_w, orig_h = pil_img.size
     scale_x = canvas_w / orig_w
@@ -198,7 +249,7 @@ st.title("🏷️ AI-Assisted Image Annotation")
 if not st.session_state.anno_queue:
     
     st.header("Configuration")
-    tab_local, tab_wiki = st.tabs(["📁 Local Files", "🌐 Wiki Files"])
+    tab_local, tab_wiki, tab_fix = st.tabs(["📁 Local Files", "🌐 Wiki Files", "🛠️ Fix Annotations"])
     
     with tab_local:
         folder_path = st.text_input("Images Folder Path", value="/home/sarah/Desktop/Projects/Bahai.works/English/images/")
@@ -252,6 +303,56 @@ if not st.session_state.anno_queue:
                     st.session_state.wiki_offset += 15
                     st.session_state.pending_queue = load_wiki_batch(st.session_state.wiki_all_files, st.session_state.wiki_offset)
                     st.rerun()
+
+    with tab_fix:
+        st.write("Fix existing annotations when an image is cropped or resized.")
+        fix_file = st.text_input("Wiki File Name (e.g. File:First_National_Spiritual_Assembly.png)")
+        fix_mode = st.selectbox("Adjustment Type (where was the image removed from?)", ["Right", "Left", "Top", "Bottom", "Scaled"])
+        
+        st.write("Leave dimensions at 0 to automatically fetch the new size from the Wiki API.")
+        col1, col2 = st.columns(2)
+        with col1:
+            manual_w = st.number_input("New Width", min_value=0, value=0)
+        with col2:
+            manual_h = st.number_input("New Height", min_value=0, value=0)
+            
+        if st.button("Fix & Upload Annotations", type="primary"):
+            if not fix_file:
+                st.warning("Please enter a filename.")
+            else:
+                with st.spinner("Fetching and processing..."):
+                    if not fix_file.lower().startswith("file:"):
+                        fix_file = "File:" + fix_file
+                        
+                    text, _ = fetch_wikitext(fix_file, api_url=MEDIA_API_URL)
+                    if not text:
+                        st.error("Could not fetch wikitext or file does not exist.")
+                        st.stop()
+                        
+                    new_w, new_h = manual_w, manual_h
+                    if new_w == 0 or new_h == 0:
+                        fetched_w, fetched_h = get_image_dimensions(fix_file, MEDIA_API_URL)
+                        if fetched_w and fetched_h:
+                            new_w = fetched_w if new_w == 0 else new_w
+                            new_h = fetched_h if new_h == 0 else new_h
+                        else:
+                            st.error("Could not fetch dimensions from API. Please enter them manually.")
+                            st.stop()
+                            
+                    updated_text = adjust_annotations(text, fix_mode, new_w, new_h)
+                    
+                    if updated_text == text:
+                        st.warning("No changes were made. Are you sure there are annotations in the text?")
+                    else:
+                        with requests.Session() as session:
+                            upload_to_mediawiki(
+                                title=fix_file,
+                                content=updated_text,
+                                summary=f"Fixed image annotations ({fix_mode} adjustment to {new_w}x{new_h})",
+                                session=session,
+                                api_url=MEDIA_API_URL
+                            )
+                        st.success(f"Successfully updated annotations for {fix_file}!")
 
     if st.session_state.pending_queue:
         # Wrap in a form so checking boxes doesn't trigger a slow rerun every time
