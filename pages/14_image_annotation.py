@@ -493,6 +493,9 @@ if st.session_state.anno_queue:
         current_boxes = []
         if canvas_result.json_data is not None:
             current_boxes = canvas_result.json_data["objects"]
+        elif ai_data.get("canvas_json"):
+            # Fallback to the initial AI data if the canvas component hasn't returned its state yet
+            current_boxes = ai_data["canvas_json"].get("objects", [])
             
         # Dynamically generate dropdown options based on the colors currently in the canvas
         box_options = ["None"]
