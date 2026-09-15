@@ -588,11 +588,15 @@ if st.session_state.anno_queue:
 
     # 3. Process Save Action
     if submit_btn:
+        st.write("DEBUG - Final Mappings:", final_mappings)
+        
         if not final_mappings:
             st.warning("No mappings selected. Skipping save.")
-            st.session_state.current_idx += 1
-            st.session_state.current_ai_data = None
-            st.rerun()
+            # Commented out so you can see the warning
+            # st.session_state.current_idx += 1
+            # st.session_state.current_ai_data = None
+            # st.rerun()
+            st.stop() 
             
         wikitext_blocks = []
         
@@ -611,7 +615,6 @@ if st.session_state.anno_queue:
             
         final_wikitext = "\n".join(wikitext_blocks)
         
-        # Strip out any existing ImageNotes from the original content
         clean_content = re.sub(
             r'\{\{ImageNote\|.*?\{\{ImageNoteEnd\|.*?\}\}\n*', 
             '', 
@@ -621,23 +624,28 @@ if st.session_state.anno_queue:
         
         new_content = clean_content + "\n\n" + final_wikitext
 
+        st.write("DEBUG - Final Wikitext to upload:", final_wikitext)
+
         if current_item["type"] == "local":
-            # Overwrite the local file instead of appending
             with open(current_item["text_path"], 'w', encoding='utf-8') as f:
                 f.write(new_content)
             st.success("Saved to local file!")
         else:
             with st.spinner("Uploading to bahai.media..."):
-                with requests.Session() as session:
-                    upload_to_mediawiki(
-                        title=current_item["filename"], 
-                        content=new_content, 
-                        summary="Replaced image annotations via AI tool", 
-                        session=session, 
-                        api_url=MEDIA_API_URL
-                    )
-            st.success("Saved to wiki!")
+                try:
+                    with requests.Session() as session:
+                        upload_to_mediawiki(
+                            title=current_item["filename"], 
+                            content=new_content, 
+                            summary="Replaced image annotations via AI tool", 
+                            session=session, 
+                            api_url=MEDIA_API_URL
+                        )
+                    st.success("Saved to wiki!")
+                except Exception as e:
+                    st.error(f"Upload failed: {e}")
             
-        st.session_state.current_idx += 1
-        st.session_state.current_ai_data = None
-        st.rerun()
+        # Commented out so you can see the results
+        # st.session_state.current_idx += 1
+        # st.session_state.current_ai_data = None
+        # st.rerun()
