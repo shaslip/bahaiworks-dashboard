@@ -160,8 +160,13 @@ def upload_to_mediawiki(title, content, summary="Bot upload", check_exists=False
         response = session.post(api_url, data=create_params)
         data = response.json()
         
+        # 1. Check for standard top-level errors
         if 'error' in data:
             raise Exception(data['error']['info'])
+            
+        # 2. Check for silent edit failures (Abuse filters, Captchas, Token mismatches)
+        if 'edit' in data and data['edit'].get('result') != 'Success':
+            raise Exception(f"MediaWiki API rejected the edit: {data['edit']}")
             
         return data
         
