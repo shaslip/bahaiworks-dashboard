@@ -491,7 +491,8 @@ if st.session_state.anno_queue:
         st.write("📋 **Map Names to Boxes**")
         
         current_boxes = []
-        if canvas_result.json_data is not None:
+        # Ensure the canvas data isn't None AND isn't an empty callback wipe before using it
+        if canvas_result.json_data is not None and len(canvas_result.json_data.get("objects", [])) > 0:
             current_boxes = canvas_result.json_data["objects"]
         elif ai_data.get("canvas_json"):
             # Fallback to the initial AI data if the canvas component hasn't returned its state yet
