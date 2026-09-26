@@ -84,11 +84,15 @@ def verify_edited_name(list_type, list_idx, widget_key):
     norm_name = normalize_name(new_name)
     
     # Re-check if the new category exists
-    exists = check_category_exists_on_media(norm_name)
+    status = check_category_exists_on_media(norm_name)
     
-    # Update the session state with the new name and existence status
-    st.session_state.current_ai_data[list_type][list_idx]["name"] = norm_name
-    st.session_state.current_ai_data[list_type][list_idx]["exists"] = exists
+    # Update the session state with the new name (resolving redirects) and existence status
+    if status:
+        st.session_state.current_ai_data[list_type][list_idx]["name"] = status
+        st.session_state.current_ai_data[list_type][list_idx]["exists"] = True
+    else:
+        st.session_state.current_ai_data[list_type][list_idx]["name"] = norm_name
+        st.session_state.current_ai_data[list_type][list_idx]["exists"] = False
 
 def draw_numbered_boxes(pil_img, faces):
     img_copy = pil_img.copy()
@@ -451,7 +455,12 @@ if st.session_state.anno_queue:
             category_status = check_categories_batch(names_to_check)
             
             for item in mapped_names:
-                item["exists"] = category_status.get(item["name"], False)
+                status = category_status.get(item["name"], False)
+                if status:
+                    item["name"] = status  # Update name to resolved redirect
+                    item["exists"] = True
+                else:
+                    item["exists"] = False
                 
             canvas_json = generate_fabric_json(faces, pil_img, canvas_display_w, canvas_display_h)
             
@@ -581,8 +590,9 @@ if st.session_state.anno_queue:
         if st.button("Add Name"):
             norm_name = normalize_name(new_name)
             if norm_name and norm_name not in [n["name"] for n in ai_data["mapped_names"]] and norm_name not in [n["name"] for n in ai_data["manual_names"]]:
-                exists = check_category_exists_on_media(norm_name)
-                st.session_state.current_ai_data["manual_names"].append({"name": norm_name, "box_id": None, "exists": exists})
+                status = check_category_exists_on_media(norm_name)
+                final_name = status if status else norm_name
+                st.session_state.current_ai_data["manual_names"].append({"name": final_name, "box_id": None, "exists": bool(status)})
                 st.rerun()
 
         if st.button("⏭️ Skip Image"):
