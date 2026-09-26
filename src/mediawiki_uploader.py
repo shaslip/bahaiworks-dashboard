@@ -459,31 +459,40 @@ def update_header_ps_tag(wikitext):
 def check_category_exists_on_media(category_name):
     """
     Checks if a category exists specifically on bahai.media.
+    Returns the resolved category name (handling redirects) if it exists, or False.
     """
     api_url = 'https://bahai.media/api.php'
     if not category_name.lower().startswith("category:"):
-        category_name = f"Category:{category_name}"
+        query_title = f"Category:{category_name}"
+    else:
+        query_title = category_name
         
     params = {
         'action': 'query',
-        'titles': category_name,
+        'titles': query_title,
+        'redirects': 1,
         'format': 'json'
     }
     try:
         response = requests.get(api_url, params=params, timeout=10)
         data = response.json()
         pages = data.get('query', {}).get('pages', {})
-        for page_id in pages:
-            if int(page_id) < 0:
-                return False
-        return True
+        
+        for page_id, page_info in pages.items():
+            if int(page_id) > 0:
+                # Page exists. Return the resolved title without the "Category:" prefix
+                title = page_info.get('title', '')
+                if title.startswith("Category:"):
+                    return title.replace("Category:", "", 1)
+                return title
+        return False
     except Exception:
         return False # Default to False (editable) if network error
 
 def check_categories_batch(category_names):
     """
     Checks if multiple categories exist on bahai.media in a single API request.
-    Returns a dictionary: {"Name": True, "Another Name": False}
+    Returns a dictionary mapping the original requested name to its resolved name (if exists) or False.
     """
     if not category_names:
         return {}
@@ -499,25 +508,45 @@ def check_categories_batch(category_names):
     params = {
         'action': 'query',
         'titles': titles_str,
+        'redirects': 1,
         'format': 'json'
     }
     
-    # Default everything to True. We will flip to False if the API says it's missing.
-    results = {name: True for name in category_names} 
+    results = {name: False for name in category_names} 
     
     try:
         response = requests.get(api_url, params=params, timeout=10)
-        data = response.json()
-        pages = data.get('query', {}).get('pages', {})
+        query_data = response.json().get('query', {})
         
-        for page_id, page_info in pages.items():
-            # Negative page_id means the page does not exist
-            if int(page_id) < 0:
-                returned_title = page_info.get('title', '')
-                clean_name = returned_title.replace("Category:", "")
-                if clean_name in results:
-                    results[clean_name] = False
-                    
+        # 1. Map input name to formatted API name
+        input_to_formatted = {name: (f"Category:{name}" if not name.lower().startswith("category:") else name) for name in category_names}
+        
+        # 2. Map formatted API name to normalized name
+        formatted_to_normalized = {item['from']: item['to'] for item in query_data.get('normalized', [])}
+        
+        # 3. Map normalized name to redirected name
+        redirects = {item['from']: item['to'] for item in query_data.get('redirects', [])}
+        
+        # 4. Find which final pages actually exist
+        existing_pages = set()
+        for page_id, page_info in query_data.get('pages', {}).items():
+            if int(page_id) > 0:
+                existing_pages.add(page_info.get('title'))
+                
+        # Resolve each original name mapping
+        for orig_name, formatted in input_to_formatted.items():
+            current_name = formatted
+            if current_name in formatted_to_normalized:
+                current_name = formatted_to_normalized[current_name]
+            if current_name in redirects:
+                current_name = redirects[current_name]
+                
+            if current_name in existing_pages:
+                clean_name = current_name.replace("Category:", "", 1) if current_name.startswith("Category:") else current_name
+                results[orig_name] = clean_name
+            else:
+                results[orig_name] = False
+                
         return results
     except Exception:
         # If the network fails, default to False so the user can manually edit
