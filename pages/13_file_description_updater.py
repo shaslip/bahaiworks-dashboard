@@ -3,6 +3,7 @@ import os
 import sys
 import requests
 import concurrent.futures
+import time
 
 # --- Path Setup ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -18,89 +19,133 @@ MEDIA_API_URL = 'https://bahai.media/api.php'
 st.set_page_config(page_title="File Description Updater", page_icon="🖼️", layout="wide")
 
 # --- State Initialization ---
+if "step" not in st.session_state:
+    st.session_state.step = 0  # 0: Fetch, 1: Review Queue, 2: Review Edits
+if "raw_texts" not in st.session_state:
+    st.session_state.raw_texts = {}
 if "files_data" not in st.session_state:
-    st.session_state.files_data = {}  # {title: {"original": text, "new": text}}
-if "processing_complete" not in st.session_state:
-    st.session_state.processing_complete = False
+    st.session_state.files_data = {}
 if "target_category" not in st.session_state:
     st.session_state.target_category = ""
 
 st.title("🖼️ File Description Updater (Bahai.media)")
 st.markdown("Fetch files from a category, reformat their descriptions using Gemini, and upload changes.")
 
-# --- Inputs ---
-category_input = st.text_input("Category Name", value="Category:Baha'i News No 486", help="e.g., Category:Baha'i News No 486")
-
 def process_single_file(title, wikitext, target_cat):
     """Worker function for threading"""
     new_text = format_file_description(wikitext, target_cat)
     return title, new_text
 
-if st.button("Fetch & Process", type="primary"):
-    if not category_input:
-        st.warning("Please enter a category name.")
-        st.stop()
+# ==========================================
+# STEP 0: FETCH FILES
+# ==========================================
+if st.session_state.step == 0:
+    category_input = st.text_input("Category Name", value="Category:Baha'i News No 486", help="e.g., Category:Baha'i News No 486")
+    
+    if st.button("Fetch Files", type="primary"):
+        if not category_input:
+            st.warning("Please enter a category name.")
+            st.stop()
 
-    st.session_state.target_category = category_input
-    st.session_state.files_data = {}
-    st.session_state.processing_complete = False
-
-    session = requests.Session()
-    
-    with st.spinner(f"Fetching non-PDF files from {category_input}..."):
-        files = get_category_files(category_input, session=session, api_url=MEDIA_API_URL)
-    
-    if not files:
-        st.error("No non-PDF files found in this category.")
-        st.stop()
+        session = requests.Session()
         
-    st.info(f"Found {len(files)} files. Fetching wikitext and processing with Gemini (up to 50 concurrent workers)...")
-    
-    # Pre-fetch all wikitexts sequentially (fast enough, avoids API block on simple GET)
-    raw_texts = {}
-    progress_bar = st.progress(0)
-    for i, title in enumerate(files):
-        text, err = fetch_wikitext(title, session=session, api_url=MEDIA_API_URL)
-        if text:
-            raw_texts[title] = text
-        progress_bar.progress((i + 1) / len(files))
-    
-    # Process with Gemini Concurrently
-    processed_count = 0
-    progress_bar.empty()
-    st.write("🤖 Gemini Processing...")
-    gemini_progress = st.progress(0)
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
-        # Submit all tasks
-        future_to_title = {
-            executor.submit(process_single_file, title, text, category_input): title 
-            for title, text in raw_texts.items()
-        }
+        with st.spinner(f"Fetching non-PDF files from {category_input}..."):
+            files = get_category_files(category_input, session=session, api_url=MEDIA_API_URL)
         
-        # Gather results as they complete
-        for future in concurrent.futures.as_completed(future_to_title):
-            title = future_to_title[future]
-            try:
-                title_result, new_text = future.result()
-                st.session_state.files_data[title] = {
-                    "original": raw_texts[title],
-                    "new": new_text
-                }
-            except Exception as exc:
-                st.error(f"Error processing {title}: {exc}")
-                
-            processed_count += 1
-            gemini_progress.progress(processed_count / len(raw_texts))
+        if not files:
+            st.error("No non-PDF files found in this category.")
+            st.stop()
             
-    st.session_state.processing_complete = True
-    st.success("Processing complete! Review changes below.")
-    st.rerun()
+        st.info(f"Found {len(files)} files. Fetching original wikitexts...")
+        
+        raw_texts = {}
+        progress_bar = st.progress(0)
+        for i, title in enumerate(files):
+            text, err = fetch_wikitext(title, session=session, api_url=MEDIA_API_URL)
+            if text:
+                raw_texts[title] = text
+            progress_bar.progress((i + 1) / len(files))
+            
+        st.session_state.raw_texts = raw_texts
+        st.session_state.target_category = category_input
+        st.session_state.step = 1
+        st.rerun()
 
-# --- Display Results & Editing ---
-if st.session_state.processing_complete and st.session_state.files_data:
+# ==========================================
+# STEP 1: REVIEW QUEUE & PROCESS
+# ==========================================
+if st.session_state.step == 1:
+    st.subheader("1. Review Files")
+    st.info("Remove any files from the selection below that do not need processing to save API costs.")
+    
+    # Multiselect allows easy removal of files from the queue
+    selected_titles = st.multiselect(
+        "Select files to process with Gemini:",
+        options=list(st.session_state.raw_texts.keys()),
+        default=list(st.session_state.raw_texts.keys())
+    )
+    
+    with st.expander("Preview Original Wikitexts (for selected files)"):
+        for title in selected_titles:
+            st.markdown(f"**{title}**")
+            st.code(st.session_state.raw_texts[title], language="mediawiki")
+            
+    col1, col2 = st.columns([1, 5])
+    with col1:
+        if st.button("Cancel / Start Over"):
+            st.session_state.step = 0
+            st.session_state.raw_texts = {}
+            st.rerun()
+            
+    with col2:
+        if st.button("🤖 Process Selected Files", type="primary"):
+            if not selected_titles:
+                st.warning("Please select at least one file.")
+                st.stop()
+                
+            st.write("🤖 Gemini Processing...")
+            gemini_progress = st.progress(0)
+            processed_count = 0
+            
+            st.session_state.files_data = {}
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
+                future_to_title = {
+                    executor.submit(process_single_file, title, st.session_state.raw_texts[title], st.session_state.target_category): title 
+                    for title in selected_titles
+                }
+                
+                for future in concurrent.futures.as_completed(future_to_title):
+                    title = future_to_title[future]
+                    try:
+                        title_result, new_text = future.result()
+                        st.session_state.files_data[title] = {
+                            "original": st.session_state.raw_texts[title],
+                            "new": new_text
+                        }
+                    except Exception as exc:
+                        st.error(f"Error processing {title}: {exc}")
+                        
+                    processed_count += 1
+                    gemini_progress.progress(processed_count / len(selected_titles))
+                    
+            st.success("Processing complete!")
+            time.sleep(1) # Brief pause so the user sees the success message
+            st.session_state.step = 2
+            st.rerun()
+
+# ==========================================
+# STEP 2: REVIEW EDITS & UPLOAD
+# ==========================================
+if st.session_state.step == 2:
+    # --- Display Results & Editing ---
+    st.subheader("2. Review and Edit Descriptions")
+    
+    if st.button("Back to Selection"):
+        st.session_state.step = 1
+        st.rerun()
+        
     st.divider()
-    st.subheader("Review and Edit Descriptions")
     
     # Keep track of edits directly in session_state via the text_area key
     for title, data in st.session_state.files_data.items():
@@ -159,7 +204,8 @@ if st.session_state.processing_complete and st.session_state.files_data:
         
         if error_count == 0:
             # Clear state on full success
-            st.session_state.files_data = {}
-            st.session_state.processing_complete = False
             if st.button("Start Over"):
+                st.session_state.step = 0
+                st.session_state.raw_texts = {}
+                st.session_state.files_data = {}
                 st.rerun()
