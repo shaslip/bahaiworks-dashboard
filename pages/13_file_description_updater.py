@@ -29,6 +29,13 @@ if "files_data" not in st.session_state:
 if "target_category" not in st.session_state:
     st.session_state.target_category = ""
 
+# Callback to fully reset the app state
+def reset_app():
+    st.session_state.step = 0
+    st.session_state.raw_texts = {}
+    st.session_state.files_data = {}
+    st.session_state.target_category = ""
+
 st.title("🖼️ File Description Updater (Bahai.media)")
 st.markdown("Fetch files from a category, reformat their descriptions using Gemini, and upload changes.")
 
@@ -59,7 +66,11 @@ def scroll_to_top():
 # STEP 0: FETCH FILES
 # ==========================================
 if st.session_state.step == 0:
-    category_input = st.text_input("Category Name", value="Category:Baha'i News No 486", help="e.g., Category:Baha'i News No 486")
+    category_input = st.text_input(
+        "Category Name", 
+        value=st.session_state.target_category, 
+        placeholder="e.g., Category:Baha'i News No 486"
+    )
     
     if st.button("Fetch Files", type="primary"):
         if not category_input:
@@ -122,9 +133,7 @@ if st.session_state.step == 1:
             
     col1, col2 = st.columns([1, 5])
     with col1:
-        if st.button("Cancel / Start Over"):
-            st.session_state.step = 0
-            st.session_state.raw_texts = {}
+        if st.button("Cancel / Start Over", on_click=reset_app):
             st.rerun()
             
     with col2:
@@ -166,8 +175,9 @@ if st.session_state.step == 1:
 # STEP 2: REVIEW EDITS & UPLOAD
 # ==========================================
 if st.session_state.step == 2:
+    scroll_to_top()
+    
     # --- Display Results & Editing ---
-    scroll_to_top()    
     st.subheader("2. Review and Edit Descriptions")
     
     if st.button("Back to Selection"):
@@ -232,9 +242,5 @@ if st.session_state.step == 2:
         st.success(f"Upload complete! Successfully updated {success_count} files. {error_count} errors.")
         
         if error_count == 0:
-            # Clear state on full success
-            if st.button("Start Over"):
-                st.session_state.step = 0
-                st.session_state.raw_texts = {}
-                st.session_state.files_data = {}
-                st.rerun()
+            # Clear state on full success via callback to avoid nested button issues
+            st.button("Start Over", on_click=reset_app)
