@@ -66,6 +66,12 @@ def scroll_to_top():
     '''
     components.html(js, height=0)
 
+def is_already_formatted(wikitext):
+    """Check if the wikitext is already formatted with == File info == and {{cs}}."""
+    has_file_info = bool(re.search(r'==\s*File info\s*==', wikitext, re.IGNORECASE))
+    has_cs = bool(re.search(r'\{\{\s*cs\b', wikitext, re.IGNORECASE))
+    return has_file_info and has_cs
+
 # ==========================================
 # STEP 0: FETCH FILES
 # ==========================================
@@ -102,10 +108,15 @@ if st.session_state.step == 0:
             progress_bar = st.progress(0)
             for i, title in enumerate(files):
                 text, err = fetch_wikitext(title, session=session, api_url=MEDIA_API_URL)
-                if text:
+                # Only add if it's not already formatted
+                if text and not is_already_formatted(text):
                     raw_texts[title] = text
                     file_cats[title] = category_input
                 progress_bar.progress((i + 1) / len(files))
+                
+            if not raw_texts:
+                st.success("All files in this category are already formatted! Nothing to do.")
+                st.stop()
                 
             st.session_state.raw_texts = raw_texts
             st.session_state.file_categories = file_cats
@@ -115,7 +126,7 @@ if st.session_state.step == 0:
 
     # --- TAB 2: SEQUENTIAL CATEGORIES ---
     with tab2:
-        st.info("Start at a base category (e.g., 'BWNS 405') and automatically fetch the next categories (406, 407...) until the target image count is reached.")
+        st.info("Start at a base category (e.g., 'BWNS 405') and automatically fetch the next categories (406, 407...) until the target unformatted image count is reached.")
         
         col1, col2 = st.columns([3, 1])
         with col1:
@@ -144,44 +155,46 @@ if st.session_state.step == 0:
             current_num = int(num_str)
             
             session = requests.Session()
-            all_files = []
+            raw_texts = {}
             file_cats = {}
             consecutive_empty = 0
             max_empty = 15 # Stop if we hit 15 empty categories in a row
             
             status_text = st.empty()
+            progress_bar = st.progress(0)
             
             # Loop until we hit the target count or run out of contiguous categories
-            while len(all_files) < target_count and consecutive_empty < max_empty:
+            while len(raw_texts) < target_count and consecutive_empty < max_empty:
                 current_cat = f"{prefix}{current_num}{suffix}"
-                status_text.info(f"Searching {current_cat}... (Found {len(all_files)}/{target_count} images)")
+                status_text.info(f"Searching {current_cat}... (Found {len(raw_texts)}/{target_count} unformatted images)")
                 
                 files = get_category_files(current_cat, session=session, api_url=MEDIA_API_URL)
                 if files:
-                    all_files.extend(files)
-                    for f in files:
-                        file_cats[f] = current_cat
                     consecutive_empty = 0
+                    for title in files:
+                        if len(raw_texts) >= target_count:
+                            break # Stop if we hit the target exactly
+                            
+                        text, err = fetch_wikitext(title, session=session, api_url=MEDIA_API_URL)
+                        # Only add if it's not already formatted
+                        if text and not is_already_formatted(text):
+                            raw_texts[title] = text
+                            file_cats[title] = current_cat
+                            
+                        # Update progress bar based on target count
+                        progress_bar.progress(min(len(raw_texts) / target_count, 1.0))
                 else:
                     consecutive_empty += 1
                     
                 current_num += 1
                 
-            if not all_files:
-                st.error("No files found in the starting category or the subsequent sequences.")
+            if not raw_texts:
+                st.error("No unformatted files found in the starting category or the subsequent sequences.")
                 st.stop()
                 
-            status_text.success(f"Finished searching. Found {len(all_files)} files across {current_num - int(num_str)} categories.")
+            status_text.success(f"Finished searching. Found {len(raw_texts)} unformatted files across {current_num - int(num_str)} categories.")
+            time.sleep(1)
             
-            st.info("Fetching original wikitexts...")
-            raw_texts = {}
-            progress_bar = st.progress(0)
-            for i, title in enumerate(all_files):
-                text, err = fetch_wikitext(title, session=session, api_url=MEDIA_API_URL)
-                if text:
-                    raw_texts[title] = text
-                progress_bar.progress((i + 1) / len(all_files))
-                
             st.session_state.raw_texts = raw_texts
             st.session_state.file_categories = file_cats
             st.session_state.target_category = seq_category_input # Base category for reference
