@@ -610,16 +610,20 @@ def format_file_description(wikitext, target_category):
     if bottom_part:
         # Clean target category (handle potential spacing variations)
         target_cat_name = target_category.replace("Category:", "").strip()
-        target_cat_pattern = r'\[\[Category:\s*' + re.escape(target_cat_name) + r'\s*\]\]'
+        target_cat_pattern = r'\[\[Category:\s*' + re.escape(target_cat_name) + r'\s*\]\]\r?\n?'
         bottom_part = re.sub(target_cat_pattern, '', bottom_part, flags=re.IGNORECASE)
         
+        # If this is a BWNS file, remove ALL BWNS categories from the bottom part
+        if is_bwns:
+            bottom_part = re.sub(r'\[\[Category:\s*BWNS\s*\d+\s*\]\]\r?\n?', '', bottom_part, flags=re.IGNORECASE)
+        
         # Clean image file type categories
-        image_cats_pattern = r'\[\[Category:\s*(PNG|JPG|JPEG|GIF|TIF|TIFF|WEBP)\s*files\s*\]\]'
+        image_cats_pattern = r'\[\[Category:\s*(PNG|JPG|JPEG|GIF|TIF|TIFF|WEBP)\s*files\s*\]\]\r?\n?'
         bottom_part = re.sub(image_cats_pattern, '', bottom_part, flags=re.IGNORECASE)
         
         # Remove existing license templates (we will explicitly add it back in the reassembly)
-        bottom_part = re.sub(r'\{\{Bn-excerpt\}\}', '', bottom_part, flags=re.IGNORECASE)
-        bottom_part = re.sub(r'\{\{Baha\'i World News Service\}\}', '', bottom_part, flags=re.IGNORECASE)
+        bottom_part = re.sub(r'\{\{Bn-excerpt\}\}\r?\n?', '', bottom_part, flags=re.IGNORECASE)
+        bottom_part = re.sub(r'\{\{Baha\'i World News Service\}\}\r?\n?', '', bottom_part, flags=re.IGNORECASE)
 
         # Remove any errant headers (e.g., == Licensing ==, == License ==)
         bottom_part = re.sub(r'^==\s*.*?\s*==[ \t]*\r?\n?', '', bottom_part, flags=re.MULTILINE)
@@ -647,10 +651,14 @@ def format_file_description(wikitext, target_category):
        - Remove any surrounding quotation marks.
        - Remove "== Summary ==" or "== File info ==" if they exist in the original text.
        - Fix transliterations for Bahá’í terms: Replace "Baha'u'llah" with "Bahá’u’lláh", "Baha'is" with "Bahá’ís", "Bahá'í" with "Bahá’í", and "Bahji" with "Bahjí".
+       - DO NOT include "See also:" texts or URLs in the caption.
        
     3. Extract the source and put it in the `source =` field.
        - If the source is in a format like "From BN [number] p [number]", wrap it in the template: {{{{bns|[number]|[number]}}}}.
-       - If it already uses a template like {{{{bns|...}}}} or {{{{bwns|...}}}}, preserve it inside the source field.
+       - If it already uses a template like {{{{bns|...}}}}, preserve it inside the source field.
+       - If it already uses a template like {{{{bwns|...}}}}, change it to {{{{bwn|...}}}} and preserve it inside the source field.
+       - If you see a URL like "https://news.bahai.org/story/[number]/...", convert it to {{{{bwn|[number]}}}} and place it in the source field.
+       - If there are multiple sources (e.g., multiple {{{{bwn|...}}}} templates), separate them with <br>.
 
     ORIGINAL TEXT:
     {top_part}
@@ -673,7 +681,7 @@ def format_file_description(wikitext, target_category):
             # Strip markdown blocks if Gemini disobeys
             gemini_text = re.sub(r'^```(?:mediawiki|wikitext)?\n|\n```$', '', gemini_text, flags=re.MULTILINE).strip()
 
-        # Enforce bwn template instead of bwns if applicable
+        # Enforce bwn template instead of bwns if applicable (safety net)
         if is_bwns:
             gemini_text = re.sub(r'\{\{bwns\|', '{{bwn|', gemini_text, flags=re.IGNORECASE)
 
