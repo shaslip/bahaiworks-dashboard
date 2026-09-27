@@ -620,6 +620,7 @@ def format_file_description(wikitext, target_category):
             lines.pop(0)
             
         top_part = "\n\n".join(lines)
+        print("DEBUG LINES:", repr(lines))
 
     # 2. Python Cleanup for Bottom Part
     if bottom_part:
