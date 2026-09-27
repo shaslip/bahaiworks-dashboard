@@ -7,6 +7,7 @@ import json_repair
 import google.generativeai as genai
 from google.cloud import documentai
 from google.api_core.client_options import ClientOptions
+from google.oauth2 import service_account
 from pdf2image import convert_from_path
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
@@ -183,9 +184,19 @@ def transcribe_with_document_ai(image):
         return "DOCAI_ERROR: Missing GCP_PROJECT_ID, GCP_LOCATION, or GCP_PROCESSOR_ID in .env"
 
     try:
+        # Load explicit credentials from service_account.json in the project root
+        root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        cert_path = os.path.join(root_dir, "service_account.json")
+        credentials = service_account.Credentials.from_service_account_file(cert_path)
+
         # You must set the api_endpoint if you use a location other than 'us'.
         opts = ClientOptions(api_endpoint=f"{location}-documentai.googleapis.com")
-        client = documentai.DocumentProcessorServiceClient(client_options=opts)
+        
+        # Pass the explicit credentials to the client
+        client = documentai.DocumentProcessorServiceClient(
+            client_options=opts,
+            credentials=credentials
+        )
         
         name = client.processor_path(project_id, location, processor_id)
 
@@ -208,7 +219,7 @@ def transcribe_with_document_ai(image):
 
     except Exception as e:
         check_fatal_rate_limit(e)
-        return f"DOCAI_ERROR: {str(e)}"
+        return f"_ERROR: {str(e)}"
 
 def reformat_raw_text(raw_text):
     """
