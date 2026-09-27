@@ -606,6 +606,21 @@ def format_file_description(wikitext, target_category):
         top_part = wikitext.strip()
         bottom_part = ""
 
+    # 1.5 Pre-process top_part with Python to remove headers and bold titles
+    if top_part:
+        # Split into paragraphs
+        paragraphs = [p.strip() for p in re.split(r'\n{2,}', top_part) if p.strip()]
+        
+        # Remove standard MediaWiki headers
+        paragraphs = [p for p in paragraphs if not re.match(r"^==\s*(Summary|File info)\s*==$", p, re.IGNORECASE)]
+        
+        # If we have multiple paragraphs left, and the first one is entirely wrapped in bold quotes, remove it.
+        # (Matches '''Title''' and handles typos like '''Title'''')
+        if len(paragraphs) > 1 and re.match(r"^'''[^'].*?'''+$", paragraphs[0]):
+            paragraphs.pop(0)
+            
+        top_part = "\n\n".join(paragraphs)
+
     # 2. Python Cleanup for Bottom Part
     if bottom_part:
         # Clean target category (handle potential spacing variations)
@@ -649,9 +664,8 @@ def format_file_description(wikitext, target_category):
     
     2. Extract the caption and put it in the `caption =` field.
        - Remove any surrounding quotation marks.
-       - Remove "== Summary ==" or "== File info ==" if they exist in the original text.
+       - Remove "== Summary ==" if it exists in the original text.
        - DO NOT include "See also:" texts or URLs in the caption.
-       - If the caption contains a bolded article title at the start (e.g., '''Some Title''') followed by a descriptive image caption, REMOVE the bolded title and only extract the descriptive caption. (However, if the bolded title is the ONLY text available, keep it as the caption).
        
     3. Extract the source and put it in the `source =` field.
        - If the source is in a format like "From BN [number] p [number]", wrap it in the template: {{{{bns|[number]|[number]}}}}.
