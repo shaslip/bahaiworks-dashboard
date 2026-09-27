@@ -608,18 +608,18 @@ def format_file_description(wikitext, target_category):
 
     # 1.5 Pre-process top_part with Python to remove headers and bold titles
     if top_part:
-        # Split into paragraphs
-        paragraphs = [p.strip() for p in re.split(r'\n{2,}', top_part) if p.strip()]
+        # Split into lines safely handling Windows (\r\n) or Linux (\n) line endings
+        lines = [line.strip() for line in top_part.splitlines() if line.strip()]
         
         # Remove standard MediaWiki headers
-        paragraphs = [p for p in paragraphs if not re.match(r"^==\s*(Summary|File info)\s*==$", p, re.IGNORECASE)]
+        lines = [line for line in lines if not re.match(r"^==\s*(Summary|File info)\s*==$", line, re.IGNORECASE)]
         
-        # If we have multiple paragraphs left, and the first one is entirely wrapped in bold quotes, remove it.
+        # If we have multiple lines left, and the first one is entirely wrapped in bold quotes, remove it.
         # (Matches '''Title''' and handles typos like '''Title'''')
-        if len(paragraphs) > 1 and re.match(r"^'''[^'].*?'''+$", paragraphs[0]):
-            paragraphs.pop(0)
+        if len(lines) > 1 and re.match(r"^'''[^'].*?'''+$", lines[0]):
+            lines.pop(0)
             
-        top_part = "\n\n".join(paragraphs)
+        top_part = "\n\n".join(lines)
 
     # 2. Python Cleanup for Bottom Part
     if bottom_part:
