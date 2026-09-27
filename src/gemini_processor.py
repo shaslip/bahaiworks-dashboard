@@ -650,9 +650,8 @@ def format_file_description(wikitext, target_category):
     2. Extract the caption and put it in the `caption =` field.
        - Remove any surrounding quotation marks.
        - Remove "== Summary ==" or "== File info ==" if they exist in the original text.
-       - Fix transliterations for Bahá’í terms: Replace "Baha'u'llah" with "Bahá’u’lláh", "Baha'is" with "Bahá’ís", "Bahá'í" with "Bahá’í", and "Bahji" with "Bahjí".
        - DO NOT include "See also:" texts or URLs in the caption.
-       - If the text contains a bolded article title (e.g., '''Title''') followed by a descriptive image caption, REMOVE the bolded title and only extract the descriptive caption. (However, if the bolded title is the ONLY text available, keep it as the caption).
+       - If the caption contains a bolded article title at the start (e.g., '''Some Title''') followed by a descriptive image caption, REMOVE the bolded title and only extract the descriptive caption. (However, if the bolded title is the ONLY text available, keep it as the caption).
        
     3. Extract the source and put it in the `source =` field.
        - If the source is in a format like "From BN [number] p [number]", wrap it in the template: {{{{bns|[number]|[number]}}}}.
