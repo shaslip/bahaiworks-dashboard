@@ -68,8 +68,12 @@ def scroll_to_top():
 
 def is_already_formatted(wikitext):
     """Check if the wikitext is already formatted with == File info == and {{cs}}."""
-    has_file_info = bool(re.search(r'==\s*File info\s*==', wikitext, re.IGNORECASE))
-    has_cs = bool(re.search(r'\{\{\s*cs\b', wikitext, re.IGNORECASE))
+    # Allows for any amount of whitespace (or none) between the words and equals signs
+    has_file_info = bool(re.search(r'==\s*File\s*info\s*==', wikitext, re.IGNORECASE))
+    
+    # Looks specifically for a space, newline, pipe (|), or closing brace (}) immediately after "cs"
+    has_cs = bool(re.search(r'\{\{\s*cs[\s\|\}]', wikitext, re.IGNORECASE))
+    
     return has_file_info and has_cs
 
 # ==========================================
