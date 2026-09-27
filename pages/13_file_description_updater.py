@@ -176,16 +176,14 @@ if st.session_state.step == 0:
                 if files:
                     consecutive_empty = 0
                     for title in files:
-                        if len(raw_texts) >= target_count:
-                            break # Stop if we hit the target exactly
-                            
                         text, err = fetch_wikitext(title, session=session, api_url=MEDIA_API_URL)
+                        
                         # Only add if it's not already formatted
                         if text and not is_already_formatted(text):
                             raw_texts[title] = text
                             file_cats[title] = current_cat
                             
-                        # Update progress bar based on target count
+                        # Update progress bar based on target count (capped at 1.0 in case we go over)
                         progress_bar.progress(min(len(raw_texts) / target_count, 1.0))
                 else:
                     consecutive_empty += 1
