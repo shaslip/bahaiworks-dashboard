@@ -590,9 +590,11 @@ def format_file_description(wikitext, target_category):
     Splits the wikitext into unstructured (caption/source) and structured (metadata/categories).
     Uses Gemini for the unstructured part, and Python regex for the structured part.
     """
+    is_bwns = "BWNS" in target_category.upper()
+    
     # 1. Split the wikitext
-    # We look for the start of the metadata block: Bn-excerpt, Categories, or ImageNotes
-    match = re.search(r'\{\{Bn-excerpt\}\}|\[\[Category:|\{\{ImageNote\|', wikitext, re.IGNORECASE)
+    # We look for the start of the metadata block: Bn-excerpt, Baha'i World News Service, Categories, or ImageNotes
+    match = re.search(r'\{\{Bn-excerpt\}\}|\{\{Baha\'i World News Service\}\}|\[\[Category:|\{\{ImageNote\|', wikitext, re.IGNORECASE)
     
     if match:
         split_idx = match.start()
@@ -615,8 +617,9 @@ def format_file_description(wikitext, target_category):
         image_cats_pattern = r'\[\[Category:\s*(PNG|JPG|JPEG|GIF|TIF|TIFF|WEBP)\s*files\s*\]\]'
         bottom_part = re.sub(image_cats_pattern, '', bottom_part, flags=re.IGNORECASE)
         
-        # Remove existing {{Bn-excerpt}} (we will explicitly add it back in the reassembly)
+        # Remove existing license templates (we will explicitly add it back in the reassembly)
         bottom_part = re.sub(r'\{\{Bn-excerpt\}\}', '', bottom_part, flags=re.IGNORECASE)
+        bottom_part = re.sub(r'\{\{Baha\'i World News Service\}\}', '', bottom_part, flags=re.IGNORECASE)
 
         # Remove any errant headers (e.g., == Licensing ==, == License ==)
         bottom_part = re.sub(r'^==\s*.*?\s*==[ \t]*\r?\n?', '', bottom_part, flags=re.MULTILINE)
@@ -647,7 +650,7 @@ def format_file_description(wikitext, target_category):
        
     3. Extract the source and put it in the `source =` field.
        - If the source is in a format like "From BN [number] p [number]", wrap it in the template: {{{{bns|[number]|[number]}}}}.
-       - If it already uses a template like {{{{bns|...}}}}, preserve it inside the source field.
+       - If it already uses a template like {{{{bns|...}}}} or {{{{bwns|...}}}}, preserve it inside the source field.
 
     ORIGINAL TEXT:
     {top_part}
@@ -670,8 +673,14 @@ def format_file_description(wikitext, target_category):
             # Strip markdown blocks if Gemini disobeys
             gemini_text = re.sub(r'^```(?:mediawiki|wikitext)?\n|\n```$', '', gemini_text, flags=re.MULTILINE).strip()
 
+        # Enforce bwn template instead of bwns if applicable
+        if is_bwns:
+            gemini_text = re.sub(r'\{\{bwns\|', '{{bwn|', gemini_text, flags=re.IGNORECASE)
+
         # 4. Reassembly
-        final_text = f"{gemini_text}\n\n== File license ==\n{{{{Bn-excerpt}}}}"
+        license_template = "{{Baha'i World News Service}}" if is_bwns else "{{Bn-excerpt}}"
+        final_text = f"{gemini_text}\n\n== File license ==\n{license_template}"
+        
         if bottom_part:
             final_text += f"\n\n{bottom_part}"
             
