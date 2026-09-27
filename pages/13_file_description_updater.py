@@ -76,19 +76,26 @@ if st.session_state.step == 0:
 # ==========================================
 if st.session_state.step == 1:
     st.subheader("1. Review Files")
-    st.info("Remove any files from the selection below that do not need processing to save API costs.")
+    st.info("Review the fetched files below. Click 'Remove' on any files that do not need processing to save API costs.")
     
-    # Multiselect allows easy removal of files from the queue
-    selected_titles = st.multiselect(
-        "Select files to process with Gemini:",
-        options=list(st.session_state.raw_texts.keys()),
-        default=list(st.session_state.raw_texts.keys())
-    )
-    
-    with st.expander("Preview Original Wikitexts (for selected files)"):
-        for title in selected_titles:
-            st.markdown(f"**{title}**")
-            st.code(st.session_state.raw_texts[title], language="mediawiki")
+    # Callback to immediately remove a file from the queue
+    def remove_from_queue(title_to_remove):
+        if title_to_remove in st.session_state.raw_texts:
+            del st.session_state.raw_texts[title_to_remove]
+
+    # Display files row by row: Filename, Remove Button, Contents
+    if not st.session_state.raw_texts:
+        st.warning("No files left in the queue.")
+    else:
+        for title, text in list(st.session_state.raw_texts.items()):
+            col1, col2 = st.columns([5, 1])
+            with col1:
+                st.markdown(f"### {title}")
+            with col2:
+                st.button("❌ Remove", key=f"btn_remove_{title}", on_click=remove_from_queue, args=(title,), use_container_width=True)
+            
+            st.code(text, language="mediawiki")
+            st.divider()
             
     col1, col2 = st.columns([1, 5])
     with col1:
@@ -98,21 +105,19 @@ if st.session_state.step == 1:
             st.rerun()
             
     with col2:
-        if st.button("🤖 Process Selected Files", type="primary"):
-            if not selected_titles:
-                st.warning("Please select at least one file.")
-                st.stop()
-                
+        # Process whatever remains in the raw_texts dictionary
+        if st.button("🤖 Process Remaining Files", type="primary", disabled=len(st.session_state.raw_texts) == 0):
             st.write("🤖 Gemini Processing...")
             gemini_progress = st.progress(0)
             processed_count = 0
             
             st.session_state.files_data = {}
+            titles_to_process = list(st.session_state.raw_texts.keys())
             
             with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
                 future_to_title = {
                     executor.submit(process_single_file, title, st.session_state.raw_texts[title], st.session_state.target_category): title 
-                    for title in selected_titles
+                    for title in titles_to_process
                 }
                 
                 for future in concurrent.futures.as_completed(future_to_title):
@@ -127,10 +132,10 @@ if st.session_state.step == 1:
                         st.error(f"Error processing {title}: {exc}")
                         
                     processed_count += 1
-                    gemini_progress.progress(processed_count / len(selected_titles))
+                    gemini_progress.progress(processed_count / len(titles_to_process))
                     
             st.success("Processing complete!")
-            time.sleep(1) # Brief pause so the user sees the success message
+            time.sleep(1)
             st.session_state.step = 2
             st.rerun()
 
