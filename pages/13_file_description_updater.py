@@ -4,6 +4,7 @@ import sys
 import requests
 import concurrent.futures
 import time
+import re
 import streamlit.components.v1 as components
 
 # --- Path Setup ---
@@ -24,6 +25,8 @@ if "step" not in st.session_state:
     st.session_state.step = 0  # 0: Fetch, 1: Review Queue, 2: Review Edits
 if "raw_texts" not in st.session_state:
     st.session_state.raw_texts = {}
+if "file_categories" not in st.session_state:
+    st.session_state.file_categories = {} # Maps title -> specific category it was found in
 if "files_data" not in st.session_state:
     st.session_state.files_data = {}
 if "target_category" not in st.session_state:
@@ -33,6 +36,7 @@ if "target_category" not in st.session_state:
 def reset_app():
     st.session_state.step = 0
     st.session_state.raw_texts = {}
+    st.session_state.file_categories = {}
     st.session_state.files_data = {}
     st.session_state.target_category = ""
 
@@ -66,40 +70,123 @@ def scroll_to_top():
 # STEP 0: FETCH FILES
 # ==========================================
 if st.session_state.step == 0:
-    category_input = st.text_input(
-        "Category Name", 
-        value=st.session_state.target_category, 
-        placeholder="e.g., Category:Baha'i News No 486"
-    )
+    tab1, tab2 = st.tabs(["📁 Single Category", "📚 Sequential Categories (Supercharged)"])
     
-    if st.button("Fetch Files", type="primary"):
-        if not category_input:
-            st.warning("Please enter a category name.")
-            st.stop()
+    # --- TAB 1: SINGLE CATEGORY ---
+    with tab1:
+        category_input = st.text_input(
+            "Category Name", 
+            value=st.session_state.target_category, 
+            placeholder="e.g., Category:Baha'i News No 486",
+            key="single_cat_input"
+        )
+        
+        if st.button("Fetch Files", type="primary", key="btn_single_fetch"):
+            if not category_input:
+                st.warning("Please enter a category name.")
+                st.stop()
 
-        session = requests.Session()
-        
-        with st.spinner(f"Fetching non-PDF files from {category_input}..."):
-            files = get_category_files(category_input, session=session, api_url=MEDIA_API_URL)
-        
-        if not files:
-            st.error("No non-PDF files found in this category.")
-            st.stop()
+            session = requests.Session()
             
-        st.info(f"Found {len(files)} files. Fetching original wikitexts...")
-        
-        raw_texts = {}
-        progress_bar = st.progress(0)
-        for i, title in enumerate(files):
-            text, err = fetch_wikitext(title, session=session, api_url=MEDIA_API_URL)
-            if text:
-                raw_texts[title] = text
-            progress_bar.progress((i + 1) / len(files))
+            with st.spinner(f"Fetching non-PDF files from {category_input}..."):
+                files = get_category_files(category_input, session=session, api_url=MEDIA_API_URL)
             
-        st.session_state.raw_texts = raw_texts
-        st.session_state.target_category = category_input
-        st.session_state.step = 1
-        st.rerun()
+            if not files:
+                st.error("No non-PDF files found in this category.")
+                st.stop()
+                
+            st.info(f"Found {len(files)} files. Fetching original wikitexts...")
+            
+            raw_texts = {}
+            file_cats = {}
+            progress_bar = st.progress(0)
+            for i, title in enumerate(files):
+                text, err = fetch_wikitext(title, session=session, api_url=MEDIA_API_URL)
+                if text:
+                    raw_texts[title] = text
+                    file_cats[title] = category_input
+                progress_bar.progress((i + 1) / len(files))
+                
+            st.session_state.raw_texts = raw_texts
+            st.session_state.file_categories = file_cats
+            st.session_state.target_category = category_input
+            st.session_state.step = 1
+            st.rerun()
+
+    # --- TAB 2: SEQUENTIAL CATEGORIES ---
+    with tab2:
+        st.info("Start at a base category (e.g., 'BWNS 405') and automatically fetch the next categories (406, 407...) until the target image count is reached.")
+        
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            seq_category_input = st.text_input(
+                "Starting Category Name", 
+                value=st.session_state.target_category, 
+                placeholder="e.g., Category:BWNS 405",
+                key="seq_cat_input"
+            )
+        with col2:
+            target_count = st.number_input("Target Total Images", min_value=5, max_value=200, value=50, step=5)
+            
+        if st.button("Fetch Sequential Files", type="primary", key="btn_seq_fetch"):
+            if not seq_category_input:
+                st.warning("Please enter a starting category name.")
+                st.stop()
+                
+            # Regex to find the LAST number in the string (e.g., "Category:1992 BWNS 405" -> "405")
+            # \D*$ ensures there are no digits after the one we matched.
+            match = re.search(r'^(.*?)(\d+)(\D*)$', seq_category_input)
+            if not match:
+                st.error("Could not find a number in the category name to sequence. Please use the Single Category tab.")
+                st.stop()
+                
+            prefix, num_str, suffix = match.groups()
+            current_num = int(num_str)
+            
+            session = requests.Session()
+            all_files = []
+            file_cats = {}
+            consecutive_empty = 0
+            max_empty = 15 # Stop if we hit 15 empty categories in a row
+            
+            status_text = st.empty()
+            
+            # Loop until we hit the target count or run out of contiguous categories
+            while len(all_files) < target_count and consecutive_empty < max_empty:
+                current_cat = f"{prefix}{current_num}{suffix}"
+                status_text.info(f"Searching {current_cat}... (Found {len(all_files)}/{target_count} images)")
+                
+                files = get_category_files(current_cat, session=session, api_url=MEDIA_API_URL)
+                if files:
+                    all_files.extend(files)
+                    for f in files:
+                        file_cats[f] = current_cat
+                    consecutive_empty = 0
+                else:
+                    consecutive_empty += 1
+                    
+                current_num += 1
+                
+            if not all_files:
+                st.error("No files found in the starting category or the subsequent sequences.")
+                st.stop()
+                
+            status_text.success(f"Finished searching. Found {len(all_files)} files across {current_num - int(num_str)} categories.")
+            
+            st.info("Fetching original wikitexts...")
+            raw_texts = {}
+            progress_bar = st.progress(0)
+            for i, title in enumerate(all_files):
+                text, err = fetch_wikitext(title, session=session, api_url=MEDIA_API_URL)
+                if text:
+                    raw_texts[title] = text
+                progress_bar.progress((i + 1) / len(all_files))
+                
+            st.session_state.raw_texts = raw_texts
+            st.session_state.file_categories = file_cats
+            st.session_state.target_category = seq_category_input # Base category for reference
+            st.session_state.step = 1
+            st.rerun()
 
 # ==========================================
 # STEP 1: REVIEW QUEUE & PROCESS
@@ -112,12 +199,15 @@ if st.session_state.step == 1:
     def remove_from_queue(title_to_remove):
         if title_to_remove in st.session_state.raw_texts:
             del st.session_state.raw_texts[title_to_remove]
+        if title_to_remove in st.session_state.file_categories:
+            del st.session_state.file_categories[title_to_remove]
 
     if not st.session_state.raw_texts:
         st.warning("No files left in the queue.")
     else:
         for title, text in list(st.session_state.raw_texts.items()):
-            st.markdown(f"**{title}**")
+            file_cat = st.session_state.file_categories.get(title, "Unknown Category")
+            st.markdown(f"**{title}** *(From: {file_cat})*")
             
             # Using columns to constrain the width of the text box and align the button.
             # Ratios: 6 (Text Box), 1.5 (Button), 2.5 (Empty space to prevent full width)
@@ -147,8 +237,14 @@ if st.session_state.step == 1:
             titles_to_process = list(st.session_state.raw_texts.keys())
             
             with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
+                # Pass the specific category for that file so format_file_description strips the right category
                 future_to_title = {
-                    executor.submit(process_single_file, title, st.session_state.raw_texts[title], st.session_state.target_category): title 
+                    executor.submit(
+                        process_single_file, 
+                        title, 
+                        st.session_state.raw_texts[title], 
+                        st.session_state.file_categories.get(title, st.session_state.target_category)
+                    ): title 
                     for title in titles_to_process
                 }
                 
