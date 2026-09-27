@@ -4,6 +4,7 @@ import sys
 import requests
 import concurrent.futures
 import time
+import streamlit.components.v1 as components
 
 # --- Path Setup ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -35,6 +36,15 @@ def process_single_file(title, wikitext, target_cat):
     """Worker function for threading"""
     new_text = format_file_description(wikitext, target_cat)
     return title, new_text
+
+def scroll_to_top():
+    """Forces the Streamlit iframe parent to scroll to the top."""
+    js = '''
+    <script>
+        window.parent.scrollTo(0,0);
+    </script>
+    '''
+    components.html(js, height=0)
 
 # ==========================================
 # STEP 0: FETCH FILES
@@ -148,6 +158,7 @@ if st.session_state.step == 1:
 # ==========================================
 if st.session_state.step == 2:
     # --- Display Results & Editing ---
+    scroll_to_top()    
     st.subheader("2. Review and Edit Descriptions")
     
     if st.button("Back to Selection"):
