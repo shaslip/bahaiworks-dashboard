@@ -41,7 +41,16 @@ def scroll_to_top():
     """Forces the Streamlit iframe parent to scroll to the top."""
     js = '''
     <script>
+        // 1. Try scrolling the main window
         window.parent.scrollTo(0,0);
+        
+        // 2. Try scrolling Streamlit's main app container (newer versions)
+        var stMain = window.parent.document.querySelector('[data-testid="stMain"]');
+        if (stMain) { stMain.scrollTo(0,0); }
+        
+        // 3. Try scrolling Streamlit's older app container
+        var main = window.parent.document.querySelector('section.main');
+        if (main) { main.scrollTo(0,0); }
     </script>
     '''
     components.html(js, height=0)
