@@ -83,18 +83,22 @@ if st.session_state.step == 1:
         if title_to_remove in st.session_state.raw_texts:
             del st.session_state.raw_texts[title_to_remove]
 
-    # Display files row by row: Filename, Remove Button, Contents
     if not st.session_state.raw_texts:
         st.warning("No files left in the queue.")
     else:
         for title, text in list(st.session_state.raw_texts.items()):
-            col1, col2 = st.columns([5, 1])
-            with col1:
-                st.markdown(f"### {title}")
-            with col2:
+            st.markdown(f"**{title}**")
+            
+            # Using columns to constrain the width of the text box and align the button.
+            # Ratios: 6 (Text Box), 1.5 (Button), 2.5 (Empty space to prevent full width)
+            col_text, col_btn, col_spacer = st.columns([6, 1.5, 2.5])
+            
+            with col_text:
+                st.text_area("Raw Text", value=text, height=200, disabled=True, label_visibility="collapsed", key=f"view_{title}")
+                
+            with col_btn:
                 st.button("❌ Remove", key=f"btn_remove_{title}", on_click=remove_from_queue, args=(title,), use_container_width=True)
             
-            st.code(text, language="mediawiki")
             st.divider()
             
     col1, col2 = st.columns([1, 5])
