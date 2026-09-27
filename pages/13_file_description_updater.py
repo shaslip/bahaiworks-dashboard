@@ -26,7 +26,6 @@ if "target_category" not in st.session_state:
     st.session_state.target_category = ""
 
 st.title("🖼️ File Description Updater (Bahai.media)")
-st.write("Key exists:", bool(os.environ.get("GEMINI_API_KEY")))
 st.markdown("Fetch files from a category, reformat their descriptions using Gemini, and upload changes.")
 
 # --- Inputs ---
