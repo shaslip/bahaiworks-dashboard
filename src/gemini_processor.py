@@ -11,7 +11,6 @@ from pdf2image import convert_from_path
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 # Configure Gemini
-print("KEY AT IMPORT:", bool(os.environ.get("GEMINI_API_KEY")))
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
 # Your specific model
