@@ -40,6 +40,24 @@ def get_caption_from_text(content):
         return match.group(1).strip()
     return ""
 
+def verify_category_exists(cat_name):
+    """Checks the MediaWiki API to see if a category exists."""
+    if not cat_name.strip(): return False
+    params = {
+        "action": "query",
+        "titles": f"Category:{cat_name.strip()}",
+        "format": "json"
+    }
+    try:
+        res = requests.get(MEDIA_API_URL, params=params).json()
+        pages = res.get("query", {}).get("pages", {})
+        for pid in pages:
+            if int(pid) > 0:
+                return True
+    except:
+        pass
+    return False
+
 def append_categories_to_wikitext(wikitext, new_categories):
     appended = False
     clean_text = wikitext.strip()
@@ -57,7 +75,7 @@ def append_categories_to_wikitext(wikitext, new_categories):
     return clean_text, appended
 
 def generate_ai_data(files_to_process, context_mapping):
-    """Runs the AI pipeline but DOES NOT upload. Saves to session state."""
+    """Runs the AI pipeline and pre-verifies categories. Saves to session state."""
     session = requests.Session()
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -78,6 +96,12 @@ def generate_ai_data(files_to_process, context_mapping):
         fuzzy_candidates = get_fuzzy_candidates(blind_suggestions, limit_per_suggestion=5)
         raw_final_picks = filter_fuzzy_categories(caption, fuzzy_candidates, context=context)
         final_picks = resolve_aliases(raw_final_picks)
+        
+        # Pre-verify the AI's picks to populate the UI correctly
+        cat_states = []
+        for c in final_picks:
+            cat_states.append({"name": c, "exists": verify_category_exists(c)})
+            
         image_url = get_image_url(file_title, session=session, api_url=MEDIA_API_URL)
         
         st.session_state.ac_data[file_title] = {
@@ -85,6 +109,7 @@ def generate_ai_data(files_to_process, context_mapping):
             "1_blind_suggestions": blind_suggestions,
             "2_fuzzy_candidates": fuzzy_candidates,
             "3_final_picks": final_picks,
+            "cat_states": cat_states,
             "image_url": image_url,
             "wikitext": wikitext
         }
@@ -172,14 +197,14 @@ if st.session_state.ac_step == 0:
                     
             if not all_files: st.error("No files found."); st.stop()
             
-            # Sweeper runs AI and uploads immediately
             with st.spinner("Running AI and uploading..."):
                 generate_ai_data(all_files, context_map)
                 
                 session = requests.Session()
                 for file_title, data in st.session_state.ac_data.items():
                     if "error" in data: continue
-                    new_cats = data.get("3_final_picks", [])
+                    # Extract the names from the cat_states dictionary
+                    new_cats = [c["name"].strip() for c in data.get("cat_states", []) if c["name"].strip()]
                     if new_cats:
                         new_wikitext, changed = append_categories_to_wikitext(data["wikitext"], new_cats)
                         if changed:
@@ -194,17 +219,27 @@ if st.session_state.ac_step == 0:
 elif st.session_state.ac_step == 1:
     st.title("📝 Review & Edit Categories")
     
-    # Header buttons
     col1, col2, col3 = st.columns([1, 1, 4])
     with col1:
         if st.button("Cancel / Start Over"): reset_app(); st.rerun()
     with col2:
-        # Generate JSON for download
         json_data = json.dumps(st.session_state.ac_data, indent=4, ensure_ascii=False)
         st.download_button(label="⬇️ Download JSON", data=json_data, file_name="auto_cat_results.json", mime="application/json")
 
     st.divider()
     
+    # Callbacks for dynamic category editing
+    def update_cat(ftitle, idx):
+        val = st.session_state[f"cat_in_{ftitle}_{idx}"]
+        st.session_state.ac_data[ftitle]["cat_states"][idx]["name"] = val
+        st.session_state.ac_data[ftitle]["cat_states"][idx]["exists"] = verify_category_exists(val)
+        
+    def del_cat(ftitle, idx):
+        st.session_state.ac_data[ftitle]["cat_states"].pop(idx)
+        
+    def add_cat(ftitle):
+        st.session_state.ac_data[ftitle]["cat_states"].append({"name": "", "exists": False})
+
     # Build UI for each file
     for file_title, data in st.session_state.ac_data.items():
         st.markdown(f"### [{file_title}](https://bahai.media/{file_title.replace(' ', '_')})")
@@ -226,14 +261,31 @@ elif st.session_state.ac_step == 1:
                 st.write("**Blind Suggestions:**", data["1_blind_suggestions"])
                 st.write("**Fuzzy Candidates:**", data["2_fuzzy_candidates"])
                 
-            # Editable text input pre-filled with AI's final picks
-            default_cats = ", ".join(data["3_final_picks"])
-            st.text_input(
-                "Final Categories (Comma separated)", 
-                value=default_cats, 
-                key=f"edit_cats_{file_title}",
-                help="Add, remove, or edit categories here. Leave blank to skip this file."
-            )
+            st.write("**Final Categories to Apply:**")
+            
+            # Render the dynamic list of categories
+            for j, cat_obj in enumerate(data.get("cat_states", [])):
+                c1, c2, c3 = st.columns([0.5, 8, 1])
+                with c1:
+                    if cat_obj["name"].strip() == "":
+                        st.markdown("<div style='margin-top: 8px; font-size: 20px;'>⚪</div>", unsafe_allow_html=True)
+                    elif cat_obj["exists"]:
+                        st.markdown("<div style='margin-top: 8px; font-size: 20px;' title='Category Exists'>✅</div>", unsafe_allow_html=True)
+                    else:
+                        st.markdown("<div style='margin-top: 8px; font-size: 20px;' title='Category does not exist yet'>⚠️</div>", unsafe_allow_html=True)
+                with c2:
+                    st.text_input(
+                        "Cat", 
+                        value=cat_obj["name"], 
+                        key=f"cat_in_{file_title}_{j}", 
+                        on_change=update_cat, 
+                        args=(file_title, j), 
+                        label_visibility="collapsed"
+                    )
+                with c3:
+                    st.button("🗑️", key=f"del_{file_title}_{j}", on_click=del_cat, args=(file_title, j))
+                    
+            st.button("➕ Add Category", key=f"add_{file_title}", on_click=add_cat, args=(file_title,))
             
         st.divider()
         
@@ -250,9 +302,8 @@ elif st.session_state.ac_step == 1:
             data = st.session_state.ac_data[file_title]
             if "error" in data: continue
                 
-            # Read the user's edited categories from the session state
-            user_input = st.session_state.get(f"edit_cats_{file_title}", "")
-            final_cats = [c.strip() for c in user_input.split(",") if c.strip()]
+            # Grab all non-empty category names from the state
+            final_cats = [c["name"].strip() for c in data.get("cat_states", []) if c["name"].strip()]
             
             if final_cats:
                 status.text(f"Uploading {file_title}...")
