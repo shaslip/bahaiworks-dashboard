@@ -42,23 +42,39 @@ def get_caption_from_text(content):
         return match.group(1).strip()
     return ""
 
-def verify_category_exists(cat_name):
-    """Checks the MediaWiki API to see if a category exists."""
-    if not cat_name.strip(): return False
+def verify_and_resolve_category(cat_name):
+    """Checks if a category exists and automatically resolves MediaWiki redirects."""
+    if not cat_name.strip(): return False, cat_name
     params = {
         "action": "query",
         "titles": f"Category:{cat_name.strip()}",
+        "redirects": 1,
         "format": "json"
     }
     try:
         res = requests.get(MEDIA_API_URL, params=params).json()
-        pages = res.get("query", {}).get("pages", {})
-        for pid in pages:
-            if int(pid) > 0:
-                return True
-    except:
+        query = res.get("query", {})
+        
+        # 1. Resolve redirect if applicable
+        resolved_name = cat_name.strip()
+        if "redirects" in query:
+            for redirect in query["redirects"]:
+                # Strip the 'Category:' prefix from the resolved target
+                if redirect["to"].startswith("Category:"):
+                    resolved_name = redirect["to"][9:]
+                else:
+                    resolved_name = redirect["to"]
+        
+        # 2. Check if the final page actually exists
+        pages = query.get("pages", {})
+        for pid, pdata in pages.items():
+            if int(pid) > 0 and "missing" not in pdata:
+                return True, resolved_name
+                
+    except Exception:
         pass
-    return False
+        
+    return False, cat_name
 
 def is_category_already_present(wikitext, cat_name):
     """Checks if a category is already on the page via a Category tag or an Image Annotation (ia) tag."""
@@ -116,10 +132,17 @@ def _process_single_file_ai(file_title, context):
         if not is_category_already_present(wikitext, c):
             new_picks_only.append(c)
     
-    # Pre-verify the AI's picks
+    # Pre-verify and resolve the AI's picks
     cat_states = []
     for c in new_picks_only:
-        cat_states.append({"id": str(uuid.uuid4()), "name": c, "exists": verify_category_exists(c)})
+        exists, resolved_name = verify_and_resolve_category(c)
+        
+        # After resolving (e.g. "The United States" -> "United States"), 
+        # check again in case "United States" is already on the page!
+        if is_category_already_present(wikitext, resolved_name):
+            continue
+            
+        cat_states.append({"id": str(uuid.uuid4()), "name": resolved_name, "exists": exists})
         
     image_url = get_image_url(file_title, session=session, api_url=MEDIA_API_URL)
     
@@ -279,8 +302,11 @@ elif st.session_state.ac_step == 1:
         val = st.session_state[f"cat_in_{ftitle}_{uid}"]
         for cat in st.session_state.ac_data[ftitle]["cat_states"]:
             if cat.get("id") == uid:
-                cat["name"] = val
-                cat["exists"] = verify_category_exists(val)
+                exists, resolved_name = verify_and_resolve_category(val)
+                cat["name"] = resolved_name
+                cat["exists"] = exists
+                # Force the text box to update to the resolved name
+                st.session_state[f"cat_in_{ftitle}_{uid}"] = resolved_name
                 break
         
     def del_cat(ftitle, uid):
