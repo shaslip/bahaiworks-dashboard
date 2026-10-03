@@ -110,9 +110,15 @@ def _process_single_file_ai(file_title, context):
     raw_final_picks = filter_fuzzy_categories(caption, fuzzy_candidates, context=context)
     final_picks = resolve_aliases(raw_final_picks)
     
+    # Filter out categories that are already applied to the wikitext
+    new_picks_only = []
+    for c in final_picks:
+        if not is_category_already_present(wikitext, c):
+            new_picks_only.append(c)
+    
     # Pre-verify the AI's picks
     cat_states = []
-    for c in final_picks:
+    for c in new_picks_only:
         cat_states.append({"id": str(uuid.uuid4()), "name": c, "exists": verify_category_exists(c)})
         
     image_url = get_image_url(file_title, session=session, api_url=MEDIA_API_URL)
@@ -121,7 +127,7 @@ def _process_single_file_ai(file_title, context):
         "caption": caption,
         "1_blind_suggestions": blind_suggestions,
         "2_fuzzy_candidates": fuzzy_candidates,
-        "3_final_picks": final_picks,
+        "3_final_picks": new_picks_only,
         "cat_states": cat_states,
         "image_url": image_url,
         "wikitext": wikitext
