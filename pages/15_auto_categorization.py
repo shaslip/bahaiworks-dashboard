@@ -60,6 +60,25 @@ def verify_category_exists(cat_name):
         pass
     return False
 
+def is_category_already_present(wikitext, cat_name):
+    """Checks if a category is already on the page via a Category tag or an Image Annotation (ia) tag."""
+    clean_text = wikitext.strip()
+    
+    # Handle spaces and underscores interchangeably in regex
+    safe_cat = re.escape(cat_name).replace(r'\ ', r'[\s_]+')
+    
+    # Check for [[Category:Name]] or [[Category:Name|SortKey]]
+    cat_pattern = r'\[\[Category:\s*' + safe_cat + r'\s*(?:\|.*?)?\]\]'
+    if re.search(cat_pattern, clean_text, re.IGNORECASE):
+        return True
+        
+    # Check for {{ia|Name}} or {{ia|Name|...}}
+    ia_pattern = r'\{\{ia\|\s*' + safe_cat + r'\s*(?:\|.*?)?\}\}'
+    if re.search(ia_pattern, clean_text, re.IGNORECASE):
+        return True
+        
+    return False
+
 def append_categories_to_wikitext(wikitext, new_categories):
     appended = False
     clean_text = wikitext.strip()
@@ -67,8 +86,8 @@ def append_categories_to_wikitext(wikitext, new_categories):
     for cat in new_categories:
         cat = cat.strip()
         if not cat: continue
-        pattern = r'\[\[Category:\s*' + re.escape(cat) + r'\s*\]\]'
-        if not re.search(pattern, clean_text, re.IGNORECASE):
+        
+        if not is_category_already_present(clean_text, cat):
             if not appended and not clean_text.endswith("]]"):
                 clean_text += "\n"
             clean_text += f"\n[[Category:{cat}]]"
