@@ -5,6 +5,7 @@ import re
 import json
 import requests
 import time
+from src.category_manager import get_fuzzy_candidates, resolve_aliases
 
 # --- Path Setup ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -75,11 +76,14 @@ def process_files(files_to_process, context_mapping, show_ui=True):
         # 1. Blind Suggestions
         blind_suggestions = suggest_blind_categories(caption, context=context)
         
-        # 2. Fuzzy Search
+        # 2. Fuzzy Search (Now returns aliases too)
         fuzzy_candidates = get_fuzzy_candidates(blind_suggestions, limit_per_suggestion=5)
         
         # 3. AI Filter
-        final_picks = filter_fuzzy_categories(caption, fuzzy_candidates, context=context)
+        raw_final_picks = filter_fuzzy_categories(caption, fuzzy_candidates, context=context)
+        
+        # 4. Resolve Aliases to Targets
+        final_picks = resolve_aliases(raw_final_picks)
         
         # 4. Save to Wiki
         if final_picks:
