@@ -86,7 +86,7 @@ def load_aliases():
 def get_fuzzy_candidates(suggestions, limit_per_suggestion=5):
     """
     Takes a list of AI-generated suggestions, runs fuzzy matching on each, 
-    and pools the top results.
+    and pools the top results (including unresolved aliases).
     """
     if not suggestions:
         return []
@@ -101,21 +101,27 @@ def get_fuzzy_candidates(suggestions, limit_per_suggestion=5):
         if not any(pattern.search(cat) for pattern in exclusions):
             filtered_cats.append(cat)
             
-    # 2. Build search dictionary: { "Search Term": "Actual Category" }
-    search_dict = {cat: cat for cat in filtered_cats}
-    for alias, target in aliases.items():
-        search_dict[alias] = target
-        
-    search_terms = list(search_dict.keys())
+    # 2. Build search list (Real Categories + Aliases)
+    search_terms = filtered_cats + list(aliases.keys())
     final_candidates = set()
     
     # 3. Run fuzzy search on EACH AI suggestion
     for suggestion in suggestions:
         matches = process.extract(suggestion, search_terms, limit=limit_per_suggestion, scorer=fuzz.token_set_ratio)
         for match_str, score in matches:
-            # Only include if it's a reasonably good match (score out of 100)
             if score >= 60: 
-                actual_cat = search_dict[match_str]
-                final_candidates.add(actual_cat)
+                # Add the literal matched string (which might be an alias)
+                final_candidates.add(match_str)
             
     return list(final_candidates)
+
+def resolve_aliases(categories):
+    """
+    Converts any selected aliases back into their target categories before saving.
+    """
+    aliases = load_aliases()
+    resolved = set()
+    for cat in categories:
+        # If it's an alias, get the target. If not, keep the original.
+        resolved.add(aliases.get(cat, cat))
+    return list(resolved)
