@@ -5,6 +5,7 @@ import re
 import json
 import requests
 import time
+import concurrent.futures
 
 # --- Path Setup ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -74,47 +75,66 @@ def append_categories_to_wikitext(wikitext, new_categories):
             
     return clean_text, appended
 
+def _process_single_file_ai(file_title, context):
+    """Worker function for threading to process a single file."""
+    session = requests.Session() # Thread-safe session per worker
+    
+    wikitext, _ = fetch_wikitext(file_title, session=session, api_url=MEDIA_API_URL)
+    caption = get_caption_from_text(wikitext)
+    
+    if not caption:
+        return file_title, {"error": "No caption found", "wikitext": wikitext}
+        
+    blind_suggestions = suggest_blind_categories(caption, context=context)
+    fuzzy_candidates = get_fuzzy_candidates(blind_suggestions, limit_per_suggestion=5)
+    raw_final_picks = filter_fuzzy_categories(caption, fuzzy_candidates, context=context)
+    final_picks = resolve_aliases(raw_final_picks)
+    
+    # Pre-verify the AI's picks
+    cat_states = []
+    for c in final_picks:
+        cat_states.append({"name": c, "exists": verify_category_exists(c)})
+        
+    image_url = get_image_url(file_title, session=session, api_url=MEDIA_API_URL)
+    
+    return file_title, {
+        "caption": caption,
+        "1_blind_suggestions": blind_suggestions,
+        "2_fuzzy_candidates": fuzzy_candidates,
+        "3_final_picks": final_picks,
+        "cat_states": cat_states,
+        "image_url": image_url,
+        "wikitext": wikitext
+    }
+
 def generate_ai_data(files_to_process, context_mapping):
-    """Runs the AI pipeline and pre-verifies categories. Saves to session state."""
-    session = requests.Session()
+    """Runs the AI pipeline concurrently. Saves to session state."""
     progress_bar = st.progress(0)
     status_text = st.empty()
     
-    for i, file_title in enumerate(files_to_process):
-        status_text.text(f"AI Processing {i+1}/{len(files_to_process)}: {file_title}")
-        context = context_mapping.get(file_title, "")
-        
-        wikitext, _ = fetch_wikitext(file_title, session=session, api_url=MEDIA_API_URL)
-        caption = get_caption_from_text(wikitext)
-        
-        if not caption:
-            st.session_state.ac_data[file_title] = {"error": "No caption found", "wikitext": wikitext}
-            progress_bar.progress((i + 1) / len(files_to_process))
-            continue
-            
-        blind_suggestions = suggest_blind_categories(caption, context=context)
-        fuzzy_candidates = get_fuzzy_candidates(blind_suggestions, limit_per_suggestion=5)
-        raw_final_picks = filter_fuzzy_categories(caption, fuzzy_candidates, context=context)
-        final_picks = resolve_aliases(raw_final_picks)
-        
-        # Pre-verify the AI's picks to populate the UI correctly
-        cat_states = []
-        for c in final_picks:
-            cat_states.append({"name": c, "exists": verify_category_exists(c)})
-            
-        image_url = get_image_url(file_title, session=session, api_url=MEDIA_API_URL)
-        
-        st.session_state.ac_data[file_title] = {
-            "caption": caption,
-            "1_blind_suggestions": blind_suggestions,
-            "2_fuzzy_candidates": fuzzy_candidates,
-            "3_final_picks": final_picks,
-            "cat_states": cat_states,
-            "image_url": image_url,
-            "wikitext": wikitext
+    processed_count = 0
+    total_files = len(files_to_process)
+    
+    # Using 20 workers to avoid Gemini 429 Rate Limit errors. 
+    # Increase this if your API tier allows higher concurrency.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+        future_to_title = {
+            executor.submit(_process_single_file_ai, title, context_mapping.get(title, "")): title
+            for title in files_to_process
         }
-        progress_bar.progress((i + 1) / len(files_to_process))
         
+        for future in concurrent.futures.as_completed(future_to_title):
+            title = future_to_title[future]
+            try:
+                res_title, data = future.result()
+                st.session_state.ac_data[res_title] = data
+            except Exception as exc:
+                st.session_state.ac_data[title] = {"error": f"Exception: {exc}", "wikitext": ""}
+                
+            processed_count += 1
+            status_text.text(f"AI Processing {processed_count}/{total_files}...")
+            progress_bar.progress(processed_count / total_files)
+            
     status_text.success("AI Processing complete! Ready for review.")
     time.sleep(1)
 
