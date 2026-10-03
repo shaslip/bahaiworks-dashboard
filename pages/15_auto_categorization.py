@@ -250,13 +250,19 @@ elif st.session_state.ac_step == 1:
     st.divider()
     
     # Callbacks for dynamic category editing
-    def update_cat(ftitle, idx, uid):
+    def update_cat(ftitle, uid):
         val = st.session_state[f"cat_in_{ftitle}_{uid}"]
-        st.session_state.ac_data[ftitle]["cat_states"][idx]["name"] = val
-        st.session_state.ac_data[ftitle]["cat_states"][idx]["exists"] = verify_category_exists(val)
+        for cat in st.session_state.ac_data[ftitle]["cat_states"]:
+            if cat.get("id") == uid:
+                cat["name"] = val
+                cat["exists"] = verify_category_exists(val)
+                break
         
-    def del_cat(ftitle, idx, uid):
-        st.session_state.ac_data[ftitle]["cat_states"].pop(idx)
+    def del_cat(ftitle, uid):
+        # Rebuild the list excluding the deleted ID
+        st.session_state.ac_data[ftitle]["cat_states"] = [
+            c for c in st.session_state.ac_data[ftitle]["cat_states"] if c.get("id") != uid
+        ]
         # Clean up the widget state so it doesn't ghost
         if f"cat_in_{ftitle}_{uid}" in st.session_state:
             del st.session_state[f"cat_in_{ftitle}_{uid}"]
@@ -305,11 +311,11 @@ elif st.session_state.ac_step == 1:
                         value=cat_obj["name"], 
                         key=f"cat_in_{file_title}_{uid}", 
                         on_change=update_cat, 
-                        args=(file_title, j, uid), 
+                        args=(file_title, uid), 
                         label_visibility="collapsed"
                     )
                 with c3:
-                    st.button("🗑️", key=f"del_{file_title}_{uid}", on_click=del_cat, args=(file_title, j, uid))
+                    st.button("🗑️", key=f"del_{file_title}_{uid}", on_click=del_cat, args=(file_title, uid))
                     
             st.button("➕ Add Category", key=f"add_{file_title}", on_click=add_cat, args=(file_title,))
             
@@ -319,6 +325,7 @@ elif st.session_state.ac_step == 1:
     if st.button("🚀 Save & Upload to Bahai.media", type="primary", use_container_width=True):
         session = requests.Session()
         success_count = 0
+        error_count = 0
         
         progress_bar = st.progress(0)
         status = st.empty()
@@ -326,7 +333,9 @@ elif st.session_state.ac_step == 1:
         files_list = list(st.session_state.ac_data.keys())
         for i, file_title in enumerate(files_list):
             data = st.session_state.ac_data[file_title]
-            if "error" in data: continue
+            if "error" in data: 
+                progress_bar.progress((i + 1) / len(files_list))
+                continue
                 
             # Grab all non-empty category names from the state
             final_cats = [c["name"].strip() for c in data.get("cat_states", []) if c["name"].strip()]
@@ -336,17 +345,25 @@ elif st.session_state.ac_step == 1:
                 new_wikitext, changed = append_categories_to_wikitext(data["wikitext"], final_cats)
                 if changed:
                     try:
-                        upload_to_mediawiki(file_title, new_wikitext, "Categorized via AI Tool", session, MEDIA_API_URL)
+                        upload_to_mediawiki(
+                            title=file_title, 
+                            content=new_wikitext, 
+                            summary="Categorized via AI Tool", 
+                            session=session, 
+                            api_url=MEDIA_API_URL
+                        )
                         success_count += 1
                     except Exception as e:
                         st.error(f"Failed to upload {file_title}: {e}")
+                        error_count += 1
             
             progress_bar.progress((i + 1) / len(files_list))
             
-        st.success(f"Upload complete! Updated {success_count} files.")
-        time.sleep(2)
-        reset_app()
-        st.rerun()
+        status.success(f"Upload complete! Updated {success_count} files. {error_count} errors.")
+        
+        # We NO LONGER auto-rerun the app so you can actually read the logs.
+        if error_count == 0:
+            st.info("All files uploaded successfully. You can now start over.")
 
 # ==========================================
 # STEP 2: SWEEPER DONE
