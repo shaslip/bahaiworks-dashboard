@@ -712,6 +712,61 @@ def format_file_description(wikitext, target_category):
         check_fatal_rate_limit(e)
         return f"GEMINI_ERROR: {str(e)}"
 
+def suggest_blind_categories(caption):
+    """
+    Asks Gemini to suggest categories blindly based only on the caption.
+    Used for discovering new aliases.
+    """
+    model = genai.GenerativeModel(MODEL_NAME)
+    prompt = f"""
+    Read the following image caption:
+    "{caption}"
+    
+    Suggest 3 to 5 appropriate Wikipedia-style categories for this image based on the people, places, events, or concepts mentioned.
+    Do not use the "Category:" prefix. 
+    
+    Return ONLY a valid JSON array of strings. 
+    Example: ["Race Amity Day", "Austin, Texas", "Flower Distribution"]
+    """
+    try:
+        response = model.generate_content(prompt)
+        match = re.search(r'\[.*\]', response.text, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+        return []
+    except Exception as e:
+        check_fatal_rate_limit(e)
+        return []
+
+def filter_fuzzy_categories(caption, candidates):
+    """
+    Asks Gemini to pick the valid categories from a pre-compiled list of fuzzy matches.
+    """
+    model = genai.GenerativeModel(MODEL_NAME)
+    candidates_json = json.dumps(candidates, indent=2)
+    
+    prompt = f"""
+    Read the following image caption:
+    "{caption}"
+    
+    Here is a list of existing categories in our database that *might* be relevant:
+    {candidates_json}
+    
+    Which of these categories accurately describe the image based on the caption? 
+    Only return exact conceptual matches. If none apply, return an empty array.
+    
+    Return ONLY a valid JSON array of strings containing your selections from the list.
+    """
+    try:
+        response = model.generate_content(prompt)
+        match = re.search(r'\[.*\]', response.text, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+        return []
+    except Exception as e:
+        check_fatal_rate_limit(e)
+        return []
+
 def map_faces_to_caption(image_with_boxes, caption_text):
     """
     Takes an image with numbered bounding boxes drawn on it, and the caption text.
