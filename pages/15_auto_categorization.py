@@ -35,12 +35,26 @@ def reset_app():
     st.session_state.ac_data = {}
     st.session_state.ac_files_to_process = []
 
-def get_caption_from_text(content):
-    if not content: return ""
-    match = re.search(r'\|\s*caption\s*=\s*(.*?)\n\|', content, re.IGNORECASE | re.DOTALL)
-    if match:
-        return match.group(1).strip()
-    return ""
+def get_caption_from_text(content, file_title):
+    """Extracts caption from wikitext. Falls back to a cleaned filename if missing or 'None'."""
+    caption = ""
+    if content:
+        match = re.search(r'\|\s*caption\s*=\s*(.*?)\n\|', content, re.IGNORECASE | re.DOTALL)
+        if match:
+            caption = match.group(1).strip()
+            
+    # Check if caption is empty or literally says "None" or "''None''"
+    if not caption or re.match(r"^(''*None''*|None)$", caption, re.IGNORECASE):
+        # Fallback to filename
+        clean_title = file_title
+        if clean_title.lower().startswith("file:"):
+            clean_title = clean_title[5:]
+        # Remove extension (e.g., .png, .jpg)
+        clean_title = re.sub(r'\.[a-zA-Z0-9]+$', '', clean_title)
+        # Replace underscores with spaces
+        caption = clean_title.replace('_', ' ').strip()
+        
+    return caption
 
 def verify_and_resolve_category(cat_name):
     """Checks if a category exists and automatically resolves MediaWiki redirects."""
@@ -113,13 +127,15 @@ def append_categories_to_wikitext(wikitext, new_categories):
 
 def _process_single_file_ai(file_title, context):
     """Worker function for threading to process a single file."""
-    session = requests.Session() # Thread-safe session per worker
+    session = requests.Session() 
     
     wikitext, _ = fetch_wikitext(file_title, session=session, api_url=MEDIA_API_URL)
-    caption = get_caption_from_text(wikitext)
+    
+    # Pass file_title here so it can be used as a fallback
+    caption = get_caption_from_text(wikitext, file_title)
     
     if not caption:
-        return file_title, {"error": "No caption found", "wikitext": wikitext}
+        return file_title, {"error": "No caption found (and filename was invalid)", "wikitext": wikitext}
         
     blind_suggestions = suggest_blind_categories(caption, context=context)
     fuzzy_candidates = get_fuzzy_candidates(blind_suggestions, limit_per_suggestion=5)
