@@ -712,21 +712,24 @@ def format_file_description(wikitext, target_category):
         check_fatal_rate_limit(e)
         return f"GEMINI_ERROR: {str(e)}"
 
-def suggest_blind_categories(caption):
+def suggest_blind_categories(caption, context=""):
     """
-    Asks Gemini to suggest categories blindly based only on the caption.
-    Used for discovering new aliases.
+    Step 1: Asks Gemini to extract specific entities from the caption + context.
     """
     model = genai.GenerativeModel(MODEL_NAME)
     prompt = f"""
-    Read the following image caption:
-    "{caption}"
+    Context (Source Publication/Category): {context}
+    Image Caption: "{caption}"
     
-    Suggest 3 to 5 appropriate Wikipedia-style categories for this image based on the people, places, events, or concepts mentioned.
-    Do not use the "Category:" prefix. 
+    Based on the caption and the context, extract the most important specific entities that would make good Wikipedia-style categories.
+    
+    RULES:
+    1. Extract specific people, specific organizations (e.g., "National Spiritual Assembly of the United States" instead of just "National Spiritual Assembly" if context implies it), specific locations, and specific events.
+    2. DO NOT extract generic nouns (e.g., "Teachers", "Swimming", "California", "Men", "Meetings").
+    3. Do not use the "Category:" prefix.
     
     Return ONLY a valid JSON array of strings. 
-    Example: ["Race Amity Day", "Austin, Texas", "Flower Distribution"]
+    Example: ["Bosch Bahá'í School", "Five Year Plan (1974–1979)", "Kazem Kazemzadeh"]
     """
     try:
         response = model.generate_content(prompt)
@@ -738,24 +741,28 @@ def suggest_blind_categories(caption):
         check_fatal_rate_limit(e)
         return []
 
-def filter_fuzzy_categories(caption, candidates):
+def filter_fuzzy_categories(caption, candidates, context=""):
     """
-    Asks Gemini to pick the valid categories from a pre-compiled list of fuzzy matches.
+    Step 3: Asks Gemini to pick the valid categories from the fuzzy matches.
     """
     model = genai.GenerativeModel(MODEL_NAME)
     candidates_json = json.dumps(candidates, indent=2)
     
     prompt = f"""
-    Read the following image caption:
-    "{caption}"
+    Context (Source Publication/Category): {context}
+    Image Caption: "{caption}"
     
-    Here is a list of existing categories in our database that *might* be relevant:
+    Candidate Categories:
     {candidates_json}
     
-    Which of these categories accurately describe the image based on the caption? 
-    Only return exact conceptual matches. If none apply, return an empty array.
+    Which of these candidate categories accurately and specifically describe the image? 
     
-    Return ONLY a valid JSON array of strings containing your selections from the list.
+    RULES:
+    1. Only return exact conceptual matches.
+    2. REJECT overly broad or generic categories (e.g., "Teachers", "Swimming", "California", "National Spiritual Assembly" without a country) unless the image is exclusively about that broad concept.
+    3. Prefer highly specific entities.
+    
+    Return ONLY a valid JSON array of strings containing your selections. If none apply, return [].
     """
     try:
         response = model.generate_content(prompt)
