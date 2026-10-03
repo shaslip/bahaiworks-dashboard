@@ -83,11 +83,14 @@ def load_aliases():
                 aliases[alias.strip()] = target.strip()
     return aliases
 
-def get_fuzzy_candidates(caption, limit=20):
+def get_fuzzy_candidates(suggestions, limit_per_suggestion=5):
     """
-    Builds the search pool, runs fuzzy matching against the caption, 
-    and returns the top 20 real categories.
+    Takes a list of AI-generated suggestions, runs fuzzy matching on each, 
+    and pools the top results.
     """
+    if not suggestions:
+        return []
+        
     raw_categories = get_cached_categories()
     exclusions = load_exclusions()
     aliases = load_aliases()
@@ -103,18 +106,16 @@ def get_fuzzy_candidates(caption, limit=20):
     for alias, target in aliases.items():
         search_dict[alias] = target
         
-    # 3. Run fuzzy search
-    # process.extract returns a list of tuples: [("Matched String", score), ...]
     search_terms = list(search_dict.keys())
-    matches = process.extract(caption, search_terms, limit=limit, scorer=fuzz.token_set_ratio)
+    final_candidates = set()
     
-    # 4. Map back to actual categories and deduplicate (in case multiple aliases point to the same target)
-    final_candidates = []
-    seen = set()
-    for match_str, score in matches:
-        actual_cat = search_dict[match_str]
-        if actual_cat not in seen:
-            seen.add(actual_cat)
-            final_candidates.append(actual_cat)
+    # 3. Run fuzzy search on EACH AI suggestion
+    for suggestion in suggestions:
+        matches = process.extract(suggestion, search_terms, limit=limit_per_suggestion, scorer=fuzz.token_set_ratio)
+        for match_str, score in matches:
+            # Only include if it's a reasonably good match (score out of 100)
+            if score >= 60: 
+                actual_cat = search_dict[match_str]
+                final_candidates.add(actual_cat)
             
-    return final_candidates
+    return list(final_candidates)
