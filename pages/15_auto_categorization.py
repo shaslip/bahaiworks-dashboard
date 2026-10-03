@@ -2,7 +2,7 @@ import streamlit as st
 import os
 import sys
 import re
-import requests
+import json
 
 # --- Path Setup ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -10,13 +10,13 @@ project_root = os.path.dirname(current_dir)
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-from src.mediawiki_uploader import fetch_wikitext, get_image_url
+from src.mediawiki_uploader import get_category_files, fetch_wikitext
 from src.gemini_processor import suggest_blind_categories, filter_fuzzy_categories
 from src.category_manager import get_fuzzy_candidates
 
 MEDIA_API_URL = 'https://bahai.media/api.php'
 
-st.set_page_config(page_title="Auto-Categorization Test", page_icon="🗂️", layout="wide")
+st.set_page_config(page_title="Batch Auto-Categorization Test", page_icon="🗂️", layout="wide")
 
 def get_caption_from_text(content):
     if not content: return ""
@@ -25,78 +25,72 @@ def get_caption_from_text(content):
         return match.group(1).strip()
     return ""
 
-st.title("🗂️ Auto-Categorization Sandbox")
-st.markdown("Test the fuzzy logic and AI filtering on a single image before building the batch queue.")
+st.title("🗂️ Batch Auto-Categorization Evaluation")
+st.markdown("Process an entire category and output the results to a JSON file for evaluation.")
 
-st.sidebar.header("Configuration")
-st.sidebar.info("Edit `category_exclusions.txt` and `category_aliases.txt` in your project root to tune the fuzzy search.")
+category_input = st.text_input("Enter a Category Name", placeholder="e.g. Category:The American Bahá'í Vol 5 No 8")
 
-file_input = st.text_input("Enter a File Name", placeholder="e.g. File:Race_Unity_Day_in_Austin_Texas.png")
+if st.button("🧪 Run Batch Evaluation", type="primary"):
+    if not category_input:
+        st.warning("Please enter a category name.")
+        st.stop()
 
-if st.button("🧪 Run Test", type="primary"):
-    if not file_input:
-        st.warning("Please enter a file name.")
+    with st.spinner(f"Fetching files from {category_input}..."):
+        files = get_category_files(category_input, api_url=MEDIA_API_URL)
+        
+    if not files:
+        st.error("No files found in this category.")
         st.stop()
         
-    if not file_input.lower().startswith("file:"):
-        file_input = "File:" + file_input
-
-    with st.spinner("Fetching data..."):
-        # 1. Fetch text and image
-        wikitext, _ = fetch_wikitext(file_input, api_url=MEDIA_API_URL)
-        image_url = get_image_url(file_input, api_url=MEDIA_API_URL)
+    st.info(f"Found {len(files)} files. Processing...")
+    
+    results = {}
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    for i, file_title in enumerate(files):
+        status_text.text(f"Processing {i+1}/{len(files)}: {file_title}")
         
-        if not wikitext:
-            st.error("Could not fetch wikitext. Does the file exist?")
-            st.stop()
-            
+        wikitext, _ = fetch_wikitext(file_title, api_url=MEDIA_API_URL)
         caption = get_caption_from_text(wikitext)
         
         if not caption:
-            st.warning("No caption found in the file's {{cs}} template. AI needs a caption to work.")
-            st.stop()
-
-    col1, col2 = st.columns([1, 1.5])
+            results[file_title] = {"error": "No caption found"}
+            progress_bar.progress((i + 1) / len(files))
+            continue
+            
+        # 1. Blind Suggestions (with context)
+        blind_suggestions = suggest_blind_categories(caption, context=category_input)
+        
+        # 2. Fuzzy Search (based on the blind suggestions)
+        fuzzy_candidates = get_fuzzy_candidates(blind_suggestions, limit_per_suggestion=5)
+        
+        # 3. AI Filter (with context)
+        final_picks = filter_fuzzy_categories(caption, fuzzy_candidates, context=category_input)
+        
+        results[file_title] = {
+            "caption": caption,
+            "1_blind_suggestions": blind_suggestions,
+            "2_fuzzy_candidates": fuzzy_candidates,
+            "3_final_picks": final_picks
+        }
+        
+        progress_bar.progress((i + 1) / len(files))
+        
+    status_text.success("Processing complete!")
     
-    with col1:
-        st.subheader("Source Image")
-        if image_url:
-            st.image(image_url, use_container_width=True)
-        st.info(f"**Caption:** {caption}")
+    # Save to JSON
+    output_file = os.path.join(project_root, "auto_cat_results.json")
+    with open(output_file, 'w', encoding='utf-8') as f:
+        json.dump(results, f, indent=4, ensure_ascii=False)
         
-    with col2:
-        st.subheader("AI Analysis")
-        
-        # 2. Blind Suggestions
-        with st.spinner("Getting blind suggestions from Gemini..."):
-            blind_suggestions = suggest_blind_categories(caption)
-            
-        st.markdown("### 1. Blind AI Suggestions")
-        st.caption("Categories Gemini *wants* to use (Good for finding new aliases to add to category_aliases.txt)")
-        if blind_suggestions:
-            for cat in blind_suggestions:
-                st.write(f"- {cat}")
-        else:
-            st.write("*None*")
-            
-        # 3. Fuzzy Search
-        with st.spinner("Running local fuzzy search..."):
-            fuzzy_candidates = get_fuzzy_candidates(caption, limit=20)
-            
-        with st.expander("🔍 View Raw Top 20 Fuzzy Matches"):
-            st.write(fuzzy_candidates)
-            
-        # 4. AI Filter
-        with st.spinner("Filtering fuzzy matches with Gemini..."):
-            final_picks = filter_fuzzy_categories(caption, fuzzy_candidates)
-            
-        st.markdown("### 2. Final AI Picks")
-        st.caption("Categories Gemini selected from the Top 20 fuzzy matches")
-        if final_picks:
-            for cat in final_picks:
-                st.success(f"✅ [[Category:{cat}]]")
-        else:
-            st.warning("Gemini rejected all fuzzy matches.")
-            
-    st.divider()
-    st.write("If the **Final AI Picks** are missing something that the **Blind AI Suggestions** caught, add an entry to `category_aliases.txt` and run the test again!")
+    st.success(f"✅ Results saved to `{output_file}` in your project root folder.")
+    
+    # Provide a download button for convenience
+    with open(output_file, "rb") as file:
+        st.download_button(
+            label="Download JSON Results",
+            data=file,
+            file_name="auto_cat_results.json",
+            mime="application/json"
+        )
