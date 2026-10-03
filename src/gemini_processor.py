@@ -761,6 +761,7 @@ def filter_fuzzy_categories(caption, candidates, context=""):
     1. EXACT MATCHES ONLY: Do not select a specific entity (like a school, person, or city) from the candidates unless that specific entity is explicitly named in the caption or strongly implied by the context. 
     2. NO REDUNDANCY: Do not select parent categories if a more specific child category is selected. (e.g., If you select 'Austin, Texas', do NOT also select 'Texas'. Pick ONLY the single most specific category for a given concept).
     3. NO BROAD CATEGORIES: Reject overly broad categories (e.g., "Teachers", "Swimming", "California", "National Spiritual Assembly" without a country) unless the image is exclusively about that broad concept.
+    4. STRICT PERSON MATCHING: If a candidate category is a specific person's name, you MUST NOT select it unless both their first and last name match the person described in the caption. (e.g., Do not select "Susan Maneck" if the caption mentions "Susan Bailey").
     
     Return ONLY a valid JSON array of strings containing your selections. If none apply, return [].
     """
