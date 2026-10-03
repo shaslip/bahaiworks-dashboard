@@ -13,6 +13,8 @@ pymupdf==1.24.11
 pdf2image==1.17.0
 pytesseract==0.3.13
 Pillow>=10.0.0
+thefuzz==0.22.1
+rapidfuzz==3.14.6
 
 # Wikibase & API
 wikibaseintegrator==0.12.15
