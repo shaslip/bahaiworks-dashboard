@@ -6,6 +6,7 @@ import json
 import requests
 import time
 import concurrent.futures
+import uuid
 
 # --- Path Setup ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -93,7 +94,7 @@ def _process_single_file_ai(file_title, context):
     # Pre-verify the AI's picks
     cat_states = []
     for c in final_picks:
-        cat_states.append({"name": c, "exists": verify_category_exists(c)})
+        cat_states.append({"id": str(uuid.uuid4()), "name": c, "exists": verify_category_exists(c)})
         
     image_url = get_image_url(file_title, session=session, api_url=MEDIA_API_URL)
     
@@ -249,16 +250,19 @@ elif st.session_state.ac_step == 1:
     st.divider()
     
     # Callbacks for dynamic category editing
-    def update_cat(ftitle, idx):
-        val = st.session_state[f"cat_in_{ftitle}_{idx}"]
+    def update_cat(ftitle, idx, uid):
+        val = st.session_state[f"cat_in_{ftitle}_{uid}"]
         st.session_state.ac_data[ftitle]["cat_states"][idx]["name"] = val
         st.session_state.ac_data[ftitle]["cat_states"][idx]["exists"] = verify_category_exists(val)
         
-    def del_cat(ftitle, idx):
+    def del_cat(ftitle, idx, uid):
         st.session_state.ac_data[ftitle]["cat_states"].pop(idx)
+        # Clean up the widget state so it doesn't ghost
+        if f"cat_in_{ftitle}_{uid}" in st.session_state:
+            del st.session_state[f"cat_in_{ftitle}_{uid}"]
         
     def add_cat(ftitle):
-        st.session_state.ac_data[ftitle]["cat_states"].append({"name": "", "exists": False})
+        st.session_state.ac_data[ftitle]["cat_states"].append({"id": str(uuid.uuid4()), "name": "", "exists": False})
 
     # Build UI for each file
     for file_title, data in st.session_state.ac_data.items():
@@ -285,6 +289,8 @@ elif st.session_state.ac_step == 1:
             
             # Render the dynamic list of categories
             for j, cat_obj in enumerate(data.get("cat_states", [])):
+                uid = cat_obj.get("id", str(j)) # Fallback just in case
+                
                 c1, c2, c3 = st.columns([0.5, 8, 1])
                 with c1:
                     if cat_obj["name"].strip() == "":
@@ -297,13 +303,13 @@ elif st.session_state.ac_step == 1:
                     st.text_input(
                         "Cat", 
                         value=cat_obj["name"], 
-                        key=f"cat_in_{file_title}_{j}", 
+                        key=f"cat_in_{file_title}_{uid}", 
                         on_change=update_cat, 
-                        args=(file_title, j), 
+                        args=(file_title, j, uid), 
                         label_visibility="collapsed"
                     )
                 with c3:
-                    st.button("🗑️", key=f"del_{file_title}_{j}", on_click=del_cat, args=(file_title, j))
+                    st.button("🗑️", key=f"del_{file_title}_{uid}", on_click=del_cat, args=(file_title, j, uid))
                     
             st.button("➕ Add Category", key=f"add_{file_title}", on_click=add_cat, args=(file_title,))
             
