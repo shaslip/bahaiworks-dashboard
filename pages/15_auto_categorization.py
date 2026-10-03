@@ -157,7 +157,7 @@ tab1, tab2, tab3 = st.tabs(["📄 Single File", "📁 Single Category", "📚 Se
 # --- TAB 1: SINGLE FILE ---
 with tab1:
     file_input = st.text_input("File Name", placeholder="e.g. File:Race_Unity_Day_in_Austin_Texas.png")
-    context_input = st.text_input("Context (Optional)", placeholder="e.g. The American Bahá'í Vol 5 No 8", help="Providing context helps the AI make better decisions.")
+    context_input1 = st.text_input("Context (Optional)", placeholder="e.g. The American Bahá'í 1974 USA", help="Providing context helps the AI make better decisions.", key="ctx1")
     
     if st.button("Run Single File", type="primary"):
         if not file_input:
@@ -168,7 +168,7 @@ with tab1:
             file_input = "File:" + file_input
             
         files = [file_input]
-        context_map = {file_input: context_input}
+        context_map = {file_input: context_input1.strip()}
         
         with st.spinner("Processing..."):
             process_files(files, context_map, show_ui=True)
@@ -176,6 +176,7 @@ with tab1:
 # --- TAB 2: SINGLE CATEGORY ---
 with tab2:
     category_input = st.text_input("Category Name", placeholder="e.g. Category:The American Bahá'í Vol 5 No 8")
+    context_input2 = st.text_input("Context (Optional)", placeholder="e.g. The American Bahá'í 1974 USA", help="Overrides the Category Name as context if provided.", key="ctx2")
     
     if st.button("Run Single Category", type="primary"):
         if not category_input:
@@ -190,7 +191,11 @@ with tab2:
             st.stop()
             
         st.info(f"Found {len(files)} files. Processing...")
-        context_map = {f: category_input for f in files}
+        
+        # If user provides context, use it. Otherwise, fallback to the category name.
+        active_context = context_input2.strip() if context_input2.strip() else category_input
+        context_map = {f: active_context for f in files}
+        
         process_files(files, context_map, show_ui=True)
 
 # --- TAB 3: SEQUENTIAL CATEGORIES (SWEEPER) ---
@@ -201,6 +206,8 @@ with tab3:
         seq_category_input = st.text_input("Starting Category", placeholder="e.g. Category:AB Volume 5 No 1")
     with col2:
         target_count = st.number_input("Target Sequences (e.g. next 12 issues)", min_value=1, max_value=100, value=12)
+        
+    context_input3 = st.text_input("Context (Optional)", placeholder="e.g. The American Bahá'í 1974 USA", help="Applied to ALL sequences. Leave blank to use the individual category names as context.", key="ctx3")
         
     if st.button("Run Sweeper", type="primary"):
         if not seq_category_input:
@@ -224,8 +231,12 @@ with tab3:
                 files = get_category_files(current_cat, api_url=MEDIA_API_URL)
                 if files:
                     all_files.extend(files)
+                    
+                    # If user provides context, use it. Otherwise, fallback to the current sequence category.
+                    active_context = context_input3.strip() if context_input3.strip() else current_cat
                     for f in files:
-                        context_map[f] = current_cat
+                        context_map[f] = active_context
+                        
                 current_num += 1
                 time.sleep(0.5) # Be polite to API
                 
