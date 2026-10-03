@@ -115,9 +115,9 @@ def generate_ai_data(files_to_process, context_mapping):
     processed_count = 0
     total_files = len(files_to_process)
     
-    # Using 20 workers to avoid Gemini 429 Rate Limit errors. 
+    # Using 30 workers to avoid Gemini 429 Rate Limit errors. 
     # Increase this if your API tier allows higher concurrency.
-    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
         future_to_title = {
             executor.submit(_process_single_file_ai, title, context_mapping.get(title, "")): title
             for title in files_to_process
