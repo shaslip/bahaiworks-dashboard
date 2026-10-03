@@ -758,9 +758,9 @@ def filter_fuzzy_categories(caption, candidates, context=""):
     Which of these candidate categories accurately and specifically describe the image? 
     
     RULES:
-    1. Only return exact conceptual matches.
-    2. REJECT overly broad or generic categories (e.g., "Teachers", "Swimming", "California", "National Spiritual Assembly" without a country) unless the image is exclusively about that broad concept.
-    3. Prefer highly specific entities.
+    1. EXACT MATCHES ONLY: Do not select a specific entity (like a school, person, or city) from the candidates unless that specific entity is explicitly named in the caption or strongly implied by the context. 
+    2. NO REDUNDANCY: Do not select parent categories if a more specific child category is selected. (e.g., If you select 'Austin, Texas', do NOT also select 'Texas'. Pick ONLY the single most specific category for a given concept).
+    3. NO BROAD CATEGORIES: Reject overly broad categories (e.g., "Teachers", "Swimming", "California", "National Spiritual Assembly" without a country) unless the image is exclusively about that broad concept.
     
     Return ONLY a valid JSON array of strings containing your selections. If none apply, return [].
     """
