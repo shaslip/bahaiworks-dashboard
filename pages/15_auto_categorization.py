@@ -5,7 +5,6 @@ import re
 import json
 import requests
 import time
-from src.category_manager import get_fuzzy_candidates, resolve_aliases
 
 # --- Path Setup ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -15,11 +14,24 @@ if project_root not in sys.path:
 
 from src.mediawiki_uploader import get_category_files, fetch_wikitext, get_image_url, upload_to_mediawiki
 from src.gemini_processor import suggest_blind_categories, filter_fuzzy_categories
-from src.category_manager import get_fuzzy_candidates
+from src.category_manager import get_fuzzy_candidates, resolve_aliases
 
 MEDIA_API_URL = 'https://bahai.media/api.php'
 
 st.set_page_config(page_title="Auto-Categorization Tool", page_icon="🗂️", layout="wide")
+
+# --- State Initialization ---
+if "ac_step" not in st.session_state:
+    st.session_state.ac_step = 0  # 0: Setup, 1: Review/Edit, 2: Sweeper Done
+if "ac_data" not in st.session_state:
+    st.session_state.ac_data = {}
+if "ac_files_to_process" not in st.session_state:
+    st.session_state.ac_files_to_process = []
+
+def reset_app():
+    st.session_state.ac_step = 0
+    st.session_state.ac_data = {}
+    st.session_state.ac_files_to_process = []
 
 def get_caption_from_text(content):
     if not content: return ""
@@ -29,15 +41,14 @@ def get_caption_from_text(content):
     return ""
 
 def append_categories_to_wikitext(wikitext, new_categories):
-    """Appends new categories to the wikitext, avoiding duplicates."""
     appended = False
     clean_text = wikitext.strip()
     
     for cat in new_categories:
-        # Check if category already exists (case-insensitive, handles spacing)
+        cat = cat.strip()
+        if not cat: continue
         pattern = r'\[\[Category:\s*' + re.escape(cat) + r'\s*\]\]'
         if not re.search(pattern, clean_text, re.IGNORECASE):
-            # Ensure there's a blank line before the first appended category if not already at the end of a category block
             if not appended and not clean_text.endswith("]]"):
                 clean_text += "\n"
             clean_text += f"\n[[Category:{cat}]]"
@@ -45,210 +56,231 @@ def append_categories_to_wikitext(wikitext, new_categories):
             
     return clean_text, appended
 
-def process_files(files_to_process, context_mapping, show_ui=True):
-    """
-    Core processing loop. 
-    files_to_process: list of filenames
-    context_mapping: dict mapping filename -> context (e.g. the category it came from)
-    show_ui: whether to render the image and results to the Streamlit UI
-    """
-    results = {}
+def generate_ai_data(files_to_process, context_mapping):
+    """Runs the AI pipeline but DOES NOT upload. Saves to session state."""
     session = requests.Session()
     progress_bar = st.progress(0)
     status_text = st.empty()
     
-    success_count = 0
-    skip_count = 0
-    
     for i, file_title in enumerate(files_to_process):
-        status_text.text(f"Processing {i+1}/{len(files_to_process)}: {file_title}")
+        status_text.text(f"AI Processing {i+1}/{len(files_to_process)}: {file_title}")
         context = context_mapping.get(file_title, "")
         
         wikitext, _ = fetch_wikitext(file_title, session=session, api_url=MEDIA_API_URL)
         caption = get_caption_from_text(wikitext)
         
         if not caption:
-            results[file_title] = {"error": "No caption found"}
-            skip_count += 1
+            st.session_state.ac_data[file_title] = {"error": "No caption found", "wikitext": wikitext}
             progress_bar.progress((i + 1) / len(files_to_process))
             continue
             
-        # 1. Blind Suggestions
         blind_suggestions = suggest_blind_categories(caption, context=context)
-        
-        # 2. Fuzzy Search (Now returns aliases too)
         fuzzy_candidates = get_fuzzy_candidates(blind_suggestions, limit_per_suggestion=5)
-        
-        # 3. AI Filter
         raw_final_picks = filter_fuzzy_categories(caption, fuzzy_candidates, context=context)
-        
-        # 4. Resolve Aliases to Targets
         final_picks = resolve_aliases(raw_final_picks)
+        image_url = get_image_url(file_title, session=session, api_url=MEDIA_API_URL)
         
-        # 4. Save to Wiki
-        if final_picks:
-            new_wikitext, changed = append_categories_to_wikitext(wikitext, final_picks)
-            if changed:
-                try:
-                    upload_to_mediawiki(
-                        title=file_title,
-                        content=new_wikitext,
-                        summary="Auto-categorized via AI (Fuzzy Matching)",
-                        session=session,
-                        api_url=MEDIA_API_URL
-                    )
-                    success_count += 1
-                except Exception as e:
-                    st.error(f"Failed to upload {file_title}: {e}")
-            else:
-                skip_count += 1 # Categories were already present
-        else:
-            skip_count += 1 # No categories picked
-            
-        # 5. Record Results
-        results[file_title] = {
+        st.session_state.ac_data[file_title] = {
             "caption": caption,
             "1_blind_suggestions": blind_suggestions,
             "2_fuzzy_candidates": fuzzy_candidates,
-            "3_final_picks": final_picks
+            "3_final_picks": final_picks,
+            "image_url": image_url,
+            "wikitext": wikitext
         }
-        
-        # 6. Render UI (if applicable)
-        if show_ui:
-            image_url = get_image_url(file_title, session=session, api_url=MEDIA_API_URL)
-            with st.container(border=True):
-                col1, col2 = st.columns([1, 1.5])
-                with col1:
-                    st.markdown(f"**[{file_title}](https://bahai.media/{file_title.replace(' ', '_')})**")
-                    if image_url:
-                        st.image(image_url, use_container_width=True)
-                    st.info(f"**Caption:** {caption}")
-                with col2:
-                    st.write("**1. Blind Suggestions:**", blind_suggestions)
-                    st.write("**2. Final AI Picks Applied:**")
-                    if final_picks:
-                        for cat in final_picks:
-                            st.success(f"✅ [[Category:{cat}]]")
-                    else:
-                        st.warning("No categories applied.")
-                        
         progress_bar.progress((i + 1) / len(files_to_process))
         
-    status_text.success(f"Processing complete! Updated {success_count} files. Skipped {skip_count} files.")
-    
-    # Save JSON
-    output_file = os.path.join(project_root, "auto_cat_results.json")
-    with open(output_file, 'w', encoding='utf-8') as f:
-        json.dump(results, f, indent=4, ensure_ascii=False)
-        
-    with open(output_file, "rb") as file:
-        st.download_button(
-            label="⬇️ Download JSON Results",
-            data=file,
-            file_name="auto_cat_results.json",
-            mime="application/json",
-            type="primary"
-        )
+    status_text.success("AI Processing complete! Ready for review.")
+    time.sleep(1)
 
 # ==========================================
-# UI & TAB ROUTING
+# STEP 0: SETUP & FETCH
 # ==========================================
-st.title("🗂️ Auto-Categorization Tool")
-st.markdown("Extract captions, generate fuzzy category matches, filter with AI, and save directly to Bahai.media.")
+if st.session_state.ac_step == 0:
+    st.title("🗂️ Auto-Categorization Tool")
+    st.markdown("Extract captions, generate fuzzy category matches, filter with AI, and review before saving.")
 
-tab1, tab2, tab3 = st.tabs(["📄 Single File", "📁 Single Category", "📚 Sequential Categories (Sweeper)"])
+    tab1, tab2, tab3 = st.tabs(["📄 Single File", "📁 Single Category", "📚 Sequential Categories (Sweeper)"])
 
-# --- TAB 1: SINGLE FILE ---
-with tab1:
-    file_input = st.text_input("File Name", placeholder="e.g. File:Race_Unity_Day_in_Austin_Texas.png")
-    context_input1 = st.text_input("Context (Optional)", placeholder="e.g. The American Bahá'í 1974 USA", help="Providing context helps the AI make better decisions.", key="ctx1")
-    
-    if st.button("Run Single File", type="primary"):
-        if not file_input:
-            st.warning("Please enter a file name.")
-            st.stop()
-            
-        if not file_input.lower().startswith("file:"):
-            file_input = "File:" + file_input
-            
-        files = [file_input]
-        context_map = {file_input: context_input1.strip()}
+    # --- TAB 1: SINGLE FILE ---
+    with tab1:
+        file_input = st.text_input("File Name", placeholder="e.g. File:Race_Unity_Day_in_Austin_Texas.png")
+        context_input1 = st.text_input("Context (Optional)", placeholder="e.g. The American Bahá'í 1974 USA", key="ctx1")
         
-        with st.spinner("Processing..."):
-            process_files(files, context_map, show_ui=True)
+        if st.button("Process Single File", type="primary"):
+            if not file_input: st.warning("Please enter a file name."); st.stop()
+            if not file_input.lower().startswith("file:"): file_input = "File:" + file_input
+            
+            st.session_state.ac_files_to_process = [file_input]
+            context_map = {file_input: context_input1.strip()}
+            
+            with st.spinner("Running AI Analysis..."):
+                generate_ai_data(st.session_state.ac_files_to_process, context_map)
+            st.session_state.ac_step = 1
+            st.rerun()
 
-# --- TAB 2: SINGLE CATEGORY ---
-with tab2:
-    category_input = st.text_input("Category Name", placeholder="e.g. Category:The American Bahá'í Vol 5 No 8")
-    context_input2 = st.text_input("Context (Optional)", placeholder="e.g. The American Bahá'í 1974 USA", help="Overrides the Category Name as context if provided.", key="ctx2")
-    
-    if st.button("Run Single Category", type="primary"):
-        if not category_input:
-            st.warning("Please enter a category name.")
-            st.stop()
-            
-        with st.spinner(f"Fetching files from {category_input}..."):
-            files = get_category_files(category_input, api_url=MEDIA_API_URL)
-            
-        if not files:
-            st.error("No files found in this category.")
-            st.stop()
-            
-        st.info(f"Found {len(files)} files. Processing...")
+    # --- TAB 2: SINGLE CATEGORY ---
+    with tab2:
+        category_input = st.text_input("Category Name", placeholder="e.g. Category:The American Bahá'í Vol 5 No 8")
+        context_input2 = st.text_input("Context (Optional)", placeholder="e.g. The American Bahá'í 1974 USA", key="ctx2")
         
-        # If user provides context, use it. Otherwise, fallback to the category name.
-        active_context = context_input2.strip() if context_input2.strip() else category_input
-        context_map = {f: active_context for f in files}
-        
-        process_files(files, context_map, show_ui=True)
-
-# --- TAB 3: SEQUENTIAL CATEGORIES (SWEEPER) ---
-with tab3:
-    st.info("Runs fully automatically in the background. Does not render images to the screen to save memory.")
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        seq_category_input = st.text_input("Starting Category", placeholder="e.g. Category:AB Volume 5 No 1")
-    with col2:
-        target_count = st.number_input("Target Sequences (e.g. next 12 issues)", min_value=1, max_value=100, value=12)
-        
-    context_input3 = st.text_input("Context (Optional)", placeholder="e.g. The American Bahá'í 1974 USA", help="Applied to ALL sequences. Leave blank to use the individual category names as context.", key="ctx3")
-        
-    if st.button("Run Sweeper", type="primary"):
-        if not seq_category_input:
-            st.warning("Please enter a starting category.")
-            st.stop()
-            
-        match = re.search(r'^(.*?)(\d+)(\D*)$', seq_category_input)
-        if not match:
-            st.error("Could not find a number in the category name to sequence.")
-            st.stop()
-            
-        prefix, num_str, suffix = match.groups()
-        current_num = int(num_str)
-        
-        all_files = []
-        context_map = {}
-        
-        with st.spinner("Fetching files across sequences..."):
-            for _ in range(target_count):
-                current_cat = f"{prefix}{current_num}{suffix}"
-                files = get_category_files(current_cat, api_url=MEDIA_API_URL)
-                if files:
-                    all_files.extend(files)
-                    
-                    # If user provides context, use it. Otherwise, fallback to the current sequence category.
-                    active_context = context_input3.strip() if context_input3.strip() else current_cat
-                    for f in files:
-                        context_map[f] = active_context
-                        
-                current_num += 1
-                time.sleep(0.5) # Be polite to API
+        if st.button("Process Single Category", type="primary"):
+            if not category_input: st.warning("Please enter a category name."); st.stop()
                 
-        if not all_files:
-            st.error("No files found in any of the sequenced categories.")
-            st.stop()
+            with st.spinner(f"Fetching files from {category_input}..."):
+                files = get_category_files(category_input, api_url=MEDIA_API_URL)
+                
+            if not files: st.error("No files found."); st.stop()
+                
+            st.session_state.ac_files_to_process = files
+            active_context = context_input2.strip() if context_input2.strip() else category_input
+            context_map = {f: active_context for f in files}
             
-        st.info(f"Found {len(all_files)} total files across {target_count} categories. Processing...")
+            with st.spinner("Running AI Analysis..."):
+                generate_ai_data(st.session_state.ac_files_to_process, context_map)
+            st.session_state.ac_step = 1
+            st.rerun()
+
+    # --- TAB 3: SWEEPER (Fully Automatic) ---
+    with tab3:
+        st.info("Runs fully automatically in the background. Skips the review step and uploads directly.")
+        col1, col2 = st.columns([3, 1])
+        with col1: seq_category_input = st.text_input("Starting Category", placeholder="e.g. Category:AB Volume 5 No 1")
+        with col2: target_count = st.number_input("Target Sequences", min_value=1, max_value=100, value=12)
+        context_input3 = st.text_input("Context (Optional)", key="ctx3")
+            
+        if st.button("Run Sweeper", type="primary"):
+            if not seq_category_input: st.warning("Please enter a starting category."); st.stop()
+            match = re.search(r'^(.*?)(\d+)(\D*)$', seq_category_input)
+            if not match: st.error("Could not find a number in the category name to sequence."); st.stop()
+                
+            prefix, num_str, suffix = match.groups()
+            current_num = int(num_str)
+            all_files = []
+            context_map = {}
+            
+            with st.spinner("Fetching files across sequences..."):
+                for _ in range(target_count):
+                    current_cat = f"{prefix}{current_num}{suffix}"
+                    files = get_category_files(current_cat, api_url=MEDIA_API_URL)
+                    if files:
+                        all_files.extend(files)
+                        active_context = context_input3.strip() if context_input3.strip() else current_cat
+                        for f in files: context_map[f] = active_context
+                    current_num += 1
+                    time.sleep(0.5)
+                    
+            if not all_files: st.error("No files found."); st.stop()
+            
+            # Sweeper runs AI and uploads immediately
+            with st.spinner("Running AI and uploading..."):
+                generate_ai_data(all_files, context_map)
+                
+                session = requests.Session()
+                for file_title, data in st.session_state.ac_data.items():
+                    if "error" in data: continue
+                    new_cats = data.get("3_final_picks", [])
+                    if new_cats:
+                        new_wikitext, changed = append_categories_to_wikitext(data["wikitext"], new_cats)
+                        if changed:
+                            upload_to_mediawiki(file_title, new_wikitext, "Auto-categorized via AI (Fuzzy Matching)", session, MEDIA_API_URL)
+            
+            st.session_state.ac_step = 2
+            st.rerun()
+
+# ==========================================
+# STEP 1: REVIEW & EDIT (Interactive)
+# ==========================================
+elif st.session_state.ac_step == 1:
+    st.title("📝 Review & Edit Categories")
+    
+    # Header buttons
+    col1, col2, col3 = st.columns([1, 1, 4])
+    with col1:
+        if st.button("Cancel / Start Over"): reset_app(); st.rerun()
+    with col2:
+        # Generate JSON for download
+        json_data = json.dumps(st.session_state.ac_data, indent=4, ensure_ascii=False)
+        st.download_button(label="⬇️ Download JSON", data=json_data, file_name="auto_cat_results.json", mime="application/json")
+
+    st.divider()
+    
+    # Build UI for each file
+    for file_title, data in st.session_state.ac_data.items():
+        st.markdown(f"### [{file_title}](https://bahai.media/{file_title.replace(' ', '_')})")
         
-        # Run in headless mode (show_ui=False)
-        process_files(all_files, context_map, show_ui=False)
+        if "error" in data:
+            st.error(data["error"])
+            st.divider()
+            continue
+            
+        col_img, col_info = st.columns([1, 1.5])
+        
+        with col_img:
+            if data.get("image_url"):
+                st.image(data["image_url"], use_container_width=True)
+            st.info(f"**Caption:** {data['caption']}")
+            
+        with col_info:
+            with st.expander("View AI Reasoning (Blind & Fuzzy)"):
+                st.write("**Blind Suggestions:**", data["1_blind_suggestions"])
+                st.write("**Fuzzy Candidates:**", data["2_fuzzy_candidates"])
+                
+            # Editable text input pre-filled with AI's final picks
+            default_cats = ", ".join(data["3_final_picks"])
+            st.text_input(
+                "Final Categories (Comma separated)", 
+                value=default_cats, 
+                key=f"edit_cats_{file_title}",
+                help="Add, remove, or edit categories here. Leave blank to skip this file."
+            )
+            
+        st.divider()
+        
+    # Upload Button
+    if st.button("🚀 Save & Upload to Bahai.media", type="primary", use_container_width=True):
+        session = requests.Session()
+        success_count = 0
+        
+        progress_bar = st.progress(0)
+        status = st.empty()
+        
+        files_list = list(st.session_state.ac_data.keys())
+        for i, file_title in enumerate(files_list):
+            data = st.session_state.ac_data[file_title]
+            if "error" in data: continue
+                
+            # Read the user's edited categories from the session state
+            user_input = st.session_state.get(f"edit_cats_{file_title}", "")
+            final_cats = [c.strip() for c in user_input.split(",") if c.strip()]
+            
+            if final_cats:
+                status.text(f"Uploading {file_title}...")
+                new_wikitext, changed = append_categories_to_wikitext(data["wikitext"], final_cats)
+                if changed:
+                    try:
+                        upload_to_mediawiki(file_title, new_wikitext, "Categorized via AI Tool", session, MEDIA_API_URL)
+                        success_count += 1
+                    except Exception as e:
+                        st.error(f"Failed to upload {file_title}: {e}")
+            
+            progress_bar.progress((i + 1) / len(files_list))
+            
+        st.success(f"Upload complete! Updated {success_count} files.")
+        time.sleep(2)
+        reset_app()
+        st.rerun()
+
+# ==========================================
+# STEP 2: SWEEPER DONE
+# ==========================================
+elif st.session_state.ac_step == 2:
+    st.title("✅ Sweeper Complete")
+    st.success("All sequences have been processed and uploaded.")
+    
+    json_data = json.dumps(st.session_state.ac_data, indent=4, ensure_ascii=False)
+    st.download_button(label="⬇️ Download JSON Results", data=json_data, file_name="auto_cat_results.json", mime="application/json", type="primary")
+    
+    if st.button("Start Over"):
+        reset_app()
+        st.rerun()
