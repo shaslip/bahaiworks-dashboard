@@ -4,6 +4,7 @@ import os
 import requests
 import urllib.parse
 import pandas as pd
+import concurrent.futures
 from src.mediawiki_uploader import upload_to_bahaiworks, fetch_wikitext, upload_to_mediawiki, get_csrf_token
 from src.sitelink_manager import set_sitelink
 from src.wikibase_importer import get_or_create_author
@@ -1125,13 +1126,15 @@ with tab_wanted_cats:
             df = pd.DataFrame(to_create)
             st.dataframe(df, use_container_width=True, hide_index=True)
             
-            if st.button("🚀 Create Categories", type="primary"):
+            if st.button("🚀 Batch Create Categories (Multi-threaded)", type="primary"):
                 progress_bar = st.progress(0)
                 status_box = st.empty()
-                success_count = 0
                 
-                for i, cat in enumerate(to_create):
-                    status_box.write(f"Creating `{cat['Title']}`...")
+                success_count = 0
+                errors = []
+                
+                # Define the worker function for the thread pool
+                def process_category(cat):
                     try:
                         if target_wiki == "bahai.works":
                             upload_to_bahaiworks(
@@ -1147,13 +1150,37 @@ with tab_wanted_cats:
                                 summary="Auto-created category (Misc Tool)",
                                 api_url=TARGET_API
                             )
-                        success_count += 1
+                        return True, cat["Title"], None
                     except Exception as e:
-                        st.error(f"Error creating {cat['Title']}: {e}")
-                        
-                    progress_bar.progress((i + 1) / len(to_create))
+                        return False, cat["Title"], str(e)
+
+                status_box.info(f"🚀 Launching threads... processing {len(to_create)} categories.")
+                
+                # Execute concurrently with 8 workers (adjust up or down depending on your server's limits)
+                with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+                    futures = {executor.submit(process_category, cat): cat for cat in to_create}
+                    completed = 0
                     
-                status_box.success(f"✅ Finished! Created {success_count} categories.")
+                    for future in concurrent.futures.as_completed(futures):
+                        success, title, err = future.result()
+                        completed += 1
+                        
+                        if success:
+                            success_count += 1
+                        else:
+                            errors.append(f"Error on {title}: {err}")
+                            
+                        # Update UI
+                        progress_bar.progress(completed / len(to_create))
+                        status_box.write(f"Processed {completed}/{len(to_create)}... (Latest: `{title}`)")
+                        
+                # Display any errors that occurred in the threads
+                if errors:
+                    with st.expander("⚠️ View Errors"):
+                        for err in errors:
+                            st.error(err)
+                            
+                status_box.success(f"✅ Finished! Created {success_count} categories in record time.")
                 if success_count > 0:
                     st.balloons()
                 
