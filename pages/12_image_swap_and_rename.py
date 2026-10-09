@@ -294,31 +294,31 @@ with tab2:
                     elif any(page == "" for page in new_pages):
                         st.error("Action blocked: Page numbers cannot be blank.")
                     else:
-                        # COLLISION CHECK
-                        collision_detected = False
                         for base_name, data in updates.items():
-                            n_name = data["new_name"].strip().replace(" ", "_")
-                            if n_name != base_name:
-                                ext = os.path.splitext(data["img_path"])[1]
-                                check_txt = os.path.join(folder_path, f"{n_name}.txt")
-                                check_img = os.path.join(folder_path, f"{n_name}{ext}")
-                                
-                                # Block if target exists AND it isn't the file we are currently modifying
-                                if (os.path.exists(check_txt) and check_txt != data["txt_path"]) or (os.path.exists(check_img) and check_img != data["img_path"]):
-                                    st.error(f"Action blocked: The filename '{n_name}' already exists. Please choose a different name.")
-                                    collision_detected = True
-                                    break
-                        
-                        if not collision_detected:
-                            for base_name, data in updates.items():
-                                # Existence check right before modifying
-                                if not os.path.exists(data["txt_path"]) or not os.path.exists(data["img_path"]):
+                            # Existence check right before modifying
+                            if not os.path.exists(data["txt_path"]) or not os.path.exists(data["img_path"]):
                                 st.warning(f"Skipped {base_name}: File was deleted in the background.")
                                 continue
                                 
                             n_name = data["new_name"].strip().replace(" ", "_")
                             n_cap = data["new_caption"].strip()
                             n_page = data["new_page"].strip()
+                            
+                            ext = os.path.splitext(data["img_path"])[1]
+                            final_name = n_name
+                            
+                            # Auto-increment if target exists and is not the current file
+                            if final_name != base_name:
+                                suffix_counter = 1
+                                while True:
+                                    check_txt = os.path.join(folder_path, f"{final_name}.txt")
+                                    check_img = os.path.join(folder_path, f"{final_name}{ext}")
+                                    
+                                    if not os.path.exists(check_txt) and not os.path.exists(check_img):
+                                        break
+                                        
+                                    final_name = f"{n_name}-{suffix_counter}"
+                                    suffix_counter += 1
                             
                             with open(data["txt_path"], 'r', encoding='utf-8') as f:
                                 content = f.read()
@@ -329,20 +329,18 @@ with tab2:
                             # Updates the page number safely
                             content = replace_page_number(content, n_page)
                                 
-                            new_txt_path = os.path.join(folder_path, f"{n_name}.txt")
+                            new_txt_path = os.path.join(folder_path, f"{final_name}.txt")
                             with open(new_txt_path, 'w', encoding='utf-8') as f:
                                 f.write(content)
                                 
-                            if n_name != base_name:
-                                ext = os.path.splitext(data["img_path"])[1]
-                                new_img_path = os.path.join(folder_path, f"{n_name}{ext}")
+                            if final_name != base_name:
+                                new_img_path = os.path.join(folder_path, f"{final_name}{ext}")
                                 os.rename(data["img_path"], new_img_path)
                                 
                                 if data["txt_path"] != new_txt_path and os.path.exists(data["txt_path"]):
                                     os.remove(data["txt_path"])
                                     
                         st.success("Files updated successfully!")
-
 
 # ==========================================
 # TAB 3: BULK RENAME
@@ -410,35 +408,30 @@ with tab3:
                         if missing_files:
                             st.error("Action blocked: Some files were deleted in the background. Please refresh the page.")
                         else:
-                            # --- COLLISION CHECK ---
-                            collision = False
+                            temp_files = []
                             for i, (base_name, txt_path, img_path) in enumerate(page_files, start=1):
+                                # Grab the original extension BEFORE appending .tmp
                                 orig_ext = os.path.splitext(img_path)[1]
-                                n_name = f"{clean_base}-{i}"
-                                check_txt = os.path.join(folder_path, f"{n_name}.txt")
-                                check_img = os.path.join(folder_path, f"{n_name}{orig_ext}")
                                 
-                                # Block if target exists AND it isn't the file we are currently modifying
-                                if (os.path.exists(check_txt) and check_txt != txt_path) or (os.path.exists(check_img) and check_img != img_path):
-                                    st.error(f"Action blocked: Target file '{n_name}' already exists. Please choose a different base name to prevent overwriting.")
-                                    collision = True
-                                    break
-                                    
-                            if not collision:
-                                for i, (base_name, txt_path, img_path) in enumerate(page_files, start=1):
-                                    # Grab the original extension BEFORE appending .tmp
-                                    orig_ext = os.path.splitext(img_path)[1]
-                                    
-                                    temp_img = img_path + ".tmp"
+                                temp_img = img_path + ".tmp"
                                 temp_txt = txt_path + ".tmp"
                                 os.rename(img_path, temp_img)
                                 os.rename(txt_path, temp_txt)
                                 
                                 # Store the orig_ext in the tuple
-                                temp_files.append((base_name, temp_txt, temp_img, i, orig_ext))
+                                temp_files.append((base_name, temp_txt, temp_img, orig_ext))
                             
-                            for base_name, temp_txt, temp_img, i, orig_ext in temp_files:
-                                n_name = f"{clean_base}-{i}"
+                            suffix_counter = 1
+                            for base_name, temp_txt, temp_img, orig_ext in temp_files:
+                                # Auto-increment until an available filename is found
+                                while True:
+                                    n_name = f"{clean_base}-{suffix_counter}"
+                                    check_txt = os.path.join(folder_path, f"{n_name}.txt")
+                                    check_img = os.path.join(folder_path, f"{n_name}{orig_ext}")
+                                    
+                                    if not os.path.exists(check_txt) and not os.path.exists(check_img):
+                                        break
+                                    suffix_counter += 1
                                 
                                 with open(temp_txt, 'r', encoding='utf-8') as f:
                                     content = f.read()
@@ -453,5 +446,8 @@ with tab3:
                                 new_img_path = os.path.join(folder_path, f"{n_name}{orig_ext}")
                                 os.rename(temp_img, new_img_path)
                                 os.remove(temp_txt)
+                                
+                                # Increment for the next file in the batch
+                                suffix_counter += 1
                                     
                             st.success(f"Successfully bulk-renamed {len(page_files)} files!")
