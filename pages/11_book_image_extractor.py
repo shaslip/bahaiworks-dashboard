@@ -169,7 +169,7 @@ def crop_illustrations(pil_img, expected_count=1):
 def create_wiki_text_file(txt_path, caption, book_title, access_control="", 
                           is_bw_volume=False, bw_volume=None, 
                           is_ab_issue=False, ab_vol=None, ab_issue=None, physical_page=None,
-                          pdf_page=None, misc_offset=None, category_override=None):
+                          pdf_page=None, misc_offset=None, category_override=None, file_license=None):
     clean_title = re.sub(r'\.pdf$', '', book_title, flags=re.IGNORECASE).replace('_', ' ')
     access_block = f"{access_control.strip()}\n" if access_control.strip() else ""
     
@@ -179,20 +179,16 @@ def create_wiki_text_file(txt_path, caption, book_title, access_control="",
 | caption = {caption}
 | source = {{{{bws|{bw_volume}|{physical_page}}}}}
 }}}}
-
-== File license ==
-{{{{Baha'i World excerpt}}}}
 """
+        default_license = "{{Baha'i World excerpt}}"
     elif is_ab_issue and ab_vol is not None and ab_issue is not None and physical_page is not None:
         content = f"""{access_block}== File info ==
 {{{{cs
 | caption = {caption}
 | source = {{{{ab|{ab_vol}|{ab_issue}|{physical_page}}}}}
 }}}}
-
-== File license ==
-{{{{Abn-copyright}}}}
 """
+        default_license = "{{Abn-copyright}}"
     else:
         cat_param = f"|category={category_override.strip()}" if category_override and category_override.strip() else ""
         
@@ -210,6 +206,13 @@ def create_wiki_text_file(txt_path, caption, book_title, access_control="",
 | source = {source_str}
 }}}}
 """
+        default_license = ""
+
+    final_license = file_license.strip() if file_license and file_license.strip() else default_license
+    
+    if final_license:
+        content += f"\n== File license ==\n{final_license}\n"
+
     with open(txt_path, "w", encoding="utf-8") as f:
         f.write(content)
 
@@ -230,7 +233,8 @@ access_control = st.text_input("Access Control (Optional)", placeholder="e.g., <
 st.divider()
 st.subheader("Page and Category Overrides")
 
-category_override = st.text_input("Media Category (Optional)", placeholder="e.g., Five Year Plan 2001–2006 (book)")
+category_override = st.text_input("Media Category (Optional)", placeholder="e.g., Category:Visiting_Bahá’í_Holy_Places")
+file_license = st.text_input("File license (Optional)", placeholder="e.g., {{PD-US}}")
 
 offset_mode = st.radio(
     "Select Offset Mode",
@@ -406,7 +410,8 @@ if st.button("🚀 Process Images", type="primary"):
                 physical_page=physical_page,
                 pdf_page=page_num,
                 misc_offset=misc_offset,
-                category_override=category_override
+                category_override=category_override,
+                file_license=file_license
             )
             
             log_container.success(f"✅ Finished page {page_num}, image {i+1} -> Saved as `{final_filename}`")
