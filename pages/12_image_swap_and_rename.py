@@ -294,9 +294,25 @@ with tab2:
                     elif any(page == "" for page in new_pages):
                         st.error("Action blocked: Page numbers cannot be blank.")
                     else:
+                        # COLLISION CHECK
+                        collision_detected = False
                         for base_name, data in updates.items():
-                            # Existence check right before modifying
-                            if not os.path.exists(data["txt_path"]) or not os.path.exists(data["img_path"]):
+                            n_name = data["new_name"].strip().replace(" ", "_")
+                            if n_name != base_name:
+                                ext = os.path.splitext(data["img_path"])[1]
+                                check_txt = os.path.join(folder_path, f"{n_name}.txt")
+                                check_img = os.path.join(folder_path, f"{n_name}{ext}")
+                                
+                                # Block if target exists AND it isn't the file we are currently modifying
+                                if (os.path.exists(check_txt) and check_txt != data["txt_path"]) or (os.path.exists(check_img) and check_img != data["img_path"]):
+                                    st.error(f"Action blocked: The filename '{n_name}' already exists. Please choose a different name.")
+                                    collision_detected = True
+                                    break
+                        
+                        if not collision_detected:
+                            for base_name, data in updates.items():
+                                # Existence check right before modifying
+                                if not os.path.exists(data["txt_path"]) or not os.path.exists(data["img_path"]):
                                 st.warning(f"Skipped {base_name}: File was deleted in the background.")
                                 continue
                                 
@@ -394,11 +410,26 @@ with tab3:
                         if missing_files:
                             st.error("Action blocked: Some files were deleted in the background. Please refresh the page.")
                         else:
+                            # --- COLLISION CHECK ---
+                            collision = False
                             for i, (base_name, txt_path, img_path) in enumerate(page_files, start=1):
-                                # Grab the original extension BEFORE appending .tmp
                                 orig_ext = os.path.splitext(img_path)[1]
+                                n_name = f"{clean_base}-{i}"
+                                check_txt = os.path.join(folder_path, f"{n_name}.txt")
+                                check_img = os.path.join(folder_path, f"{n_name}{orig_ext}")
                                 
-                                temp_img = img_path + ".tmp"
+                                # Block if target exists AND it isn't the file we are currently modifying
+                                if (os.path.exists(check_txt) and check_txt != txt_path) or (os.path.exists(check_img) and check_img != img_path):
+                                    st.error(f"Action blocked: Target file '{n_name}' already exists. Please choose a different base name to prevent overwriting.")
+                                    collision = True
+                                    break
+                                    
+                            if not collision:
+                                for i, (base_name, txt_path, img_path) in enumerate(page_files, start=1):
+                                    # Grab the original extension BEFORE appending .tmp
+                                    orig_ext = os.path.splitext(img_path)[1]
+                                    
+                                    temp_img = img_path + ".tmp"
                                 temp_txt = txt_path + ".tmp"
                                 os.rename(img_path, temp_img)
                                 os.rename(txt_path, temp_txt)
