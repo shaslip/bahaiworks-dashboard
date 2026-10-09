@@ -190,8 +190,11 @@ def create_wiki_text_file(txt_path, caption, book_title, access_control="",
 """
         default_license = "{{Abn-copyright}}"
     else:
-        cat_param = f"|category={category_override.strip()}" if category_override and category_override.strip() else ""
-        
+        cat_param = ""
+        if category_override and category_override.strip():
+            clean_cat = re.sub(r'^Category:', '', category_override.strip(), flags=re.IGNORECASE).strip()
+            cat_param = f"|category={clean_cat}"
+            
         if misc_offset is not None and pdf_page is not None:
             calc_phys_page = pdf_page - misc_offset
             source_str = f"{{{{misc|{clean_title}|{calc_phys_page}|pdfpage={pdf_page}{cat_param}}}}}"
