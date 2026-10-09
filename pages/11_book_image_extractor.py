@@ -227,9 +227,9 @@ page_ranges = st.text_input("Page Ranges", placeholder="e.g., 1-10, 12, 14-15")
 skip_crop_ranges = st.text_input("Full Page Document Ranges (Skip Cropping)", placeholder="e.g., 11, 16")
 access_control = st.text_input("Access Control (Optional)", placeholder="e.g., <accesscontrol>Access:DayVeryGreatThings</accesscontrol>")
 
-st.sidebar.divider()
-st.sidebar.subheader("Generic Book Offset")
-offset_mode = st.sidebar.radio(
+st.divider()
+st.subheader("Generic Book Offset")
+offset_mode = st.radio(
     "Select Offset Mode",
     ["Auto-detect Offset", "Manual Offset", "Fall back to electronic page"],
     help="Determines how physical page numbers are calculated for generic books."
@@ -237,7 +237,7 @@ offset_mode = st.sidebar.radio(
 
 misc_offset_input = None
 if offset_mode == "Manual Offset":
-    misc_offset_input = st.sidebar.text_input("Enter Manual Offset", placeholder="e.g., 14")
+    misc_offset_input = st.text_input("Enter Manual Offset", placeholder="e.g., 14")
 
 if st.button("🚀 Process Images", type="primary"):
     if not pdf_filename:
