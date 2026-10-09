@@ -2,10 +2,11 @@ import streamlit as st
 import re
 import os
 import requests
+import glob
 import urllib.parse
 import pandas as pd
 import concurrent.futures
-from src.mediawiki_uploader import upload_to_bahaiworks, fetch_wikitext, upload_to_mediawiki, get_csrf_token
+from src.mediawiki_uploader import upload_to_bahaiworks, fetch_wikitext, upload_to_mediawiki, get_csrf_token, upload_file_binary, move_page
 from src.sitelink_manager import set_sitelink
 from src.wikibase_importer import get_or_create_author
 
@@ -37,7 +38,7 @@ with st.expander("ℹ️ Help / Instructions"):
 st.markdown("---")
 
 # --- TABS ---
-tab_create_author, tab_ac, tab_update_author, tab_maintenance, tab_media, tab_fix_pages, tab_periodicals, tab_wanted_cats = st.tabs([
+tab_create_author, tab_ac, tab_update_author, tab_maintenance, tab_media, tab_fix_pages, tab_periodicals, tab_wanted_cats, tab_5yp = st.tabs([
     "👤 Create Author Pages", 
     "📖 AC Messages", 
     "📝 Update Author list",
@@ -45,7 +46,8 @@ tab_create_author, tab_ac, tab_update_author, tab_maintenance, tab_media, tab_fi
     "🖼️ Bahai.media Images",
     "📄 Fix Page Numbering",
     "📰 Periodical Categories",
-    "📅 Wanted Categories"
+    "📅 Wanted Categories",
+    "🔄 5YP Image Migration"
 ])
 
 # --- Author page maintenance and exclusions ---
@@ -1212,3 +1214,138 @@ with tab_wanted_cats:
                     st.balloons()
                 
                 del st.session_state["wanted_cats_to_create"]
+
+# ==============================================================================
+# TAB 9: 5YP IMAGE MIGRATION
+# ==============================================================================
+with tab_5yp:
+    st.header("🔄 Five Year Plan Image Migration")
+    st.info("Uploads new images over old generic filenames, moves them to descriptive names (leaving a redirect), and preserves manual categories.")
+    
+    MEDIA_API = "https://bahai.media/api.php"
+    
+    local_folder = st.text_input("Local Folder Path (containing new .png and .txt files)", 
+                                 value="/media/sarah/4TB/Projects/Bahai.works/English/3.Miscbahai/2.Institutions/BWC/images/")
+    
+    if st.button("🔍 Analyze Folder"):
+        if not os.path.exists(local_folder):
+            st.error("Directory does not exist.")
+        else:
+            txt_files = glob.glob(os.path.join(local_folder, "*.txt"))
+            
+            mapping = {}
+            for txt_path in txt_files:
+                with open(txt_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    
+                match = re.search(r'pdfpage=(\d+)', content)
+                if match:
+                    page_num = int(match.group(1))
+                    # Pad to 3 digits (e.g., 12 -> 012)
+                    old_filename = f"File:Five_Year_Plan_2001-2006_Page_{page_num:03d}.png"
+                    
+                    new_basename = os.path.basename(txt_path).replace('.txt', '.png')
+                    new_filename = f"File:{new_basename}"
+                    img_path = txt_path.replace('.txt', '.png')
+                    
+                    if old_filename not in mapping:
+                        mapping[old_filename] = []
+                        
+                    mapping[old_filename].append({
+                        "new_filename": new_filename,
+                        "content": content,
+                        "img_path": img_path
+                    })
+            
+            # Separate valid 1-to-1 mappings from duplicates
+            valid_mappings = {k: v[0] for k, v in mapping.items() if len(v) == 1}
+            skipped_mappings = {k: v for k, v in mapping.items() if len(v) > 1}
+            
+            st.session_state["5yp_valid"] = valid_mappings
+            st.session_state["5yp_skipped"] = skipped_mappings
+            st.success(f"Found {len(valid_mappings)} images ready to migrate. Skipped {len(skipped_mappings)} pages with multiple images.")
+            
+    if "5yp_valid" in st.session_state:
+        valid_mappings = st.session_state["5yp_valid"]
+        skipped_mappings = st.session_state["5yp_skipped"]
+        
+        if skipped_mappings:
+            with st.expander("⚠️ View Skipped (Multi-Image) Pages"):
+                for old_name, items in skipped_mappings.items():
+                    st.write(f"**{old_name}** maps to {len(items)} images:")
+                    for item in items:
+                        st.write(f"- {item['new_filename']}")
+                        
+        if valid_mappings and st.button("🚀 Execute Migration", type="primary"):
+            progress_bar = st.progress(0)
+            status_box = st.empty()
+            
+            shared_session = requests.Session()
+            try:
+                status_box.info("🔐 Authenticating session...")
+                get_csrf_token(shared_session, api_url=MEDIA_API)
+                
+                success_count = 0
+                total = len(valid_mappings)
+                
+                for i, (old_name, data) in enumerate(valid_mappings.items()):
+                    status_box.write(f"Processing ({i+1}/{total}): `{old_name}`...")
+                    
+                    try:
+                        # 1. Fetch old wikitext to extract categories
+                        old_text, err = fetch_wikitext(old_name, session=shared_session, api_url=MEDIA_API)
+                        
+                        kept_cats = []
+                        if old_text:
+                            all_cats = re.findall(r'\[\[Category:.*?\]\]', old_text, re.IGNORECASE)
+                            for cat in all_cats:
+                                # Filter out the ones we don't want
+                                if "PNG files" not in cat and "Five Year Plan 2001–2006 (book)" not in cat:
+                                    kept_cats.append(cat)
+                        
+                        # Build new wikitext
+                        new_wikitext = data['content'].strip()
+                        if kept_cats:
+                            new_wikitext += "\n\n" + "\n".join(kept_cats)
+                            
+                        # 2. Upload binary to overwrite old file
+                        status_box.write(f"Uploading new image over `{old_name}`...")
+                        upload_file_binary(
+                            filename=old_name,
+                            file_path=data['img_path'],
+                            summary="Overwriting with cropped image prior to rename",
+                            session=shared_session,
+                            api_url=MEDIA_API
+                        )
+                        
+                        # 3. Move to new filename
+                        status_box.write(f"Moving to `{data['new_filename']}`...")
+                        move_page(
+                            from_title=old_name,
+                            to_title=data['new_filename'],
+                            reason="Renaming generic file to descriptive name",
+                            session=shared_session,
+                            api_url=MEDIA_API
+                        )
+                        
+                        # 4. Update the wikitext on the new page
+                        status_box.write(f"Updating wikitext on `{data['new_filename']}`...")
+                        upload_to_mediawiki(
+                            title=data['new_filename'],
+                            content=new_wikitext,
+                            summary="Adding new file info and restoring manual categories",
+                            session=shared_session,
+                            api_url=MEDIA_API
+                        )
+                        
+                        success_count += 1
+                    except Exception as e:
+                        st.error(f"Error processing {old_name}: {e}")
+                        
+                    progress_bar.progress((i + 1) / total)
+                    
+                status_box.success(f"✅ Migration complete! Successfully processed {success_count} images.")
+                st.balloons()
+                
+            finally:
+                shared_session.close()
