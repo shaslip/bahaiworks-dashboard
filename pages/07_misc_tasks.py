@@ -175,7 +175,26 @@ def format_author_page(name, book_title=None, book_year=None, use_dynamic=True):
 
 def format_author_cat_page(name):
     """Generates content for Category:Name"""
-    sort_key = get_lastname_firstname(name)
+    
+    # Keywords that indicate an institution or entity that shouldn't be inverted
+    institutional_keywords = [
+        "Assembly", "Committee", "Office", "Department", "Trust", 
+        "Community", "Association", "Centre", "Center", "House of Justice",
+        "Group", "Board", "Institution", "Publications", "NSA"
+    ]
+    
+    # Central figures or specific exceptions that shouldn't be inverted
+    exceptions = ["The Báb", "Bahá’u’lláh", "‘Abdu’l-Bahá", "Shoghi Effendi"]
+    
+    # Check if the name matches our institutional heuristics or exceptions
+    is_institution = any(kw in name for kw in institutional_keywords)
+    is_exception = name in exceptions
+    
+    if is_institution or is_exception:
+        sort_key = name  # Keep the natural order (e.g., "Universal House of Justice")
+    else:
+        sort_key = get_lastname_firstname(name)
+        
     return f"{{{{authorcat_desc}}}}\n[[Category:Authors|{sort_key}]]"
 
 def format_works_cat_page(name):
