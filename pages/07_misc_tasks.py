@@ -996,6 +996,14 @@ with tab_wanted_cats:
                 "format": "json"
             }
             
+            # Map the category prefix to the template name
+            PREFIX_MAP = {
+                "Images from publications": "Pub-image-year",
+                "The Bahá’í World": "Bw-year",
+                "The American Bahá’í": "Ab-year",
+                "Bahá'í News": "Bn-year"
+            }
+            
             try:
                 resp = requests.get(TARGET_API, params=params).json()
                 wanted = resp.get("query", {}).get("querypage", {}).get("results", [])
@@ -1004,25 +1012,29 @@ with tab_wanted_cats:
                 for item in wanted:
                     title = item["title"]
                     
-                    # 1. Match Year Categories
-                    year_match = re.match(r'^Category:Images from publications in (\d{4})$', title)
+                    # 1. Match Year Categories (e.g., Category:The Bahá’í World in 1998)
+                    year_match = re.match(r'^Category:(.*?) in (\d{4})$', title)
                     if year_match:
-                        year = year_match.group(1)
-                        to_create.append({
-                            "title": title,
-                            "content": f"{{{{Pub-image-year|{year}}}}}"
-                        })
+                        prefix, year = year_match.groups()
+                        if prefix in PREFIX_MAP:
+                            template = PREFIX_MAP[prefix]
+                            to_create.append({
+                                "title": title,
+                                "content": f"{{{{{template}|{year}}}}}"
+                            })
                         continue
                         
-                    # 2. Match Decade Categories
-                    decade_match = re.match(r'^Category:Images from publications in the (\d{4})s$', title)
+                    # 2. Match Decade Categories (e.g., Category:The Bahá’í World in the 1990s)
+                    decade_match = re.match(r'^Category:(.*?) in the (\d{4})s$', title)
                     if decade_match:
-                        decade = decade_match.group(1)
-                        to_create.append({
-                            "title": title,
-                            "content": f"{{{{Pub-image-year|decade=yes|{decade}}}}}"
-                        })
-                        
+                        prefix, decade = decade_match.groups()
+                        if prefix in PREFIX_MAP:
+                            template = PREFIX_MAP[prefix]
+                            to_create.append({
+                                "title": title,
+                                "content": f"{{{{{template}|decade=yes|{decade}}}}}"
+                            })
+                            
                 st.session_state["wanted_cats_to_create"] = to_create
                 
             except Exception as e:
