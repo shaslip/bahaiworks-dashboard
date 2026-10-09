@@ -979,10 +979,9 @@ AB Volume 32 (1 C, 10 F)"""
 # TAB 8: WANTED CATEGORIES
 # ==============================================================================
 with tab_wanted_cats:
-    st.header("📅 Auto-Create Chronological Categories")
-    st.info("Scans Special:WantedCategories to automatically create missing year and decade categories (e.g., 'Images from publications in 1976').")
+    st.header("📅 Auto-Create Missing Categories")
+    st.info("Scans Special:WantedCategories to automatically create missing chronological and author categories.")
     
-    # Let the user choose the wiki, defaulting to Media since that's where images usually live
     target_wiki = st.radio("Target Wiki", ["bahai.media", "bahai.works"], index=0)
     TARGET_API = "https://bahai.media/api.php" if target_wiki == "bahai.media" else "https://bahai.works/api.php"
     
@@ -996,7 +995,6 @@ with tab_wanted_cats:
                 "format": "json"
             }
             
-            # Map the category prefix to the template name
             PREFIX_MAP = {
                 "Images from publications": "Pub-image-year",
                 "The Bahá’í World": "Bw-year",
@@ -1015,32 +1013,79 @@ with tab_wanted_cats:
                 wanted = resp.get("query", {}).get("querypage", {}).get("results", [])
                 
                 to_create = []
+                unmatched_base_cats = []
+                
                 for item in wanted:
                     title = item["title"]
                     
-                    # 1. Match Year Categories (e.g., Category:The Bahá’í World in 1998)
+                    # 1. Match Year Categories
                     year_match = re.match(r'^Category:(.*?) in (\d{4})$', title)
                     if year_match:
                         prefix, year = year_match.groups()
                         if prefix in PREFIX_MAP:
-                            template = PREFIX_MAP[prefix]
                             to_create.append({
-                                "title": title,
-                                "content": f"{{{{{template}|{year}}}}}"
+                                "Title": title,
+                                "Type": "Chronological (Year)",
+                                "Content": f"{{{{{PREFIX_MAP[prefix]}|{year}}}}}"
                             })
                         continue
                         
-                    # 2. Match Decade Categories (e.g., Category:The Bahá’í World in the 1990s)
+                    # 2. Match Decade Categories
                     decade_match = re.match(r'^Category:(.*?) in the (\d{4})s$', title)
                     if decade_match:
                         prefix, decade = decade_match.groups()
                         if prefix in PREFIX_MAP:
-                            template = PREFIX_MAP[prefix]
                             to_create.append({
-                                "title": title,
-                                "content": f"{{{{{template}|decade=yes|{decade}}}}}"
+                                "Title": title,
+                                "Type": "Chronological (Decade)",
+                                "Content": f"{{{{{PREFIX_MAP[prefix]}|decade=yes|{decade}}}}}"
                             })
+                        continue
+                        
+                    # 3. Match Author "Text of works by" Categories
+                    works_match = re.match(r'^Category:Text of works by (.*)$', title)
+                    if works_match:
+                        author_name = works_match.group(1)
+                        to_create.append({
+                            "Title": title,
+                            "Type": "Author Works",
+                            "Content": format_works_cat_page(author_name)
+                        })
+                        continue
+                        
+                    # 4. Collect other categories to cross-reference with Author namespace
+                    if title.startswith("Category:"):
+                        base_name = title.replace("Category:", "")
+                        unmatched_base_cats.append(base_name)
+                
+                # 5. Cross-reference unmatched categories to see if they are Authors
+                if target_wiki == "bahai.works" and unmatched_base_cats:
+                    # Check in chunks of 50 to respect API limits
+                    for i in range(0, len(unmatched_base_cats), 50):
+                        chunk = unmatched_base_cats[i:i+50]
+                        author_titles = [f"Author:{name}" for name in chunk]
+                        
+                        check_params = {
+                            "action": "query",
+                            "titles": "|".join(author_titles),
+                            "format": "json"
+                        }
+                        
+                        try:
+                            check_resp = requests.get(TARGET_API, params=check_params).json()
+                            pages = check_resp.get("query", {}).get("pages", {})
                             
+                            for page_id, page_info in pages.items():
+                                if int(page_id) > 0:  # Page ID > 0 means the page exists!
+                                    author_name = page_info["title"].replace("Author:", "")
+                                    to_create.append({
+                                        "Title": f"Category:{author_name}",
+                                        "Type": "Author Base",
+                                        "Content": format_author_cat_page(author_name)
+                                    })
+                        except Exception as e:
+                            st.warning(f"Failed to cross-reference author pages: {e}")
+
                 st.session_state["wanted_cats_to_create"] = to_create
                 
             except Exception as e:
@@ -1051,10 +1096,13 @@ with tab_wanted_cats:
         to_create = st.session_state["wanted_cats_to_create"]
         
         if not to_create:
-            st.success("No missing chronological categories found in Special:WantedCategories!")
+            st.success("No known missing categories found in Special:WantedCategories!")
         else:
             st.write(f"Found **{len(to_create)}** categories to create:")
-            st.dataframe(pd.DataFrame(to_create), use_container_width=True)
+            
+            # Display nicely in a dataframe
+            df = pd.DataFrame(to_create)
+            st.dataframe(df, use_container_width=True, hide_index=True)
             
             if st.button("🚀 Create Categories", type="primary"):
                 progress_bar = st.progress(0)
@@ -1062,25 +1110,25 @@ with tab_wanted_cats:
                 success_count = 0
                 
                 for i, cat in enumerate(to_create):
-                    status_box.write(f"Creating `{cat['title']}`...")
+                    status_box.write(f"Creating `{cat['Title']}`...")
                     try:
                         if target_wiki == "bahai.works":
                             upload_to_bahaiworks(
-                                title=cat["title"],
-                                content=cat["content"],
-                                summary="Auto-created chronological category (Misc Tool)",
+                                title=cat["Title"],
+                                content=cat["Content"],
+                                summary="Auto-created category (Misc Tool)",
                                 check_exists=False
                             )
                         else:
                             upload_to_mediawiki(
-                                title=cat["title"],
-                                content=cat["content"],
-                                summary="Auto-created chronological category (Misc Tool)",
+                                title=cat["Title"],
+                                content=cat["Content"],
+                                summary="Auto-created category (Misc Tool)",
                                 api_url=TARGET_API
                             )
                         success_count += 1
                     except Exception as e:
-                        st.error(f"Error creating {cat['title']}: {e}")
+                        st.error(f"Error creating {cat['Title']}: {e}")
                         
                     progress_bar.progress((i + 1) / len(to_create))
                     
@@ -1088,5 +1136,4 @@ with tab_wanted_cats:
                 if success_count > 0:
                     st.balloons()
                 
-                # Clear session state so it doesn't persist after success
                 del st.session_state["wanted_cats_to_create"]
