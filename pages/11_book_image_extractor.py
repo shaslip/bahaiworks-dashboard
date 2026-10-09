@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 from pdf2image import convert_from_path
 import requests
+import fitz
 
 # --- Path Setup ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -15,6 +16,7 @@ if project_root not in sys.path:
 
 # --- Imports ---
 from src.gemini_processor import parse_range_string, extract_image_caption_and_filename
+from src.calibration import calculate_start_offset
 
 st.set_page_config(page_title="Book Image Extractor", page_icon="🖼️", layout="wide")
 
@@ -224,7 +226,18 @@ pdf_filename = st.text_input("PDF Filename", placeholder="e.g., The_American_Bah
 page_ranges = st.text_input("Page Ranges", placeholder="e.g., 1-10, 12, 14-15")
 skip_crop_ranges = st.text_input("Full Page Document Ranges (Skip Cropping)", placeholder="e.g., 11, 16")
 access_control = st.text_input("Access Control (Optional)", placeholder="e.g., <accesscontrol>Access:DayVeryGreatThings</accesscontrol>")
-misc_offset_input = st.text_input("PDF Offset for Generic Books (Optional)", placeholder="e.g., 14")
+
+st.sidebar.divider()
+st.sidebar.subheader("Generic Book Offset")
+offset_mode = st.sidebar.radio(
+    "Select Offset Mode",
+    ["Auto-detect Offset", "Manual Offset", "Fall back to electronic page"],
+    help="Determines how physical page numbers are calculated for generic books."
+)
+
+misc_offset_input = None
+if offset_mode == "Manual Offset":
+    misc_offset_input = st.sidebar.text_input("Enter Manual Offset", placeholder="e.g., 14")
 
 if st.button("🚀 Process Images", type="primary"):
     if not pdf_filename:
@@ -234,14 +247,6 @@ if st.button("🚀 Process Images", type="primary"):
     if not page_ranges and not skip_crop_ranges:
         st.warning("Please provide at least one page range.")
         st.stop()
-        
-    misc_offset = None
-    if misc_offset_input.strip():
-        try:
-            misc_offset = int(misc_offset_input.strip())
-        except ValueError:
-            st.warning("Offset must be a valid integer.")
-            st.stop()
             
     local_pdf_path = find_local_pdf(pdf_filename, input_folder)
     
@@ -281,10 +286,11 @@ if st.button("🚀 Process Images", type="primary"):
     ab_vol_num = int(ab_match.group(1)) if is_ab_issue else None
     ab_issue_num = int(ab_match.group(2)) if is_ab_issue else None
 
-    # --- Fetch Maps ---
+    # --- Fetch Maps & Process Generic Offsets ---
     bw_offset_map = {}
     ab_dp_map = {}
     ab_off_map = {}
+    misc_offset = None
     
     if is_bw_volume:
         log_container.info(f"📚 Detected Bahá'í World Volume {bw_volume_num}. Fetching offset map...")
@@ -292,6 +298,31 @@ if st.button("🚀 Process Images", type="primary"):
     elif is_ab_issue:
         log_container.info(f"📰 Detected American Bahá'í Vol {ab_vol_num} No {ab_issue_num}. Fetching offset maps...")
         ab_dp_map, ab_off_map = fetch_ab_maps("Module:AmericanBahai")
+    else:
+        # Generic book offset handling
+        if offset_mode == "Manual Offset":
+            if misc_offset_input and misc_offset_input.strip():
+                try:
+                    misc_offset = int(misc_offset_input.strip())
+                    log_container.info(f"🔢 Using manual offset: {misc_offset}")
+                except ValueError:
+                    st.warning("Offset must be a valid integer.")
+                    st.stop()
+        elif offset_mode == "Auto-detect Offset":
+            log_container.info("🔍 Auto-detecting page offset...")
+            try:
+                with fitz.open(local_pdf_path) as pdf:
+                    total_pages = len(pdf)
+                detected_offset, _ = calculate_start_offset(local_pdf_path, total_pages)
+                if detected_offset is not None:
+                    misc_offset = detected_offset
+                    log_container.success(f"✅ Auto-detected offset: {misc_offset}")
+                else:
+                    log_container.warning("⚠️ Could not auto-detect offset. Falling back to electronic page.")
+                    misc_offset = None
+            except Exception as e:
+                log_container.error(f"❌ Error during auto-detection: {e}")
+                misc_offset = None
 
     for idx, page_num in enumerate(pages_to_process):
         status_text.markdown(f"**Processing Page {page_num} ({idx+1}/{len(pages_to_process)})...**")
