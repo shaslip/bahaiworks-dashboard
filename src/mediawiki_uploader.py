@@ -13,11 +13,24 @@ BW_PASS = os.getenv("WIKI_PASSWORD")
 def get_csrf_token(session, api_url=API_URL):
     """
     Authenticates with MediaWiki and retrieves a CSRF token.
+    Smartly skips login if the session is already authenticated.
     """
     if not BW_USER or not BW_PASS:
         raise ValueError("Missing WIKI_USERNAME or WIKI_PASSWORD in .env")
 
-    # 1. Get Login Token
+    # 1. Check if we already have a valid logged-in token
+    csrf_token_response = session.get(api_url, params={
+        'action': 'query',
+        'meta': 'tokens',
+        'format': 'json'
+    })
+    csrf_token = csrf_token_response.json()['query']['tokens']['csrftoken']
+    
+    # MediaWiki returns '+\\' for anonymous users. If it's anything else, we are logged in!
+    if csrf_token != '+\\':
+        return csrf_token
+
+    # 2. Not logged in. Get Login Token
     login_token_response = session.get(api_url, params={
         'action': 'query',
         'meta': 'tokens',
@@ -26,7 +39,7 @@ def get_csrf_token(session, api_url=API_URL):
     })
     login_token = login_token_response.json()['query']['tokens']['logintoken']
 
-    # 2. Perform Login
+    # 3. Perform Login
     login_response = session.post(api_url, data={
         'action': 'login',
         'lgname': BW_USER,
@@ -39,7 +52,7 @@ def get_csrf_token(session, api_url=API_URL):
     if login_data.get('login', {}).get('result') != "Success":
         raise PermissionError(f"Login failed: {login_data}")
 
-    # 3. Get CSRF Token
+    # 4. Fetch the real CSRF token now that we are logged in
     csrf_token_response = session.get(api_url, params={
         'action': 'query',
         'meta': 'tokens',
