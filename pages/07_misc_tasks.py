@@ -1424,17 +1424,35 @@ with tab_5yp:
                                 api_url=MEDIA_API
                             )
                             
-                            status_box.write(f"Moving to `{data['new_filename']}`...")
-                            move_page(
-                                from_title=old_name,
-                                to_title=data['new_filename'],
-                                reason="Renaming generic file to descriptive name",
-                                session=shared_session,
-                                api_url=MEDIA_API
-                            )
+                            base_new_filename = data['new_filename']
+                            current_new_filename = base_new_filename
+                            
+                            moved = False
+                            increment = 2
+                            while not moved:
+                                try:
+                                    status_box.write(f"Moving to `{current_new_filename}`...")
+                                    move_page(
+                                        from_title=old_name,
+                                        to_title=current_new_filename,
+                                        reason="Renaming generic file to descriptive name",
+                                        session=shared_session,
+                                        api_url=MEDIA_API
+                                    )
+                                    moved = True
+                                except Exception as e:
+                                    err_str = str(e).lower()
+                                    if "already exists" in err_str or "not valid" in err_str:
+                                        name_part, ext = os.path.splitext(base_new_filename)
+                                        current_new_filename = f"{name_part}-{increment}{ext}"
+                                        increment += 1
+                                        if increment > 20:
+                                            raise Exception(f"Failed to find a unique filename after 20 tries for {base_new_filename}")
+                                    else:
+                                        raise e
                             
                             upload_to_mediawiki(
-                                title=data['new_filename'],
+                                title=current_new_filename,
                                 content=new_wikitext,
                                 summary="Adding new file info and restoring manual categories",
                                 session=shared_session,
@@ -1443,6 +1461,57 @@ with tab_5yp:
                             success_count += 1
                         except Exception as e:
                             st.error(f"Error on {old_name}: {e}")
+                            
+                        progress_bar.progress(current_idx / total)
+
+                    # 2. Process New Uploads
+                    for data in new_uploads:
+                        current_idx += 1
+                        
+                        base_new_filename = data['new_filename']
+                        current_new_filename = base_new_filename
+                        
+                        # Check existence and auto-increment before uploading
+                        increment = 2
+                        while True:
+                            exists = False
+                            try:
+                                resp = requests.get(MEDIA_API, params={'action': 'query', 'titles': current_new_filename, 'format': 'json'}, timeout=10).json()
+                                pages = resp.get('query', {}).get('pages', {})
+                                exists = not any(int(pid) < 0 for pid in pages)
+                            except Exception:
+                                pass # Fallback to trying upload if network fails
+                                
+                            if exists:
+                                name_part, ext = os.path.splitext(base_new_filename)
+                                current_new_filename = f"{name_part}-{increment}{ext}"
+                                increment += 1
+                                if increment > 20:
+                                    raise Exception(f"Failed to find a unique filename after 20 tries for {base_new_filename}")
+                            else:
+                                break
+                                
+                        status_box.write(f"Processing ({current_idx}/{total}): New Upload `{current_new_filename}`...")
+                        
+                        try:
+                            upload_file_binary(
+                                filename=current_new_filename,
+                                file_path=data['img_path'],
+                                summary="Uploading new cropped image",
+                                session=shared_session,
+                                api_url=MEDIA_API
+                            )
+                            
+                            upload_to_mediawiki(
+                                title=current_new_filename,
+                                content=data['content'].strip(),
+                                summary="Adding file info",
+                                session=shared_session,
+                                api_url=MEDIA_API
+                            )
+                            success_count += 1
+                        except Exception as e:
+                            st.error(f"Error on {current_new_filename}: {e}")
                             
                         progress_bar.progress(current_idx / total)
 
