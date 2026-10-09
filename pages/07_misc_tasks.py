@@ -1133,46 +1133,59 @@ with tab_wanted_cats:
                 success_count = 0
                 errors = []
                 
-                # Define the worker function for the thread pool
-                def process_category(cat):
-                    try:
-                        if target_wiki == "bahai.works":
-                            upload_to_bahaiworks(
-                                title=cat["Title"],
-                                content=cat["Content"],
-                                summary="Auto-created category (Misc Tool)",
-                                check_exists=False
-                            )
-                        else:
-                            upload_to_mediawiki(
-                                title=cat["Title"],
-                                content=cat["Content"],
-                                summary="Auto-created category (Misc Tool)",
-                                api_url=TARGET_API
-                            )
-                        return True, cat["Title"], None
-                    except Exception as e:
-                        return False, cat["Title"], str(e)
-
-                status_box.info(f"🚀 Launching threads... processing {len(to_create)} categories.")
+                # 1. Create a single, shared session
+                shared_session = requests.Session()
                 
-                # Execute concurrently with 8 workers (adjust up or down depending on your server's limits)
-                with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-                    futures = {executor.submit(process_category, cat): cat for cat in to_create}
-                    completed = 0
+                try:
+                    status_box.info("🔐 Authenticating session...")
+                    # 2. Authenticate ONCE on the main thread
+                    get_csrf_token(shared_session, api_url=TARGET_API)
                     
-                    for future in concurrent.futures.as_completed(futures):
-                        success, title, err = future.result()
-                        completed += 1
+                    # Define the worker function for the thread pool
+                    def process_category(cat):
+                        try:
+                            if target_wiki == "bahai.works":
+                                upload_to_bahaiworks(
+                                    title=cat["Title"],
+                                    content=cat["Content"],
+                                    summary="Auto-created category (Misc Tool)",
+                                    check_exists=False,
+                                    session=shared_session  # Pass the shared session!
+                                )
+                            else:
+                                upload_to_mediawiki(
+                                    title=cat["Title"],
+                                    content=cat["Content"],
+                                    summary="Auto-created category (Misc Tool)",
+                                    api_url=TARGET_API,
+                                    session=shared_session  # Pass the shared session!
+                                )
+                            return True, cat["Title"], None
+                        except Exception as e:
+                            return False, cat["Title"], str(e)
+
+                    status_box.info(f"🚀 Launching threads... processing {len(to_create)} categories.")
+                    
+                    # 3. Execute concurrently
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+                        futures = {executor.submit(process_category, cat): cat for cat in to_create}
+                        completed = 0
                         
-                        if success:
-                            success_count += 1
-                        else:
-                            errors.append(f"Error on {title}: {err}")
+                        for future in concurrent.futures.as_completed(futures):
+                            success, title, err = future.result()
+                            completed += 1
                             
-                        # Update UI
-                        progress_bar.progress(completed / len(to_create))
-                        status_box.write(f"Processed {completed}/{len(to_create)}... (Latest: `{title}`)")
+                            if success:
+                                success_count += 1
+                            else:
+                                errors.append(f"Error on {title}: {err}")
+                                
+                            progress_bar.progress(completed / len(to_create))
+                            status_box.write(f"Processed {completed}/{len(to_create)}... (Latest: `{title}`)")
+                            
+                finally:
+                    # Ensure the session is closed when done
+                    shared_session.close()
                         
                 # Display any errors that occurred in the threads
                 if errors:
