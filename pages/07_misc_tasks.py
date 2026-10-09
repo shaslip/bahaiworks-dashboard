@@ -1216,11 +1216,11 @@ with tab_wanted_cats:
                 del st.session_state["wanted_cats_to_create"]
 
 # ==============================================================================
-# TAB 9: IMAGE MIGRATION (OVERWRITE & MOVE)
+# TAB 9: IMAGE MIGRATION (OVERWRITE, MOVE & NEW UPLOADS)
 # ==============================================================================
 with tab_5yp:
-    st.header("🔄 Image Migration (Overwrite & Move)")
-    st.info("Uploads new images over old generic filenames, moves them to descriptive names (leaving a redirect), and preserves manual categories.")
+    st.header("🔄 Image Migration (Overwrite, Move & New Uploads)")
+    st.info("Replaces generic page images with cropped versions, preserving manual categories. Handles multi-image pages by treating extras as new uploads.")
     
     MEDIA_API = "https://bahai.media/api.php"
     
@@ -1238,103 +1238,122 @@ with tab_5yp:
         if not os.path.exists(local_folder):
             st.error("Directory does not exist.")
         else:
-            txt_files = glob.glob(os.path.join(local_folder, "*.txt"))
-            
-            # Group by pdfpage
-            grouped_by_page = {}
-            
-            for txt_path in txt_files:
-                with open(txt_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                    
-                match = re.search(r'pdfpage=(\d+)', content)
-                if match:
-                    page_num = int(match.group(1))
-                    
-                    new_basename = os.path.basename(txt_path).replace('.txt', '.png')
-                    new_filename = f"File:{new_basename}"
-                    img_path = txt_path.replace('.txt', '.png')
-                    
-                    if page_num not in grouped_by_page:
-                        grouped_by_page[page_num] = []
+            with st.spinner("Analyzing folder and checking wiki for conflicts..."):
+                txt_files = glob.glob(os.path.join(local_folder, "*.txt"))
+                
+                grouped_by_page = {}
+                
+                for txt_path in txt_files:
+                    with open(txt_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
                         
-                    grouped_by_page[page_num].append({
-                        "new_filename": new_filename,
-                        "content": content,
-                        "img_path": img_path
-                    })
-            
-            # Separate into valid (1-to-1) and conflicts (1-to-many)
-            valid_mappings = {}
-            conflicts = {}
-            
-            for page_num, items in grouped_by_page.items():
-                if len(items) == 1:
-                    old_filename = f"File:{file_prefix}{str(page_num).zfill(padding)}.png"
-                    valid_mappings[old_filename] = items[0]
-                else:
-                    conflicts[page_num] = items
-            
-            st.session_state["5yp_valid"] = valid_mappings
-            st.session_state["5yp_conflicts"] = conflicts
-            st.success(f"Found {len(valid_mappings)} images ready to migrate. Found {len(conflicts)} pages with multiple images requiring manual mapping.")
+                    match = re.search(r'pdfpage=(\d+)', content)
+                    if match:
+                        page_num = int(match.group(1))
+                        
+                        new_basename = os.path.basename(txt_path).replace('.txt', '.png')
+                        new_filename = f"File:{new_basename}"
+                        img_path = txt_path.replace('.txt', '.png')
+                        
+                        if page_num not in grouped_by_page:
+                            grouped_by_page[page_num] = []
+                            
+                        grouped_by_page[page_num].append({
+                            "new_filename": new_filename,
+                            "content": content,
+                            "img_path": img_path
+                        })
+                
+                valid_mappings = {}
+                conflicts = {}
+                
+                for page_num, items in grouped_by_page.items():
+                    if len(items) == 1:
+                        old_filename = f"File:{file_prefix}{str(page_num).zfill(padding)}.png"
+                        valid_mappings[old_filename] = items[0]
+                    else:
+                        # For conflicts, dynamically check the API to see if -2.png, -3.png exist
+                        for idx, item in enumerate(items):
+                            suffix = "" if idx == 0 else f"-{idx+1}"
+                            guess = f"File:{file_prefix}{str(page_num).zfill(padding)}{suffix}.png"
+                            
+                            try:
+                                resp = requests.get(MEDIA_API, params={'action': 'query', 'titles': guess, 'format': 'json'}, timeout=10).json()
+                                pages = resp.get('query', {}).get('pages', {})
+                                # MediaWiki returns a negative pageid if the file does not exist
+                                exists = not any(int(pid) < 0 for pid in pages)
+                                item['guessed_old_name'] = guess if exists else ""
+                            except Exception:
+                                item['guessed_old_name'] = "" # Fallback to blank on network error
+                                
+                        conflicts[page_num] = items
+                
+                st.session_state["5yp_valid"] = valid_mappings
+                st.session_state["5yp_conflicts"] = conflicts
+                st.session_state["5yp_new_uploads"] = [] # Initialize new uploads queue
+                
+                st.success(f"Found {len(valid_mappings)} images ready to migrate. Found {len(conflicts)} pages with multiple images requiring manual mapping.")
             
     # --- CONFLICT RESOLUTION UI ---
     if st.session_state.get("5yp_conflicts"):
-        st.warning("⚠️ Multiple images found for the same page. Please verify/map them to their exact old wiki filenames.")
+        st.warning("⚠️ Multiple images found for the same page. We checked the wiki for existing files. Blank fields will be treated as brand new uploads.")
         
         with st.form("conflict_resolution_form"):
-            resolved_mappings = {}
+            temp_resolutions = []
             
             for page_num, items in st.session_state["5yp_conflicts"].items():
                 st.markdown(f"**Page {page_num}** ({len(items)} images)")
                 
                 for idx, item in enumerate(items):
-                    # Guess the old filename (e.g. Page_075.png, Page_075-2.png)
-                    suffix = "" if idx == 0 else f"-{idx+1}"
-                    guessed_old_name = f"File:{file_prefix}{str(page_num).zfill(padding)}{suffix}.png"
-                    
                     user_old_name = st.text_input(
-                        f"Old wiki filename for `{item['new_filename']}`", 
-                        value=guessed_old_name, 
+                        f"Old wiki filename for `{item['new_filename']}` (Blank = New Upload)", 
+                        value=item.get('guessed_old_name', ''), 
                         key=f"conflict_{page_num}_{idx}"
                     )
-                    resolved_mappings[user_old_name] = item
+                    temp_resolutions.append((user_old_name, item))
                     
             if st.form_submit_button("💾 Save Resolutions", type="primary"):
-                # Merge resolved items into the valid queue and clear conflicts
-                st.session_state["5yp_valid"].update(resolved_mappings)
+                for old_name, item in temp_resolutions:
+                    if old_name.strip() == "":
+                        st.session_state["5yp_new_uploads"].append(item)
+                    else:
+                        st.session_state["5yp_valid"][old_name.strip()] = item
                 st.session_state["5yp_conflicts"] = {} 
                 st.rerun()
 
     # --- EXECUTION UI ---
-    # Only show if we have valid mappings AND no pending conflicts
-    if st.session_state.get("5yp_valid") and not st.session_state.get("5yp_conflicts"):
+    if st.session_state.get("5yp_valid") is not None and not st.session_state.get("5yp_conflicts"):
         valid_mappings = st.session_state["5yp_valid"]
+        new_uploads = st.session_state.get("5yp_new_uploads", [])
         
         st.subheader("2. Execute")
-        st.info(f"✅ {len(valid_mappings)} images are queued and ready for migration.")
+        st.info(f"✅ {len(valid_mappings)} images queued for Overwrite/Move. {len(new_uploads)} images queued as New Uploads.")
         
-        with st.expander("View Queue"):
-            for old, new_data in valid_mappings.items():
-                st.write(f"`{old}` ➔ `{new_data['new_filename']}`")
+        with st.expander("View Queues"):
+            if valid_mappings:
+                st.markdown("**🔄 Overwrite & Move:**")
+                for old, new_data in valid_mappings.items():
+                    st.write(f"- `{old}` ➔ `{new_data['new_filename']}`")
+            if new_uploads:
+                st.markdown("**🆕 Brand New Uploads:**")
+                for item in new_uploads:
+                    st.write(f"- `{item['new_filename']}`")
                 
         col_exec1, col_exec2 = st.columns(2)
         
         # --- DRY RUN BUTTON ---
         with col_exec1:
-            if st.button("🧪 Run Test (Dry Run first 3 images)"):
+            if st.button("🧪 Run Test (Dry Run first few images)"):
                 st.write("### Dry Run Results")
                 shared_session = requests.Session()
                 
                 try:
-                    # Take up to the first 3 items for the test
-                    test_items = list(valid_mappings.items())[:3]
+                    # Test up to 2 overwrites and 1 new upload
+                    test_moves = list(valid_mappings.items())[:2]
+                    test_news = new_uploads[:1]
                     
-                    for old_name, data in test_items:
-                        st.markdown(f"#### Testing: `{old_name}`")
-                        
-                        # 1. Fetch live text
+                    for old_name, data in test_moves:
+                        st.markdown(f"#### 🔄 Testing Overwrite/Move: `{old_name}`")
                         old_text, err = fetch_wikitext(old_name, session=shared_session, api_url=MEDIA_API)
                         
                         kept_cats = []
@@ -1349,14 +1368,15 @@ with tab_5yp:
                         if kept_cats:
                             new_wikitext += "\n\n" + "\n".join(kept_cats)
                             
-                        st.write("**1. Categories Found & Kept:**")
-                        st.write(kept_cats if kept_cats else "*None*")
-                        
-                        st.write("**2. Planned API Actions:**")
-                        st.code(f"1. Upload binary {os.path.basename(data['img_path'])} to {old_name}\n2. Move {old_name} to {data['new_filename']}\n3. Update wikitext on {data['new_filename']}", language="text")
-                        
-                        st.write("**3. Final Wikitext to be saved:**")
+                        st.write("**Categories Found & Kept:**", kept_cats if kept_cats else "*None*")
+                        st.code(f"1. Upload binary to {old_name}\n2. Move {old_name} to {data['new_filename']}\n3. Save wikitext to {data['new_filename']}", language="text")
                         st.code(new_wikitext, language="mediawiki")
+                        st.divider()
+
+                    for data in test_news:
+                        st.markdown(f"#### 🆕 Testing New Upload: `{data['new_filename']}`")
+                        st.code(f"1. Upload binary to {data['new_filename']}\n2. Save wikitext to {data['new_filename']}", language="text")
+                        st.code(data['content'].strip(), language="mediawiki")
                         st.divider()
                 finally:
                     shared_session.close()
@@ -1364,6 +1384,7 @@ with tab_5yp:
         # --- ACTUAL EXECUTION BUTTON ---
         with col_exec2:
             if st.button("🚀 Execute Migration (LIVE)", type="primary"):
+                total = len(valid_mappings) + len(new_uploads)
                 progress_bar = st.progress(0)
                 status_box = st.empty()
                 
@@ -1373,13 +1394,14 @@ with tab_5yp:
                     get_csrf_token(shared_session, api_url=MEDIA_API)
                     
                     success_count = 0
-                    total = len(valid_mappings)
+                    current_idx = 0
                     
-                    for i, (old_name, data) in enumerate(valid_mappings.items()):
-                        status_box.write(f"Processing ({i+1}/{total}): `{old_name}`...")
+                    # 1. Process Overwrite/Moves
+                    for old_name, data in valid_mappings.items():
+                        current_idx += 1
+                        status_box.write(f"Processing ({current_idx}/{total}): Overwriting `{old_name}`...")
                         
                         try:
-                            # 1. Fetch old wikitext to extract categories
                             old_text, err = fetch_wikitext(old_name, session=shared_session, api_url=MEDIA_API)
                             
                             kept_cats = []
@@ -1390,13 +1412,10 @@ with tab_5yp:
                                     if clean_cat != "PNG files" and clean_cat != exclude_cat:
                                         kept_cats.append(cat)
                             
-                            # Build new wikitext
                             new_wikitext = data['content'].strip()
                             if kept_cats:
                                 new_wikitext += "\n\n" + "\n".join(kept_cats)
                                 
-                            # 2. Upload binary to overwrite old file
-                            status_box.write(f"Uploading new image over `{old_name}`...")
                             upload_file_binary(
                                 filename=old_name,
                                 file_path=data['img_path'],
@@ -1405,7 +1424,6 @@ with tab_5yp:
                                 api_url=MEDIA_API
                             )
                             
-                            # 3. Move to new filename
                             status_box.write(f"Moving to `{data['new_filename']}`...")
                             move_page(
                                 from_title=old_name,
@@ -1415,8 +1433,6 @@ with tab_5yp:
                                 api_url=MEDIA_API
                             )
                             
-                            # 4. Update the wikitext on the new page
-                            status_box.write(f"Updating wikitext on `{data['new_filename']}`...")
                             upload_to_mediawiki(
                                 title=data['new_filename'],
                                 content=new_wikitext,
@@ -1424,12 +1440,38 @@ with tab_5yp:
                                 session=shared_session,
                                 api_url=MEDIA_API
                             )
-                            
                             success_count += 1
                         except Exception as e:
-                            st.error(f"Error processing {old_name}: {e}")
+                            st.error(f"Error on {old_name}: {e}")
                             
-                        progress_bar.progress((i + 1) / total)
+                        progress_bar.progress(current_idx / total)
+
+                    # 2. Process New Uploads
+                    for data in new_uploads:
+                        current_idx += 1
+                        status_box.write(f"Processing ({current_idx}/{total}): New Upload `{data['new_filename']}`...")
+                        
+                        try:
+                            upload_file_binary(
+                                filename=data['new_filename'],
+                                file_path=data['img_path'],
+                                summary="Uploading new cropped image",
+                                session=shared_session,
+                                api_url=MEDIA_API
+                            )
+                            
+                            upload_to_mediawiki(
+                                title=data['new_filename'],
+                                content=data['content'].strip(),
+                                summary="Adding file info",
+                                session=shared_session,
+                                api_url=MEDIA_API
+                            )
+                            success_count += 1
+                        except Exception as e:
+                            st.error(f"Error on {data['new_filename']}: {e}")
+                            
+                        progress_bar.progress(current_idx / total)
                         
                     status_box.success(f"✅ Migration complete! Successfully processed {success_count} images.")
                     st.balloons()
