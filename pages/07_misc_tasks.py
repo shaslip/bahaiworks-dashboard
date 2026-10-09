@@ -1318,78 +1318,121 @@ with tab_5yp:
         with st.expander("View Queue"):
             for old, new_data in valid_mappings.items():
                 st.write(f"`{old}` ➔ `{new_data['new_filename']}`")
-                        
-        if st.button("🚀 Execute Migration", type="primary"):
-            progress_bar = st.progress(0)
-            status_box = st.empty()
-            
-            shared_session = requests.Session()
-            try:
-                status_box.info("🔐 Authenticating session...")
-                get_csrf_token(shared_session, api_url=MEDIA_API)
                 
-                success_count = 0
-                total = len(valid_mappings)
+        col_exec1, col_exec2 = st.columns(2)
+        
+        # --- DRY RUN BUTTON ---
+        with col_exec1:
+            if st.button("🧪 Run Test (Dry Run first 3 images)"):
+                st.write("### Dry Run Results")
+                shared_session = requests.Session()
                 
-                for i, (old_name, data) in enumerate(valid_mappings.items()):
-                    status_box.write(f"Processing ({i+1}/{total}): `{old_name}`...")
+                try:
+                    # Take up to the first 3 items for the test
+                    test_items = list(valid_mappings.items())[:3]
                     
-                    try:
-                        # 1. Fetch old wikitext to extract categories
+                    for old_name, data in test_items:
+                        st.markdown(f"#### Testing: `{old_name}`")
+                        
+                        # 1. Fetch live text
                         old_text, err = fetch_wikitext(old_name, session=shared_session, api_url=MEDIA_API)
                         
                         kept_cats = []
                         if old_text:
                             all_cats = re.findall(r'\[\[Category:.*?\]\]', old_text, re.IGNORECASE)
                             for cat in all_cats:
-                                # Filter out the ones we don't want
                                 clean_cat = cat.replace("[[Category:", "").replace("]]", "").strip()
                                 if clean_cat != "PNG files" and clean_cat != exclude_cat:
                                     kept_cats.append(cat)
-                        
-                        # Build new wikitext
+                                    
                         new_wikitext = data['content'].strip()
                         if kept_cats:
                             new_wikitext += "\n\n" + "\n".join(kept_cats)
                             
-                        # 2. Upload binary to overwrite old file
-                        status_box.write(f"Uploading new image over `{old_name}`...")
-                        upload_file_binary(
-                            filename=old_name,
-                            file_path=data['img_path'],
-                            summary="Overwriting with cropped image prior to rename",
-                            session=shared_session,
-                            api_url=MEDIA_API
-                        )
+                        st.write("**1. Categories Found & Kept:**")
+                        st.write(kept_cats if kept_cats else "*None*")
                         
-                        # 3. Move to new filename
-                        status_box.write(f"Moving to `{data['new_filename']}`...")
-                        move_page(
-                            from_title=old_name,
-                            to_title=data['new_filename'],
-                            reason="Renaming generic file to descriptive name",
-                            session=shared_session,
-                            api_url=MEDIA_API
-                        )
+                        st.write("**2. Planned API Actions:**")
+                        st.code(f"1. Upload binary {os.path.basename(data['img_path'])} to {old_name}\n2. Move {old_name} to {data['new_filename']}\n3. Update wikitext on {data['new_filename']}", language="text")
                         
-                        # 4. Update the wikitext on the new page
-                        status_box.write(f"Updating wikitext on `{data['new_filename']}`...")
-                        upload_to_mediawiki(
-                            title=data['new_filename'],
-                            content=new_wikitext,
-                            summary="Adding new file info and restoring manual categories",
-                            session=shared_session,
-                            api_url=MEDIA_API
-                        )
-                        
-                        success_count += 1
-                    except Exception as e:
-                        st.error(f"Error processing {old_name}: {e}")
-                        
-                    progress_bar.progress((i + 1) / total)
-                    
-                status_box.success(f"✅ Migration complete! Successfully processed {success_count} images.")
-                st.balloons()
+                        st.write("**3. Final Wikitext to be saved:**")
+                        st.code(new_wikitext, language="mediawiki")
+                        st.divider()
+                finally:
+                    shared_session.close()
+
+        # --- ACTUAL EXECUTION BUTTON ---
+        with col_exec2:
+            if st.button("🚀 Execute Migration (LIVE)", type="primary"):
+                progress_bar = st.progress(0)
+                status_box = st.empty()
                 
-            finally:
-                shared_session.close()
+                shared_session = requests.Session()
+                try:
+                    status_box.info("🔐 Authenticating session...")
+                    get_csrf_token(shared_session, api_url=MEDIA_API)
+                    
+                    success_count = 0
+                    total = len(valid_mappings)
+                    
+                    for i, (old_name, data) in enumerate(valid_mappings.items()):
+                        status_box.write(f"Processing ({i+1}/{total}): `{old_name}`...")
+                        
+                        try:
+                            # 1. Fetch old wikitext to extract categories
+                            old_text, err = fetch_wikitext(old_name, session=shared_session, api_url=MEDIA_API)
+                            
+                            kept_cats = []
+                            if old_text:
+                                all_cats = re.findall(r'\[\[Category:.*?\]\]', old_text, re.IGNORECASE)
+                                for cat in all_cats:
+                                    clean_cat = cat.replace("[[Category:", "").replace("]]", "").strip()
+                                    if clean_cat != "PNG files" and clean_cat != exclude_cat:
+                                        kept_cats.append(cat)
+                            
+                            # Build new wikitext
+                            new_wikitext = data['content'].strip()
+                            if kept_cats:
+                                new_wikitext += "\n\n" + "\n".join(kept_cats)
+                                
+                            # 2. Upload binary to overwrite old file
+                            status_box.write(f"Uploading new image over `{old_name}`...")
+                            upload_file_binary(
+                                filename=old_name,
+                                file_path=data['img_path'],
+                                summary="Overwriting with cropped image prior to rename",
+                                session=shared_session,
+                                api_url=MEDIA_API
+                            )
+                            
+                            # 3. Move to new filename
+                            status_box.write(f"Moving to `{data['new_filename']}`...")
+                            move_page(
+                                from_title=old_name,
+                                to_title=data['new_filename'],
+                                reason="Renaming generic file to descriptive name",
+                                session=shared_session,
+                                api_url=MEDIA_API
+                            )
+                            
+                            # 4. Update the wikitext on the new page
+                            status_box.write(f"Updating wikitext on `{data['new_filename']}`...")
+                            upload_to_mediawiki(
+                                title=data['new_filename'],
+                                content=new_wikitext,
+                                summary="Adding new file info and restoring manual categories",
+                                session=shared_session,
+                                api_url=MEDIA_API
+                            )
+                            
+                            success_count += 1
+                        except Exception as e:
+                            st.error(f"Error processing {old_name}: {e}")
+                            
+                        progress_bar.progress((i + 1) / total)
+                        
+                    status_box.success(f"✅ Migration complete! Successfully processed {success_count} images.")
+                    st.balloons()
+                    
+                finally:
+                    shared_session.close()
