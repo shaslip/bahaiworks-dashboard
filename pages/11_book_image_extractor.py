@@ -169,7 +169,7 @@ def crop_illustrations(pil_img, expected_count=1):
 def create_wiki_text_file(txt_path, caption, book_title, access_control="", 
                           is_bw_volume=False, bw_volume=None, 
                           is_ab_issue=False, ab_vol=None, ab_issue=None, physical_page=None,
-                          pdf_page=None, misc_offset=None):
+                          pdf_page=None, misc_offset=None, category_override=None):
     clean_title = re.sub(r'\.pdf$', '', book_title, flags=re.IGNORECASE).replace('_', ' ')
     access_block = f"{access_control.strip()}\n" if access_control.strip() else ""
     
@@ -194,11 +194,13 @@ def create_wiki_text_file(txt_path, caption, book_title, access_control="",
 {{{{Abn-copyright}}}}
 """
     else:
+        cat_param = f"|category={category_override.strip()}" if category_override and category_override.strip() else ""
+        
         if misc_offset is not None and pdf_page is not None:
             calc_phys_page = pdf_page - misc_offset
-            source_str = f"{{{{misc|{clean_title}|{calc_phys_page}|pdfpage={pdf_page}}}}}"
+            source_str = f"{{{{misc|{clean_title}|{calc_phys_page}|pdfpage={pdf_page}{cat_param}}}}}"
         elif pdf_page is not None:
-            source_str = f"{{{{misc|{clean_title}|pdfpage={pdf_page}}}}}"
+            source_str = f"{{{{misc|{clean_title}|pdfpage={pdf_page}{cat_param}}}}}"
         else:
             source_str = clean_title
             
@@ -207,8 +209,6 @@ def create_wiki_text_file(txt_path, caption, book_title, access_control="",
 | caption = {caption}
 | source = {source_str}
 }}}}
-
-[[Category:{clean_title}]]
 """
     with open(txt_path, "w", encoding="utf-8") as f:
         f.write(content)
@@ -403,7 +403,8 @@ if st.button("🚀 Process Images", type="primary"):
                 ab_issue=ab_issue_num,
                 physical_page=physical_page,
                 pdf_page=page_num,
-                misc_offset=misc_offset
+                misc_offset=misc_offset,
+                category_override=category_override
             )
             
             log_container.success(f"✅ Finished page {page_num}, image {i+1} -> Saved as `{final_filename}`")
