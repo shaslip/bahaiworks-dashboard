@@ -2,15 +2,30 @@ import streamlit as st
 import os
 import re
 import subprocess
-from PIL import Image
 
-st.set_page_config(page_title="Manual Image Trimmer & Swapper", page_icon="✂️", layout="wide")
+st.set_page_config(page_title="Image Swapper & Renamer", page_icon="🔄", layout="wide")
 
-st.title("✂️ Manual Image Trimmer & 🔄 Swapper")
+st.title("🔄 Image Swapper & Renamer")
+
+# --- Helper Functions for Template Parsing ---
+def extract_page_number(content):
+    # Matches {{misc|Title|PageNumber|...}}
+    match_misc = re.search(r'\|\s*source\s*=\s*\{\{misc\|[^|]*\|(-?\d+)', content, re.IGNORECASE)
+    if match_misc:
+        return match_misc.group(1)
+    # Fallback to standard {{template|...|PageNumber}}
+    match_standard = re.search(r'\|\s*source\s*=\s*\{\{.*?\|(-?\d+)\}\}', content)
+    if match_standard:
+        return match_standard.group(1)
+    return None
+
+def replace_page_number(content, new_page):
+    if re.search(r'\|\s*source\s*=\s*\{\{misc\|', content, re.IGNORECASE):
+        return re.sub(r'(\|\s*source\s*=\s*\{\{misc\|[^|]*\|)-?\d+', lambda m: f"{m.group(1)}{new_page}", content, flags=re.IGNORECASE)
+    else:
+        return re.sub(r'(\|\s*source\s*=\s*\{\{.*?\|)-?\d+(\}\})', lambda m: f"{m.group(1)}{new_page}{m.group(2)}", content)
 
 # --- Initialize Session State ---
-if "image_queue" not in st.session_state:
-    st.session_state.image_queue = []
 if "multi_image_pages" not in st.session_state:
     st.session_state.multi_image_pages = {}
 
@@ -19,104 +34,10 @@ st.sidebar.header("Configuration")
 folder_path = st.sidebar.text_input("Images Folder Path", value="/home/sarah/Desktop/Projects/Bahai.works/English/images/")
 
 # Create Tabs
-tab1, tab2, tab3, tab4 = st.tabs(["✂️ Manual Trimmer", "🔄 Swap Misnamed Images", "📝 Rename & Caption", "🗂️ Bulk Rename"])
+tab1, tab2, tab3 = st.tabs(["🔄 Swap Misnamed Images", "📝 Rename & Caption", "🗂️ Bulk Rename"])
 
 # ==========================================
-# TAB 1: EXISTING MANUAL TRIMMER
-# ==========================================
-with tab1:
-    if st.button("Load Images from Folder (Trimmer)"):
-        if os.path.exists(folder_path):
-            # Grab only image files
-            valid_exts = ('.png', '.jpg', '.jpeg')
-            images = sorted([f for f in os.listdir(folder_path) if f.lower().endswith(valid_exts)])
-            st.session_state.image_queue = [os.path.join(folder_path, img) for img in images]
-        else:
-            st.error("Invalid folder path.")
-
-    if st.session_state.image_queue:
-        # Filter out files deleted in the background
-        valid_queue = [img for img in st.session_state.image_queue if os.path.exists(img)]
-        if len(valid_queue) != len(st.session_state.image_queue):
-            st.session_state.image_queue = valid_queue
-            st.rerun()
-
-        st.write(f"### {len(st.session_state.image_queue)} Images in Queue")
-        
-        # Iterate over a copy so we can safely remove items during the loop
-        for img_path in list(st.session_state.image_queue):
-            filename = os.path.basename(img_path)
-            st.markdown(f"**{filename}**")
-            
-            # Spatial Layout: Left Col (Left Crop), Center Col (Top/Img/Bot), Right Col (Right Crop), Action Col
-            col_left, col_center, col_right, col_action = st.columns([1, 4, 1, 1.5], vertical_alignment="center")
-            
-            with col_left:
-                st.number_input("Left px", min_value=0, value=2, key=f"l_{img_path}")
-                
-            with col_center:
-                st.number_input("Top px", min_value=0, value=2, key=f"t_{img_path}")
-                # Display image. Using a reasonably constrained width so you can see the whole thing without scrolling
-                st.image(img_path, width=600) 
-                st.number_input("Bottom px", min_value=0, value=2, key=f"b_{img_path}")
-                
-            with col_right:
-                st.number_input("Right px", min_value=0, value=2, key=f"r_{img_path}")
-                
-            with col_action:
-                st.number_input("Rotate (° CW)", value=0.0, step=0.1, format="%.2f", key=f"rot_{img_path}")
-                st.write("") # small spacer
-                if st.button("🗑️ Skip / Remove", key=f"skip_{img_path}"):
-                    st.session_state.image_queue.remove(img_path)
-                    st.rerun()
-
-            st.divider()
-
-        # --- Processing Execution ---
-        if st.button("🚀 Apply Crops & Save", type="primary"):
-            for img_path in st.session_state.image_queue:
-                if not os.path.exists(img_path):
-                    continue # Skip if deleted in background
-                    
-                t = st.session_state[f"t_{img_path}"]
-                b = st.session_state[f"b_{img_path}"]
-                l = st.session_state[f"l_{img_path}"]
-                r = st.session_state[f"r_{img_path}"]
-                rot = st.session_state[f"rot_{img_path}"]
-                
-                # Skip file operation if no change is requested
-                if t == 0 and b == 0 and l == 0 and r == 0 and rot == 0.0:
-                    continue 
-                    
-                img = Image.open(img_path)
-                
-                # 1. Apply Rotation First
-                if rot != 0.0:
-                    # PIL rotates counter-clockwise by default, so -rot makes positive inputs clockwise.
-                    img = img.rotate(-rot, resample=Image.BICUBIC, expand=True, fillcolor="white")
-                    
-                # 2. Get dimensions AFTER rotation so bounds checks don't fail
-                w, h = img.size
-                
-                # Validate bounds to prevent hard crashes
-                if l + r >= w or t + b >= h:
-                    st.error(f"Crop parameters exceed image dimensions for {os.path.basename(img_path)}. Skipped.")
-                    continue
-                    
-                # PIL crop tuple format: (left, upper, right, lower)
-                cropped_img = img.crop((l, t, w - r, h - b))
-                cropped_img.save(img_path)
-                
-            st.success("Changes applied to queue. Originals overwritten.")
-            st.session_state.image_queue = [] 
-            st.rerun()
-
-    elif folder_path and not st.session_state.image_queue:
-        st.info("Trimmer queue is empty. Load a folder using the button above.")
-
-
-# ==========================================
-# TAB 2: SWAP MISNAMED IMAGES
+# TAB 1: SWAP MISNAMED IMAGES
 # ==========================================
 def on_swap_change(page, changed_img, base_names):
     """Callback to automatically swap the other image's selectbox value."""
@@ -132,7 +53,7 @@ def on_swap_change(page, changed_img, base_names):
                 break
         st.session_state[f"prev_swap_{page}_{changed_img}"] = new_val
 
-with tab2:
+with tab1:
     st.write("Automatically detects pages with multiple images and allows you to reassign their filenames.")
     
     # --- Check for Long Captions (Runs automatically if folder is valid) ---
@@ -145,8 +66,8 @@ with tab2:
                     with open(txt_path, 'r', encoding='utf-8') as f:
                         content = f.read()
                         if "[CAPTION TOO LONG - INSERT MANUALLY]" in content:
-                            match = re.search(r'\|\s*source\s*=\s*\{\{.*?\|(-?\d+)\}\}', content)
-                            page_key = int(match.group(1)) if match else "Unknown"
+                            page_val = extract_page_number(content)
+                            page_key = int(page_val) if page_val else "Unknown"
                             
                             if page_key not in missing_captions_by_page:
                                 missing_captions_by_page[page_key] = []
@@ -189,12 +110,10 @@ with tab2:
                     with open(txt_path, 'r', encoding='utf-8') as f:
                         content = f.read()
 
-                    # Look for the last parameter in the source template indicating the page number
-                    # e.g., | source = {{bns|367|3}} -> captures '3'
-                    match = re.search(r'\|\s*source\s*=\s*\{\{.*?\|(-?\d+)\}\}', content)
+                    # Look for the page number in the source template
+                    page_num = extract_page_number(content)
                     
-                    if match:
-                        page_num = match.group(1)
+                    if page_num:
                         base_name = os.path.splitext(filename)[0]
                         
                         # Find the corresponding image file
@@ -299,9 +218,9 @@ with tab2:
             st.divider()
 
 # ==========================================
-# TAB 3: RENAME & CAPTION
+# TAB 2: RENAME & CAPTION
 # ==========================================
-with tab3:
+with tab2:
     st.write("Find all images on a specific page to quickly rename them and update their captions.")
     
     target_page = st.text_input("Enter Page Number:")
@@ -316,11 +235,10 @@ with tab3:
                     with open(txt_path, 'r', encoding='utf-8') as f:
                         content = f.read()
                     
-                    # Reverted to the exact regex used in Tab 2 that is proven to work
-                    match = re.search(r'\|\s*source\s*=\s*\{\{.*?\|(-?\d+)\}\}', content)
-                    if match and match.group(1) == target_page.strip():
+                    page_val = extract_page_number(content)
+                    if page_val and page_val == target_page.strip():
                         base_name = os.path.splitext(filename)[0]
-                        current_page_val = match.group(1)
+                        current_page_val = page_val
                         
                         # Simplest possible regex: grab everything after "=" until the next "|"
                         cap_match = re.search(r'\|\s*caption\s*=([^|]*)', content)
@@ -393,7 +311,7 @@ with tab3:
                             content = re.sub(r'(\|\s*caption\s*=)[^|]*', lambda m, cap=n_cap: f"{m.group(1)} {cap}\n", content)
                             
                             # Updates the page number safely
-                            content = re.sub(r'(\|\s*source\s*=\s*\{\{.*?\|)-?\d+(\}\})', lambda m, p=n_page: f"{m.group(1)}{p}{m.group(2)}", content)
+                            content = replace_page_number(content, n_page)
                                 
                             new_txt_path = os.path.join(folder_path, f"{n_name}.txt")
                             with open(new_txt_path, 'w', encoding='utf-8') as f:
@@ -411,9 +329,9 @@ with tab3:
 
 
 # ==========================================
-# TAB 4: BULK RENAME
+# TAB 3: BULK RENAME
 # ==========================================
-with tab4:
+with tab3:
     st.write("Apply a single base filename and caption to all images on a specific page. Files will be numbered sequentially (e.g., -1, -2).")
     
     target_page_bulk = st.text_input("Enter Page Number:", key="bulk_target_page")
@@ -428,8 +346,8 @@ with tab4:
                     with open(txt_path, 'r', encoding='utf-8') as f:
                         content = f.read()
                     
-                    match = re.search(r'\|\s*source\s*=\s*\{\{.*?\|(-?\d+)\}\}', content)
-                    if match and match.group(1) == target_page_bulk.strip():
+                    page_val = extract_page_number(content)
+                    if page_val and page_val == target_page_bulk.strip():
                         base_name = os.path.splitext(filename)[0]
                         
                         img_path = None
