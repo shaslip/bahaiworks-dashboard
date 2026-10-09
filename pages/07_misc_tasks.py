@@ -36,14 +36,15 @@ with st.expander("ℹ️ Help / Instructions"):
 st.markdown("---")
 
 # --- TABS ---
-tab_create_author, tab_ac, tab_update_author, tab_maintenance, tab_media, tab_fix_pages, tab_periodicals = st.tabs([
+tab_create_author, tab_ac, tab_update_author, tab_maintenance, tab_media, tab_fix_pages, tab_periodicals, tab_wanted_cats = st.tabs([
     "👤 Create Author Pages", 
     "📖 AC Messages", 
     "📝 Update Author list",
     "🔧 Maintenance",
     "🖼️ Bahai.media Images",
     "📄 Fix Page Numbering",
-    "📰 Periodical Categories"
+    "📰 Periodical Categories",
+    "📅 Wanted Categories"
 ])
 
 # --- Author page maintenance and exclusions ---
@@ -973,3 +974,101 @@ AB Volume 32 (1 C, 10 F)"""
                         
                 status_box.success(f"✅ Finished! Created/Verified {success_count} categories on bahai.media.")
                 st.balloons()
+
+# ==============================================================================
+# TAB 8: WANTED CATEGORIES
+# ==============================================================================
+with tab_wanted_cats:
+    st.header("📅 Auto-Create Chronological Categories")
+    st.info("Scans Special:WantedCategories to automatically create missing year and decade categories (e.g., 'Images from publications in 1976').")
+    
+    # Let the user choose the wiki, defaulting to Media since that's where images usually live
+    target_wiki = st.radio("Target Wiki", ["bahai.media", "bahai.works"], index=0)
+    TARGET_API = "https://bahai.media/api.php" if target_wiki == "bahai.media" else "https://bahai.works/api.php"
+    
+    if st.button("🔍 Scan Wanted Categories", type="primary"):
+        with st.spinner(f"Scanning {target_wiki}..."):
+            params = {
+                "action": "query",
+                "list": "querypage",
+                "qppage": "Wantedcategories",
+                "qplimit": "max",
+                "format": "json"
+            }
+            
+            try:
+                resp = requests.get(TARGET_API, params=params).json()
+                wanted = resp.get("query", {}).get("querypage", {}).get("results", [])
+                
+                to_create = []
+                for item in wanted:
+                    title = item["title"]
+                    
+                    # 1. Match Year Categories
+                    year_match = re.match(r'^Category:Images from publications in (\d{4})$', title)
+                    if year_match:
+                        year = year_match.group(1)
+                        to_create.append({
+                            "title": title,
+                            "content": f"{{{{Pub-image-year|{year}}}}}"
+                        })
+                        continue
+                        
+                    # 2. Match Decade Categories
+                    decade_match = re.match(r'^Category:Images from publications in the (\d{4})s$', title)
+                    if decade_match:
+                        decade = decade_match.group(1)
+                        to_create.append({
+                            "title": title,
+                            "content": f"{{{{Pub-image-year|decade=yes|{decade}}}}}"
+                        })
+                        
+                st.session_state["wanted_cats_to_create"] = to_create
+                
+            except Exception as e:
+                st.error(f"Error fetching wanted categories: {e}")
+                
+    # Display results and execute
+    if "wanted_cats_to_create" in st.session_state:
+        to_create = st.session_state["wanted_cats_to_create"]
+        
+        if not to_create:
+            st.success("No missing chronological categories found in Special:WantedCategories!")
+        else:
+            st.write(f"Found **{len(to_create)}** categories to create:")
+            st.dataframe(pd.DataFrame(to_create), use_container_width=True)
+            
+            if st.button("🚀 Create Categories", type="primary"):
+                progress_bar = st.progress(0)
+                status_box = st.empty()
+                success_count = 0
+                
+                for i, cat in enumerate(to_create):
+                    status_box.write(f"Creating `{cat['title']}`...")
+                    try:
+                        if target_wiki == "bahai.works":
+                            upload_to_bahaiworks(
+                                title=cat["title"],
+                                content=cat["content"],
+                                summary="Auto-created chronological category (Misc Tool)",
+                                check_exists=False
+                            )
+                        else:
+                            upload_to_mediawiki(
+                                title=cat["title"],
+                                content=cat["content"],
+                                summary="Auto-created chronological category (Misc Tool)",
+                                api_url=TARGET_API
+                            )
+                        success_count += 1
+                    except Exception as e:
+                        st.error(f"Error creating {cat['title']}: {e}")
+                        
+                    progress_bar.progress((i + 1) / len(to_create))
+                    
+                status_box.success(f"✅ Finished! Created {success_count} categories.")
+                if success_count > 0:
+                    st.balloons()
+                
+                # Clear session state so it doesn't persist after success
+                del st.session_state["wanted_cats_to_create"]
