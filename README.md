@@ -58,10 +58,18 @@ The application is structured into a main dashboard and several specialized work
 4.  **Configure secrets:**
     Create a `.env` file in the root directory:
     ```env
-    # Gemini & Wiki Credentials
+    # Gemini Credentials
     GEMINI_API_KEY=your_gemini_api_key
-    WIKI_USERNAME=your_bot_username
-    WIKI_PASSWORD=your_bot_password
+
+    # Wiki Bot Credentials (Requires Bot Passwords generated on each specific wiki)
+    WORKS_WIKI_USERNAME=Username@YourWorksBot
+    WORKS_WIKI_PASSWORD=your_works_bot_password
+
+    MEDIA_WIKI_USERNAME=Username@YourMediaBot
+    MEDIA_WIKI_PASSWORD=your_media_bot_password
+
+    DATA_WIKI_USERNAME=Username@YourDataBot
+    DATA_WIKI_PASSWORD=your_data_bot_password
 
     # Google Cloud Document AI Credentials
     GOOGLE_APPLICATION_CREDENTIALS="service_account.json"
