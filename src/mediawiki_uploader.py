@@ -7,16 +7,26 @@ from dotenv import load_dotenv
 load_dotenv()
 
 API_URL = 'https://bahai.works/api.php'
-BW_USER = os.getenv("WIKI_USERNAME")
-BW_PASS = os.getenv("WIKI_PASSWORD")
+WORKS_USER = os.getenv("WORKS_WIKI_USERNAME")
+WORKS_PASS = os.getenv("WORKS_WIKI_PASSWORD")
+MEDIA_USER = os.getenv("MEDIA_WIKI_USERNAME")
+MEDIA_PASS = os.getenv("MEDIA_WIKI_PASSWORD")
 
 def get_csrf_token(session, api_url=API_URL):
     """
     Authenticates with MediaWiki and retrieves a CSRF token.
     Smartly skips login if the session is already authenticated.
     """
-    if not BW_USER or not BW_PASS:
-        raise ValueError("Missing WIKI_USERNAME or WIKI_PASSWORD in .env")
+    # Dynamically select the correct credentials based on the target API
+    if "bahai.media" in api_url:
+        user = MEDIA_USER
+        pwd = MEDIA_PASS
+    else:
+        user = WORKS_USER
+        pwd = WORKS_PASS
+
+    if not user or not pwd:
+        raise ValueError(f"Missing credentials for {api_url} in .env")
 
     # 1. Check if we already have a valid logged-in token
     csrf_token_response = session.get(api_url, params={
@@ -42,8 +52,8 @@ def get_csrf_token(session, api_url=API_URL):
     # 3. Perform Login
     login_response = session.post(api_url, data={
         'action': 'login',
-        'lgname': BW_USER,
-        'lgpassword': BW_PASS,
+        'lgname': user,
+        'lgpassword': pwd,
         'lgtoken': login_token,
         'format': 'json'
     })
