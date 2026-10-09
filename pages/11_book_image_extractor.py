@@ -228,8 +228,10 @@ skip_crop_ranges = st.text_input("Full Page Document Ranges (Skip Cropping)", pl
 access_control = st.text_input("Access Control (Optional)", placeholder="e.g., <accesscontrol>Access:DayVeryGreatThings</accesscontrol>")
 
 st.divider()
-st.subheader("Wiki Link Overrides")
+st.subheader("Page and Category Overrides")
+
 category_override = st.text_input("Media Category (Optional)", placeholder="e.g., Five Year Plan 2001–2006 (book)")
+
 offset_mode = st.radio(
     "Select Offset Mode",
     ["Auto-detect Offset", "Manual Offset", "Fall back to electronic page"],
