@@ -1216,16 +1216,23 @@ with tab_wanted_cats:
                 del st.session_state["wanted_cats_to_create"]
 
 # ==============================================================================
-# TAB 9: 5YP IMAGE MIGRATION
+# TAB 9: IMAGE MIGRATION (OVERWRITE & MOVE)
 # ==============================================================================
 with tab_5yp:
-    st.header("🔄 Five Year Plan Image Migration")
+    st.header("🔄 Image Migration (Overwrite & Move)")
     st.info("Uploads new images over old generic filenames, moves them to descriptive names (leaving a redirect), and preserves manual categories.")
     
     MEDIA_API = "https://bahai.media/api.php"
     
-    local_folder = st.text_input("Local Folder Path (containing new .png and .txt files)", 
-                                 value="/media/sarah/4TB/Projects/Bahai.works/English/3.Miscbahai/2.Institutions/BWC/images/")
+    st.subheader("1. Configuration")
+    col_cfg1, col_cfg2 = st.columns(2)
+    with col_cfg1:
+        local_folder = st.text_input("Local Folder Path (containing new .png and .txt files)", 
+                                     value="/media/sarah/4TB/Projects/Bahai.works/English/3.Miscbahai/2.Institutions/BWC/images/")
+        file_prefix = st.text_input("Old File Prefix", value="Five_Year_Plan_2001-2006_Page_")
+    with col_cfg2:
+        padding = st.number_input("Page Number Padding (e.g. 3 for '075')", value=3, min_value=1)
+        exclude_cat = st.text_input("Category to Exclude (e.g. book name)", value="Five Year Plan 2001–2006 (book)")
     
     if st.button("🔍 Analyze Folder"):
         if not os.path.exists(local_folder):
@@ -1233,7 +1240,9 @@ with tab_5yp:
         else:
             txt_files = glob.glob(os.path.join(local_folder, "*.txt"))
             
-            mapping = {}
+            # Group by pdfpage
+            grouped_by_page = {}
+            
             for txt_path in txt_files:
                 with open(txt_path, 'r', encoding='utf-8') as f:
                     content = f.read()
@@ -1241,42 +1250,76 @@ with tab_5yp:
                 match = re.search(r'pdfpage=(\d+)', content)
                 if match:
                     page_num = int(match.group(1))
-                    # Pad to 3 digits (e.g., 12 -> 012)
-                    old_filename = f"File:Five_Year_Plan_2001-2006_Page_{page_num:03d}.png"
                     
                     new_basename = os.path.basename(txt_path).replace('.txt', '.png')
                     new_filename = f"File:{new_basename}"
                     img_path = txt_path.replace('.txt', '.png')
                     
-                    if old_filename not in mapping:
-                        mapping[old_filename] = []
+                    if page_num not in grouped_by_page:
+                        grouped_by_page[page_num] = []
                         
-                    mapping[old_filename].append({
+                    grouped_by_page[page_num].append({
                         "new_filename": new_filename,
                         "content": content,
                         "img_path": img_path
                     })
             
-            # Separate valid 1-to-1 mappings from duplicates
-            valid_mappings = {k: v[0] for k, v in mapping.items() if len(v) == 1}
-            skipped_mappings = {k: v for k, v in mapping.items() if len(v) > 1}
+            # Separate into valid (1-to-1) and conflicts (1-to-many)
+            valid_mappings = {}
+            conflicts = {}
+            
+            for page_num, items in grouped_by_page.items():
+                if len(items) == 1:
+                    old_filename = f"File:{file_prefix}{str(page_num).zfill(padding)}.png"
+                    valid_mappings[old_filename] = items[0]
+                else:
+                    conflicts[page_num] = items
             
             st.session_state["5yp_valid"] = valid_mappings
-            st.session_state["5yp_skipped"] = skipped_mappings
-            st.success(f"Found {len(valid_mappings)} images ready to migrate. Skipped {len(skipped_mappings)} pages with multiple images.")
+            st.session_state["5yp_conflicts"] = conflicts
+            st.success(f"Found {len(valid_mappings)} images ready to migrate. Found {len(conflicts)} pages with multiple images requiring manual mapping.")
             
-    if "5yp_valid" in st.session_state:
-        valid_mappings = st.session_state["5yp_valid"]
-        skipped_mappings = st.session_state["5yp_skipped"]
+    # --- CONFLICT RESOLUTION UI ---
+    if st.session_state.get("5yp_conflicts"):
+        st.warning("⚠️ Multiple images found for the same page. Please verify/map them to their exact old wiki filenames.")
         
-        if skipped_mappings:
-            with st.expander("⚠️ View Skipped (Multi-Image) Pages"):
-                for old_name, items in skipped_mappings.items():
-                    st.write(f"**{old_name}** maps to {len(items)} images:")
-                    for item in items:
-                        st.write(f"- {item['new_filename']}")
+        with st.form("conflict_resolution_form"):
+            resolved_mappings = {}
+            
+            for page_num, items in st.session_state["5yp_conflicts"].items():
+                st.markdown(f"**Page {page_num}** ({len(items)} images)")
+                
+                for idx, item in enumerate(items):
+                    # Guess the old filename (e.g. Page_075.png, Page_075-2.png)
+                    suffix = "" if idx == 0 else f"-{idx+1}"
+                    guessed_old_name = f"File:{file_prefix}{str(page_num).zfill(padding)}{suffix}.png"
+                    
+                    user_old_name = st.text_input(
+                        f"Old wiki filename for `{item['new_filename']}`", 
+                        value=guessed_old_name, 
+                        key=f"conflict_{page_num}_{idx}"
+                    )
+                    resolved_mappings[user_old_name] = item
+                    
+            if st.form_submit_button("💾 Save Resolutions", type="primary"):
+                # Merge resolved items into the valid queue and clear conflicts
+                st.session_state["5yp_valid"].update(resolved_mappings)
+                st.session_state["5yp_conflicts"] = {} 
+                st.rerun()
+
+    # --- EXECUTION UI ---
+    # Only show if we have valid mappings AND no pending conflicts
+    if st.session_state.get("5yp_valid") and not st.session_state.get("5yp_conflicts"):
+        valid_mappings = st.session_state["5yp_valid"]
+        
+        st.subheader("2. Execute")
+        st.info(f"✅ {len(valid_mappings)} images are queued and ready for migration.")
+        
+        with st.expander("View Queue"):
+            for old, new_data in valid_mappings.items():
+                st.write(f"`{old}` ➔ `{new_data['new_filename']}`")
                         
-        if valid_mappings and st.button("🚀 Execute Migration", type="primary"):
+        if st.button("🚀 Execute Migration", type="primary"):
             progress_bar = st.progress(0)
             status_box = st.empty()
             
@@ -1300,7 +1343,8 @@ with tab_5yp:
                             all_cats = re.findall(r'\[\[Category:.*?\]\]', old_text, re.IGNORECASE)
                             for cat in all_cats:
                                 # Filter out the ones we don't want
-                                if "PNG files" not in cat and "Five Year Plan 2001–2006 (book)" not in cat:
+                                clean_cat = cat.replace("[[Category:", "").replace("]]", "").strip()
+                                if clean_cat != "PNG files" and clean_cat != exclude_cat:
                                     kept_cats.append(cat)
                         
                         # Build new wikitext
