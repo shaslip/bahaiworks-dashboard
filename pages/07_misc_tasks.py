@@ -1027,7 +1027,21 @@ with tab_wanted_cats:
                 "Teaching conferences": "Tc",
                 "Establishments": "Est",
                 "Houses of Worship": "How",
-                "Wilmette Temple events": "WTEv"
+                "Wilmette Temple events": "WTEv",
+                "Bahá’í holy places": "Bhp",
+                "Births": "Brt",
+                "Bahá’í World Center": "Bwc",
+                "Conferences": "Cf",
+                "Conventions": "Cv",
+                "Deaths": "Dth",
+                "Holy day celebrations": "Hdc",
+                "Local Spiritual Assemblies": "LSAyear",
+                "National Conventions": "Nc",
+                "Publications": "Pb",
+                "National Spiritual Assemblies": "NSAyear",
+                "Teaching institutes": "Ti",
+                "Wilmette Temple construction": "WTConst",
+                "Audio talks": "AudT"
             }
             
             try:
