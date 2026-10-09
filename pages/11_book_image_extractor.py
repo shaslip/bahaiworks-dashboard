@@ -166,7 +166,8 @@ def crop_illustrations(pil_img, expected_count=1):
 
 def create_wiki_text_file(txt_path, caption, book_title, access_control="", 
                           is_bw_volume=False, bw_volume=None, 
-                          is_ab_issue=False, ab_vol=None, ab_issue=None, physical_page=None):
+                          is_ab_issue=False, ab_vol=None, ab_issue=None, physical_page=None,
+                          pdf_page=None, misc_offset=None):
     clean_title = re.sub(r'\.pdf$', '', book_title, flags=re.IGNORECASE).replace('_', ' ')
     access_block = f"{access_control.strip()}\n" if access_control.strip() else ""
     
@@ -191,10 +192,18 @@ def create_wiki_text_file(txt_path, caption, book_title, access_control="",
 {{{{Abn-copyright}}}}
 """
     else:
+        if misc_offset is not None and pdf_page is not None:
+            calc_phys_page = pdf_page - misc_offset
+            source_str = f"{{{{misc|{clean_title}|{calc_phys_page}|pdfpage={pdf_page}}}}}"
+        elif pdf_page is not None:
+            source_str = f"{{{{misc|{clean_title}|pdfpage={pdf_page}}}}}"
+        else:
+            source_str = clean_title
+            
         content = f"""{access_block}== File info ==
 {{{{cs
 | caption = {caption}
-| source = {clean_title}
+| source = {source_str}
 }}}}
 
 [[Category:{clean_title}]]
@@ -215,6 +224,7 @@ pdf_filename = st.text_input("PDF Filename", placeholder="e.g., The_American_Bah
 page_ranges = st.text_input("Page Ranges", placeholder="e.g., 1-10, 12, 14-15")
 skip_crop_ranges = st.text_input("Full Page Document Ranges (Skip Cropping)", placeholder="e.g., 11, 16")
 access_control = st.text_input("Access Control (Optional)", placeholder="e.g., <accesscontrol>Access:DayVeryGreatThings</accesscontrol>")
+misc_offset_input = st.text_input("PDF Offset for Generic Books (Optional)", placeholder="e.g., 14")
 
 if st.button("🚀 Process Images", type="primary"):
     if not pdf_filename:
@@ -225,6 +235,14 @@ if st.button("🚀 Process Images", type="primary"):
         st.warning("Please provide at least one page range.")
         st.stop()
         
+    misc_offset = None
+    if misc_offset_input.strip():
+        try:
+            misc_offset = int(misc_offset_input.strip())
+        except ValueError:
+            st.warning("Offset must be a valid integer.")
+            st.stop()
+            
     local_pdf_path = find_local_pdf(pdf_filename, input_folder)
     
     if not local_pdf_path:
@@ -351,7 +369,9 @@ if st.button("🚀 Process Images", type="primary"):
                 is_ab_issue=is_ab_issue,
                 ab_vol=ab_vol_num,
                 ab_issue=ab_issue_num,
-                physical_page=physical_page
+                physical_page=physical_page,
+                pdf_page=page_num,
+                misc_offset=misc_offset
             )
             
             log_container.success(f"✅ Finished page {page_num}, image {i+1} -> Saved as `{final_filename}`")
