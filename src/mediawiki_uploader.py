@@ -574,3 +574,72 @@ def check_categories_batch(category_names):
     except Exception:
         # If the network fails, default to False so the user can manually edit
         return {name: False for name in category_names}
+
+def upload_file_binary(filename, file_path, summary="Bot upload", session=None, api_url=API_URL):
+    """
+    Uploads a binary file to MediaWiki, overwriting if it already exists.
+    """
+    local_session = False
+    if session is None:
+        session = requests.Session()
+        local_session = True
+        
+    try:
+        csrf_token = get_csrf_token(session, api_url=api_url)
+        
+        # MediaWiki API expects the filename without the 'File:' prefix
+        clean_filename = filename.replace("File:", "")
+        
+        with open(file_path, 'rb') as f:
+            files = {'file': (clean_filename, f, 'multipart/form-data')}
+            data = {
+                'action': 'upload',
+                'filename': clean_filename,
+                'token': csrf_token,
+                'ignorewarnings': 1,  # Critical for overwriting
+                'comment': summary,
+                'format': 'json'
+            }
+            response = session.post(api_url, data=data, files=files)
+            resp_json = response.json()
+            
+            if 'error' in resp_json:
+                raise Exception(resp_json['error']['info'])
+                
+            return resp_json
+    finally:
+        if local_session:
+            session.close()
+
+def move_page(from_title, to_title, reason="Bot move", session=None, api_url=API_URL):
+    """
+    Moves a page in MediaWiki, leaving a redirect behind.
+    """
+    local_session = False
+    if session is None:
+        session = requests.Session()
+        local_session = True
+        
+    try:
+        csrf_token = get_csrf_token(session, api_url=api_url)
+        
+        data = {
+            'action': 'move',
+            'from': from_title,
+            'to': to_title,
+            'reason': reason,
+            'movetalk': 1,
+            'noredirect': 0, # 0 = Leave a redirect behind
+            'token': csrf_token,
+            'format': 'json'
+        }
+        response = session.post(api_url, data=data)
+        resp_json = response.json()
+        
+        if 'error' in resp_json:
+            raise Exception(resp_json['error']['info'])
+            
+        return resp_json
+    finally:
+        if local_session:
+            session.close()
