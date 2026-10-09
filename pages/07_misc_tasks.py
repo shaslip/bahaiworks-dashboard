@@ -1024,7 +1024,9 @@ with tab_wanted_cats:
                 "Summer schools": "SSch",
                 "Winter schools": "WSch",
                 "Teaching conferences": "Tc",
-                "Establishments": "Est"
+                "Establishments": "Est",
+                "Houses of Worship": "How",
+                "Wilmette Temple events": "WTEv"
             }
             
             try:
