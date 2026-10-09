@@ -629,7 +629,6 @@ def move_page(from_title, to_title, reason="Bot move", session=None, api_url=API
             'to': to_title,
             'reason': reason,
             'movetalk': 1,
-            'noredirect': 0, # 0 = Leave a redirect behind
             'token': csrf_token,
             'format': 'json'
         }
