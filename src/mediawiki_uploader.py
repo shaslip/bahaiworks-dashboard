@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import requests
 from dotenv import load_dotenv
 
@@ -180,18 +181,29 @@ def upload_to_mediawiki(title, content, summary="Bot upload", check_exists=False
             'token': csrf_token,
             'format': 'json'
         }
-        response = session.post(api_url, data=create_params)
-        data = response.json()
         
-        # 1. Check for standard top-level errors
-        if 'error' in data:
-            raise Exception(data['error']['info'])
+        for attempt in range(5):
+            response = session.post(api_url, data=create_params)
+            if response.status_code == 429:
+                time.sleep(5 * (attempt + 1))
+                continue
+                
+            data = response.json()
             
-        # 2. Check for silent edit failures (Abuse filters, Captchas, Token mismatches)
-        if 'edit' in data and data['edit'].get('result') != 'Success':
-            raise Exception(f"MediaWiki API rejected the edit: {data['edit']}")
+            # 1. Check for standard top-level errors
+            if 'error' in data:
+                if data['error'].get('code') == 'ratelimited':
+                    time.sleep(5 * (attempt + 1))
+                    continue
+                raise Exception(data['error']['info'])
+                
+            # 2. Check for silent edit failures (Abuse filters, Captchas, Token mismatches)
+            if 'edit' in data and data['edit'].get('result') != 'Success':
+                raise Exception(f"MediaWiki API rejected the edit: {data['edit']}")
+                
+            return data
             
-        return data
+        raise Exception("Exceeded maximum retries for rate limit.")
         
     except Exception as e:
         raise e
@@ -590,23 +602,35 @@ def upload_file_binary(filename, file_path, summary="Bot upload", session=None, 
         # MediaWiki API expects the filename without the 'File:' prefix
         clean_filename = filename.replace("File:", "")
         
-        with open(file_path, 'rb') as f:
-            files = {'file': (clean_filename, f, 'multipart/form-data')}
-            data = {
-                'action': 'upload',
-                'filename': clean_filename,
-                'token': csrf_token,
-                'ignorewarnings': 1,  # Critical for overwriting
-                'comment': summary,
-                'format': 'json'
-            }
-            response = session.post(api_url, data=data, files=files)
-            resp_json = response.json()
-            
-            if 'error' in resp_json:
-                raise Exception(resp_json['error']['info'])
+        for attempt in range(5):
+            # Open file inside the loop so the pointer resets on retries
+            with open(file_path, 'rb') as f:
+                files = {'file': (clean_filename, f, 'multipart/form-data')}
+                data = {
+                    'action': 'upload',
+                    'filename': clean_filename,
+                    'token': csrf_token,
+                    'ignorewarnings': '1',  # String '1' ensures multipart serialization works correctly
+                    'comment': summary,
+                    'format': 'json'
+                }
+                response = session.post(api_url, data=data, files=files)
                 
-            return resp_json
+                if response.status_code == 429:
+                    time.sleep(5 * (attempt + 1))
+                    continue
+                    
+                resp_json = response.json()
+                
+                if 'error' in resp_json:
+                    if resp_json['error'].get('code') == 'ratelimited':
+                        time.sleep(5 * (attempt + 1))
+                        continue
+                    raise Exception(resp_json['error']['info'])
+                    
+                return resp_json
+                
+        raise Exception("Exceeded maximum retries for rate limit.")
     finally:
         if local_session:
             session.close()
@@ -628,17 +652,29 @@ def move_page(from_title, to_title, reason="Bot move", session=None, api_url=API
             'from': from_title,
             'to': to_title,
             'reason': reason,
-            'movetalk': 1,
+            'movetalk': '1',
+            'ignorewarnings': '1',
             'token': csrf_token,
             'format': 'json'
         }
-        response = session.post(api_url, data=data)
-        resp_json = response.json()
         
-        if 'error' in resp_json:
-            raise Exception(resp_json['error']['info'])
+        for attempt in range(5):
+            response = session.post(api_url, data=data)
+            if response.status_code == 429:
+                time.sleep(5 * (attempt + 1))
+                continue
+                
+            resp_json = response.json()
             
-        return resp_json
+            if 'error' in resp_json:
+                if resp_json['error'].get('code') == 'ratelimited':
+                    time.sleep(5 * (attempt + 1))
+                    continue
+                raise Exception(resp_json['error']['info'])
+                
+            return resp_json
+            
+        raise Exception("Exceeded maximum retries for rate limit.")
     finally:
         if local_session:
             session.close()
