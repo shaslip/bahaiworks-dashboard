@@ -1001,7 +1001,13 @@ with tab_wanted_cats:
                 "Images from publications": "Pub-image-year",
                 "The Bahá’í World": "Bw-year",
                 "The American Bahá’í": "Ab-year",
-                "Bahá'í News": "Bn-year"
+                "Bahá'í News": "Bn-year",
+                "Establishments of Local Spiritual Assemblies": "EstLSA",
+                "Establishments of National Spiritual Assemblies": "EstNSA",
+                "Summer schools": "SSch",
+                "Winter schools": "WSch",
+                "Teaching conferences": "Tc",
+                "Establishments": "Est"
             }
             
             try:
