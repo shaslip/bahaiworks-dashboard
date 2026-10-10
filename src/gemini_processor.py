@@ -8,7 +8,8 @@ import google.generativeai as genai
 from google.cloud import documentai
 from google.api_core.client_options import ClientOptions
 from google.oauth2 import service_account
-from pdf2image import convert_from_path
+import fitz
+from PIL import Image
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 # Configure Gemini
@@ -61,10 +62,18 @@ def extract_metadata_from_pdf(pdf_path, page_range_str):
     print(f"--- Debug: Extracting Metadata for {page_range_str} ---")
     pages_to_process = parse_range_string(page_range_str)
     images = []
-    for p_num in pages_to_process:
-        print(f"Debug: Converting page {p_num}...")
-        img_list = convert_from_path(pdf_path, first_page=p_num, last_page=p_num)
-        if img_list: images.append(img_list[0])
+    
+    try:
+        with fitz.open(pdf_path) as doc:
+            for p_num in pages_to_process:
+                print(f"Debug: Converting page {p_num}...")
+                page = doc[p_num - 1] # fitz uses 0-based indexing
+                pix = page.get_pixmap(dpi=150)
+                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                images.append(img)
+    except Exception as e:
+        print(f"Debug: PDF Conversion Error: {e}")
+        return {"error": f"PDF Conversion Error: {e}"}
 
     if not images: return {"error": "No images extracted"}
 
@@ -109,10 +118,13 @@ def extract_toc_from_pdf(pdf_path, page_range_str):
     images = []
     
     try:
-        for p_num in pages_to_process:
-            print(f"Debug: Converting page {p_num}...")
-            img_list = convert_from_path(pdf_path, first_page=p_num, last_page=p_num)
-            if img_list: images.append(img_list[0])
+        with fitz.open(pdf_path) as doc:
+            for p_num in pages_to_process:
+                print(f"Debug: Converting page {p_num}...")
+                page = doc[p_num - 1]
+                pix = page.get_pixmap(dpi=150)
+                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                images.append(img)
     except Exception as e:
         print(f"Debug: PDF Conversion Error: {e}")
         return {"toc_json": [], "toc_wikitext": "", "error": f"PDF Conversion Error: {e}"}
