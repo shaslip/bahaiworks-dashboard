@@ -4,7 +4,8 @@ import sys
 import re
 import cv2
 import numpy as np
-from pdf2image import convert_from_path
+import io
+from PIL import Image
 import requests
 import fitz
 
@@ -337,15 +338,30 @@ if st.button("🚀 Process Images", type="primary"):
     for idx, page_num in enumerate(pages_to_process):
         status_text.markdown(f"**Processing Page {page_num} ({idx+1}/{len(pages_to_process)})...**")
 
-        log_container.write(f"📄 Extracting page {page_num}...")
+        log_container.write(f"📄 Extracting raw scan from page {page_num}...")
         try:
-            images = convert_from_path(local_pdf_path, first_page=page_num, last_page=page_num, dpi=300)
-            if not images:
-                log_container.warning(f"⚠️ Could not extract page {page_num}. Skipping.")
-                continue
-            pil_img = images[0]
+            with fitz.open(local_pdf_path) as doc:
+                # fitz uses 0-based indexing for pages, so we subtract 1
+                page = doc[page_num - 1]
+                image_list = page.get_images(full=True)
+                
+                if not image_list:
+                    log_container.warning(f"⚠️ No raw images found on page {page_num}. Skipping.")
+                    continue
+                
+                # Find the largest image on the page (the full scanned page)
+                largest_image = max(image_list, key=lambda img: img[2] * img[3])
+                xref = largest_image[0]
+                
+                # Extract the raw bytes of the original scan
+                extracted_image = doc.extract_image(xref)
+                image_bytes = extracted_image["image"]
+                
+                # Convert bytes to a PIL Image so Gemini and OpenCV can use it unmodified
+                pil_img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+                
         except Exception as e:
-            log_container.error(f"❌ Error converting page {page_num}: {e}")
+            log_container.error(f"❌ Error extracting raw image from page {page_num}: {e}")
             continue
 
         is_skip_crop = page_num in skip_crop_pages
