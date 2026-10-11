@@ -1020,6 +1020,7 @@ with tab_wanted_cats:
             PREFIX_MAP = {
                 "Images from publications": "Pub-image-year",
                 "The Bahá’í World": "Bw-year",
+                "Star of the West": "Sw-year",
                 "The American Bahá’í": "Ab-year",
                 "Bahá'í News": "Bn-year",
                 "Establishments of Local Spiritual Assemblies": "EstLSA",
