@@ -686,8 +686,6 @@ with tab3:
                 st.warning("Please select at least one collage image.")
             else:
                 os.makedirs(wiki_collage_dir, exist_ok=True)
-                originals_dir = os.path.join(wiki_collage_dir, "originals")
-                os.makedirs(originals_dir, exist_ok=True)
                 crop_log = st.container(border=True)
 
                 for item in selected_cat_items:
@@ -703,17 +701,11 @@ with tab3:
                         crop_log.error(f"❌ Failed to download `{fname}`: {e}")
                         continue
 
-                    # Save uncropped backup to originals/
-                    with open(os.path.join(originals_dir, fname), "wb") as f:
-                        f.write(img_bytes)
-                    with open(os.path.join(originals_dir, f"{base_name}.txt"), "w", encoding="utf-8") as f:
-                        f.write(wikitext)
-
                     pil_img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
                     crops = crop_collage_images(pil_img, expected_count=wiki_expected_subimages)
 
                     if len(crops) <= 1:
-                        crop_log.warning(f"⚠️ Only detected {len(crops)} region in `{fname}` — skipping split (backup saved in `originals/`).")
+                        crop_log.warning(f"⚠️ Only detected {len(crops)} region in `{fname}` — skipping split.")
                         continue
 
                     # Crop 1 keeps the original filename; Crops 2..N use -1, -2, etc.
