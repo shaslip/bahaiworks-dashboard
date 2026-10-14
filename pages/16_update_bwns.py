@@ -312,7 +312,7 @@ col_info, col_refresh = st.columns([4, 1])
 with col_info:
     st.info(f"📌 Highest Story ID currently in `Module:BWNS`: **{st.session_state.bwns_latest_in_module}**")
 with col_refresh:
-    st.button("🔄 Refresh Module Max ID", on_click=refresh_max_id, use_container_width=True)
+    st.button("🔄 Refresh Module Max ID", on_click=refresh_max_id, width="stretch")
 
 # --- Top Controls: Select & Fetch Story ---
 col_id, col_fetch, col_next = st.columns([2, 2, 2])
@@ -356,13 +356,13 @@ if st.session_state.pop("bwns_auto_fetch", False):
 
 with col_fetch:
     st.write("")  # Vertical alignment spacer
-    if st.button("🔍 Fetch Story", type="primary", use_container_width=True):
+    if st.button("🔍 Fetch Story", type="primary", width="stretch"):
         load_story(story_id_input)
         st.rerun()
 
 with col_next:
     st.write("")
-    st.button("⏭️ Skip / Next Story ID", on_click=skip_to_next_story, use_container_width=True)
+    st.button("⏭️ Skip / Next Story ID", on_click=skip_to_next_story, width="stretch")
 
 st.divider()
 
@@ -408,7 +408,7 @@ if story:
                 col_preview, col_details = st.columns([1.5, 3.5])
 
                 with col_preview:
-                    st.image(img["url"], use_container_width=True)
+                    st.image(img["url"], width="stretch")
                     st.checkbox(
                         "Image is a collage, set aside for manual cropping",
                         value=False,
@@ -429,7 +429,7 @@ if story:
                     )
                 st.divider()
 
-            if st.button(f"🚀 Upload Story {sid} to Bahai.media & Update Module:BWNS", type="primary", use_container_width=True):
+            if st.button(f"🚀 Upload Story {sid} to Bahai.media & Update Module:BWNS", type="primary", width="stretch"):
                 session = requests.Session()
                 progress_bar = st.progress(0)
                 log_container = st.container(border=True)
