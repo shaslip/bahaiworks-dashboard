@@ -512,7 +512,7 @@ if story:
 
                     # 3. Update Module:BWNS with publication date
                     if edited_date.strip():
-                        status_box.info("📅 Updating `Module:BWNS` publicationDate_map...")
+                        log_container.write("📅 Updating `Module:BWNS` publicationDate_map...")
                         update_bwns_module_date(sid, edited_date.strip(), session=session)
                         st.session_state.bwns_latest_in_module = max(
                             st.session_state.bwns_latest_in_module, sid
@@ -523,11 +523,6 @@ if story:
                         f"🎉 Done! Uploaded {uploaded_count} image(s), verified `{cat_title}`, and updated `Module:BWNS`. "
                         f"Click **⏭️ Skip / Next Story ID** at the top when ready for Story {sid + 1}."
                     )
-
-                    # Advance to next story automatically
-                    st.session_state.bwns_next_id_after_upload = sid + 1
-                    st.session_state.bwns_current_story = None
-                    st.rerun()
 
                 except Exception as e:
                     st.error(f"❌ Upload failed: {e}")
