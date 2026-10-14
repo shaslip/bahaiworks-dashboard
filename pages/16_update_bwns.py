@@ -195,12 +195,28 @@ def scrape_bwns_story(story_id):
                 images_and_captions.append({"url": clean_url, "caption": thumb_desc.strip()})
 
         for item in story_data.get("storyContent", []):
-            if item.get("__typename") == "InlineImageRecord" and item.get("image"):
+            typename = item.get("__typename")
+
+            if typename in ("InlineImageRecord", "FullWidthImageRecord") and item.get("image"):
                 img_url = item["image"].get("responsiveImage", {}).get("src")
-                caption = item.get("caption") or item.get("inlineImageAltText")
+                caption = item.get("caption") or item.get("inlineImageAltText") or item.get("altText")
                 if img_url and caption:
                     clean_url = img_url.split("?")[0]
                     images_and_captions.append({"url": clean_url, "caption": caption.strip()})
+
+            elif typename == "SideBySideImageRecord" and item.get("images"):
+                imgs = item.get("images", [])
+                if len(imgs) >= 1 and imgs[0].get("responsiveImage"):
+                    img_url_1 = imgs[0]["responsiveImage"].get("src")
+                    cap_1 = item.get("captionStart") or item.get("altTextStart")
+                    if img_url_1 and cap_1:
+                        images_and_captions.append({"url": img_url_1.split("?")[0], "caption": cap_1.strip()})
+
+                if len(imgs) >= 2 and imgs[1].get("responsiveImage"):
+                    img_url_2 = imgs[1]["responsiveImage"].get("src")
+                    cap_2 = item.get("captionEnd") or item.get("altTextEnd")
+                    if img_url_2 and cap_2:
+                        images_and_captions.append({"url": img_url_2.split("?")[0], "caption": cap_2.strip()})
 
         # Deduplicate by URL
         seen_urls = set()
