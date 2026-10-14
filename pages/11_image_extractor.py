@@ -63,6 +63,72 @@ def crop_collage_images(pil_img, expected_count=0):
 
     return cropped_images
 
+@st.cache_data(ttl=600)
+def fetch_category_images(category_name, thumb_width=400):
+    """Fetches image metadata, thumbnail URLs, full URLs, and wikitext from a bahai.media category."""
+    url = "https://bahai.media/api.php"
+    if not category_name.lower().startswith("category:"):
+        category_name = f"Category:{category_name}"
+
+    results = []
+    gcmcontinue = None
+
+    while True:
+        params = {
+            "action": "query",
+            "generator": "categorymembers",
+            "gcmtitle": category_name,
+            "gcmtype": "file",
+            "gcmlimit": "50",
+            "prop": "imageinfo|revisions",
+            "iiprop": "url",
+            "iiurlwidth": thumb_width,
+            "rvprop": "content",
+            "rvslots": "main",
+            "format": "json",
+        }
+        if gcmcontinue:
+            params["gcmcontinue"] = gcmcontinue
+
+        try:
+            resp = requests.get(url, params=params, timeout=30)
+            data = resp.json()
+        except Exception as e:
+            print(f"Error fetching category {category_name}: {e}")
+            break
+
+        pages = data.get("query", {}).get("pages", {})
+        for page_id, page_data in pages.items():
+            if int(page_id) < 0:
+                continue
+            title = page_data.get("title", "")
+            filename = re.sub(r"^File:", "", title, flags=re.IGNORECASE).replace(" ", "_")
+
+            iinfo = page_data.get("imageinfo", [{}])[0]
+            full_url = iinfo.get("url", "")
+            thumb_url = iinfo.get("thumburl", full_url)
+
+            wikitext = ""
+            revs = page_data.get("revisions", [])
+            if revs:
+                wikitext = revs[0].get("slots", {}).get("main", {}).get("*", "")
+
+            if full_url:
+                results.append({
+                    "title": title,
+                    "filename": filename,
+                    "url": full_url,
+                    "thumb_url": thumb_url,
+                    "wikitext": wikitext,
+                })
+
+        if "continue" in data and "gcmcontinue" in data["continue"]:
+            gcmcontinue = data["continue"]["gcmcontinue"]
+        else:
+            break
+
+    return sorted(results, key=lambda x: x["filename"].lower())
+
 @st.cache_data(ttl=3600)
 def fetch_bw_offset_map(module_name):
     """Fetches and parses a simple 1D Lua offset map for Baha'i World."""
@@ -559,3 +625,176 @@ with tab2:
                             os.replace(img_path, os.path.join(originals_dir, fname))
                             if os.path.exists(txt_path):
                                 os.replace(txt_path, os.path.join(originals_dir, f"{base_name}.txt"))
+
+with tab2:
+    st.subheader("✂️ Crop Collage Images")
+
+    source_mode = st.radio(
+        "Image Source",
+        ["Local Directory", "Bahai.media Category"],
+        horizontal=True,
+    )
+
+    col_dir, col_count = st.columns([3, 1])
+    with col_dir:
+        collage_dir = st.text_input(
+            "Local Directory (Input / Output)",
+            value="/home/sarah/Desktop/Projects/Tools/Bahaimedia/output/",
+        )
+    with col_count:
+        expected_subimages = st.number_input(
+            "Expected Sub-images (0 = Auto-detect)",
+            min_value=0,
+            max_value=12,
+            value=0,
+            step=1,
+        )
+
+    if source_mode == "Local Directory":
+        delete_originals = st.checkbox("Move original uncropped collage files into an `originals/` subfolder after cropping", value=True)
+
+        if os.path.isdir(collage_dir):
+            valid_exts = (".jpg", ".jpeg", ".png", ".webp")
+            image_files = sorted([
+                f for f in os.listdir(collage_dir)
+                if os.path.isfile(os.path.join(collage_dir, f)) and f.lower().endswith(valid_exts)
+            ])
+
+            if not image_files:
+                st.info(f"No image files found in `{collage_dir}`.")
+            else:
+                st.write(f"Found **{len(image_files)}** image(s) in `{collage_dir}`:")
+                selected_files = []
+                for fname in image_files:
+                    if st.checkbox(fname, value=True, key=f"crop_sel_{fname}"):
+                        selected_files.append(fname)
+
+                if st.button("✂️ Crop Selected Collages", type="primary"):
+                    if not selected_files:
+                        st.warning("Please select at least one image to crop.")
+                    else:
+                        crop_log = st.container(border=True)
+                        originals_dir = os.path.join(collage_dir, "originals")
+                        if delete_originals:
+                            os.makedirs(originals_dir, exist_ok=True)
+
+                        for fname in selected_files:
+                            img_path = os.path.join(collage_dir, fname)
+                            base_name, ext = os.path.splitext(fname)
+                            txt_path = os.path.join(collage_dir, f"{base_name}.txt")
+
+                            txt_content = None
+                            if os.path.exists(txt_path):
+                                with open(txt_path, "r", encoding="utf-8") as f:
+                                    txt_content = f.read()
+
+                            pil_img = Image.open(img_path).convert("RGB")
+                            crops = crop_collage_images(pil_img, expected_count=expected_subimages)
+
+                            if len(crops) <= 1:
+                                crop_log.warning(f"⚠️ Only detected {len(crops)} region in `{fname}` — skipping split.")
+                                continue
+
+                            for idx, crop_bgr in enumerate(crops, start=1):
+                                out_img_name = f"{base_name}-{idx}{ext}"
+                                out_img_path = os.path.join(collage_dir, out_img_name)
+                                cv2.imwrite(out_img_path, crop_bgr)
+
+                                if txt_content is not None:
+                                    out_txt_path = os.path.join(collage_dir, f"{base_name}-{idx}.txt")
+                                    with open(out_txt_path, "w", encoding="utf-8") as f:
+                                        f.write(txt_content)
+
+                            crop_log.success(f"✅ Split `{fname}` into **{len(crops)}** images (`{base_name}-1{ext}` .. `{base_name}-{len(crops)}{ext}`)")
+
+                            if delete_originals:
+                                os.replace(img_path, os.path.join(originals_dir, fname))
+                                if os.path.exists(txt_path):
+                                    os.replace(txt_path, os.path.join(originals_dir, f"{base_name}.txt"))
+
+    else:
+        cat_col, btn_col = st.columns([3, 1])
+        with cat_col:
+            wiki_category = st.text_input(
+                "Bahai.media Category",
+                placeholder="e.g., Category:Images from The American Bahá'í",
+            )
+        with btn_col:
+            st.write("")
+            st.write("")
+            fetch_clicked = st.button("🔍 Fetch Category Images")
+
+        if fetch_clicked and wiki_category.strip():
+            with st.spinner(f"Fetching images from `{wiki_category.strip()}`..."):
+                st.session_state["cat_images"] = fetch_category_images(wiki_category.strip())
+
+        cat_images = st.session_state.get("cat_images", [])
+        if cat_images:
+            st.write(f"Found **{len(cat_images)}** file(s). Select the collages you want to download and split:")
+
+            cols_per_row = 3
+            selected_cat_items = []
+            for row_start in range(0, len(cat_images), cols_per_row):
+                row_items = cat_images[row_start:row_start + cols_per_row]
+                cols = st.columns(cols_per_row)
+                for col, item in zip(cols, row_items):
+                    with col:
+                        with st.container(border=True):
+                            st.image(item["thumb_url"], use_container_width=True)
+                            if st.checkbox(item["filename"], value=False, key=f"cat_sel_{item['filename']}"):
+                                selected_cat_items.append(item)
+
+            if st.button("⬇️ Download & Crop Selected Collages", type="primary"):
+                if not selected_cat_items:
+                    st.warning("Please select at least one collage image.")
+                else:
+                    os.makedirs(collage_dir, exist_ok=True)
+                    originals_dir = os.path.join(collage_dir, "originals")
+                    os.makedirs(originals_dir, exist_ok=True)
+                    crop_log = st.container(border=True)
+
+                    for item in selected_cat_items:
+                        fname = item["filename"]
+                        base_name, ext = os.path.splitext(fname)
+                        wikitext = item["wikitext"]
+
+                        try:
+                            resp = requests.get(item["url"], timeout=30)
+                            resp.raise_for_status()
+                            img_bytes = resp.content
+                        except Exception as e:
+                            crop_log.error(f"❌ Failed to download `{fname}`: {e}")
+                            continue
+
+                        # Save uncropped backup to originals/
+                        with open(os.path.join(originals_dir, fname), "wb") as f:
+                            f.write(img_bytes)
+                        with open(os.path.join(originals_dir, f"{base_name}.txt"), "w", encoding="utf-8") as f:
+                            f.write(wikitext)
+
+                        pil_img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+                        crops = crop_collage_images(pil_img, expected_count=expected_subimages)
+
+                        if len(crops) <= 1:
+                            crop_log.warning(f"⚠️ Only detected {len(crops)} region in `{fname}` — skipping split (backup saved in `originals/`).")
+                            continue
+
+                        # Crop 1 keeps the original filename; Crops 2..N use -1, -2, etc.
+                        saved_names = []
+                        for idx, crop_bgr in enumerate(crops):
+                            if idx == 0:
+                                out_base = base_name
+                            else:
+                                out_base = f"{base_name}-{idx}"
+
+                            out_img_name = f"{out_base}{ext}"
+                            out_img_path = os.path.join(collage_dir, out_img_name)
+                            out_txt_path = os.path.join(collage_dir, f"{out_base}.txt")
+
+                            cv2.imwrite(out_img_path, crop_bgr)
+                            with open(out_txt_path, "w", encoding="utf-8") as f:
+                                f.write(wikitext)
+
+                            saved_names.append(out_img_name)
+
+                        crop_log.success(f"✅ Split `{fname}` into **{len(crops)}** images: `{', '.join(saved_names)}`")
