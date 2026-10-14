@@ -256,6 +256,9 @@ def get_unique_wiki_filename(base_filename, api_url=MEDIA_API_URL):
 # STATE INITIALIZATION
 # ==============================================================================
 
+if "bwns_next_id_after_upload" in st.session_state:
+    st.session_state.bwns_target_id = st.session_state.pop("bwns_next_id_after_upload")
+
 if "bwns_latest_in_module" not in st.session_state:
     max_id, _ = get_latest_bwns_id_from_module()
     st.session_state.bwns_latest_in_module = max_id or 1824
@@ -270,16 +273,21 @@ if "bwns_current_story" not in st.session_state:
 
 st.title("📰 Update Bahá’í World News Service (BWNS)")
 
+def refresh_max_id():
+    max_id, _ = get_latest_bwns_id_from_module()
+    if max_id:
+        st.session_state.bwns_latest_in_module = max_id
+        st.session_state.bwns_target_id = max_id + 1
+
+def skip_to_next_story():
+    st.session_state.bwns_target_id += 1
+    st.session_state.bwns_current_story = None
+
 col_info, col_refresh = st.columns([4, 1])
 with col_info:
     st.info(f"📌 Highest Story ID currently in `Module:BWNS`: **{st.session_state.bwns_latest_in_module}**")
 with col_refresh:
-    if st.button("🔄 Refresh Module Max ID", use_container_width=True):
-        max_id, _ = get_latest_bwns_id_from_module()
-        if max_id:
-            st.session_state.bwns_latest_in_module = max_id
-            st.session_state.bwns_target_id = max_id + 1
-            st.rerun()
+    st.button("🔄 Refresh Module Max ID", on_click=refresh_max_id, use_container_width=True)
 
 # --- Top Controls: Select & Fetch Story ---
 col_id, col_fetch, col_next = st.columns([2, 2, 2])
@@ -323,7 +331,7 @@ with col_fetch:
 
 with col_next:
     st.write("")
-    if st.button("⏭️ Skip / Next Story ID", use_container_width=True):
+    st.button("⏭️ Skip / Next Story ID", on_click=skip_to_next_story, use_container_width=True)
         st.session_state.bwns_target_id += 1
         st.session_state.bwns_current_story = None
         st.rerun()
@@ -481,7 +489,7 @@ if story:
                     )
 
                     # Advance to next story automatically
-                    st.session_state.bwns_target_id = sid + 1
+                    st.session_state.bwns_next_id_after_upload = sid + 1
                     st.session_state.bwns_current_story = None
                     st.rerun()
 
