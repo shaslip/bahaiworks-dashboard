@@ -207,18 +207,36 @@ def scrape_bwns_story(story_id):
 
             if typename in ("InlineImageRecord", "FullWidthImageRecord") and item.get("image"):
                 img_url = item["image"].get("responsiveImage", {}).get("src")
-                caption = item.get("caption") or item.get("inlineImageAltText") or item.get("altText")
-                if img_url and caption:
+                caption = (item.get("caption") or item.get("inlineImageAltText") or item.get("altText") or "").strip()
+                if img_url:
                     clean_url = img_url.split("?")[0]
-                    images_and_captions.append({"url": clean_url, "caption": caption.strip()})
+                    images_and_captions.append({
+                        "url": clean_url,
+                        "caption": caption,
+                        "naming_hint": caption or story_data.get("description") or title,
+                    })
 
             elif typename == "SideBySideImageRecord" and item.get("images"):
                 imgs = item.get("images", [])
                 if len(imgs) >= 1 and imgs[0].get("responsiveImage"):
                     img_url_1 = imgs[0]["responsiveImage"].get("src")
-                    cap_1 = item.get("captionStart") or item.get("altTextStart")
-                    if img_url_1 and cap_1:
-                        images_and_captions.append({"url": img_url_1.split("?")[0], "caption": cap_1.strip()})
+                    cap_1 = (item.get("captionStart") or item.get("altTextStart") or "").strip()
+                    if img_url_1:
+                        images_and_captions.append({
+                            "url": img_url_1.split("?")[0],
+                            "caption": cap_1,
+                            "naming_hint": cap_1 or story_data.get("description") or title,
+                        })
+
+                if len(imgs) >= 2 and imgs[1].get("responsiveImage"):
+                    img_url_2 = imgs[1]["responsiveImage"].get("src")
+                    cap_2 = (item.get("captionEnd") or item.get("altTextEnd") or "").strip()
+                    if img_url_2:
+                        images_and_captions.append({
+                            "url": img_url_2.split("?")[0],
+                            "caption": cap_2,
+                            "naming_hint": cap_2 or story_data.get("description") or title,
+                        })
 
                 if len(imgs) >= 2 and imgs[1].get("responsiveImage"):
                     img_url_2 = imgs[1]["responsiveImage"].get("src")
