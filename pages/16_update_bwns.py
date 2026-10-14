@@ -432,10 +432,10 @@ if story:
             if st.button(f"🚀 Upload Story {sid} to Bahai.media & Update Module:BWNS", type="primary", use_container_width=True):
                 session = requests.Session()
                 progress_bar = st.progress(0)
-                status_box = st.empty()
+                log_container = st.container(border=True)
 
                 try:
-                    status_box.info("🔐 Authenticating with bahai.media...")
+                    log_container.write("🔐 Authenticating with bahai.media...")
                     get_csrf_token(session, api_url=MEDIA_API_URL)
 
                     selected_indices = [
@@ -454,7 +454,7 @@ if story:
                         wikitext = st.session_state[f"wtext_{sid}_{i}"].strip()
 
                         target_file_title = get_unique_wiki_filename(raw_fname, api_url=MEDIA_API_URL)
-                        status_box.info(f"⬇️ Downloading & uploading `{target_file_title}`...")
+                        log_container.write(f"⬇️ Downloading & uploading `{target_file_title}`...")
 
                         download_url = img_data["url"]
                         head_resp = requests.head(download_url, timeout=10)
@@ -486,6 +486,7 @@ if story:
                                 api_url=MEDIA_API_URL,
                             )
                             uploaded_count += 1
+                            log_container.success(f"✅ Uploaded `{target_file_title}`")
                         finally:
                             if os.path.exists(tmp_path):
                                 os.remove(tmp_path)
@@ -495,7 +496,7 @@ if story:
 
                     # 2. Ensure Category:BWNS <sid> exists
                     cat_title = f"Category:BWNS {sid}"
-                    status_box.info(f"📁 Checking `{cat_title}`...")
+                    log_container.write(f"📁 Checking `{cat_title}`...")
                     existing_cat, err = fetch_wikitext(cat_title, session=session, api_url=MEDIA_API_URL)
                     if not existing_cat:
                         cat_content = f"{{{{bwns_view|{sid}}}}}{{{{CatIndicator|0}}}}"
@@ -518,8 +519,9 @@ if story:
                         )
 
                     progress_bar.progress(1.0)
-                    status_box.success(
-                        f"✅ Uploaded {uploaded_count} image(s), verified `{cat_title}`, and updated `Module:BWNS`!"
+                    log_container.success(
+                        f"🎉 Done! Uploaded {uploaded_count} image(s), verified `{cat_title}`, and updated `Module:BWNS`. "
+                        f"Click **⏭️ Skip / Next Story ID** at the top when ready for Story {sid + 1}."
                     )
 
                     # Advance to next story automatically
