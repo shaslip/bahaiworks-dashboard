@@ -187,12 +187,16 @@ def scrape_bwns_story(story_id):
 
         images_and_captions = []
 
-        if story_data.get("thumbnail") and story_data.get("thumbnailDescription"):
+        if story_data.get("thumbnail"):
             thumb_url = story_data["thumbnail"].get("responsiveImage", {}).get("src")
-            thumb_desc = story_data.get("thumbnailDescription")
-            if thumb_url and thumb_desc:
+            thumb_desc = (story_data.get("thumbnailDescription") or "").strip()
+            if thumb_url:
                 clean_url = thumb_url.split("?")[0]
-                images_and_captions.append({"url": clean_url, "caption": thumb_desc.strip()})
+                images_and_captions.append({
+                    "url": clean_url,
+                    "caption": thumb_desc,  # Left blank if no thumbnailDescription
+                    "naming_hint": thumb_desc or story_data.get("description") or title,
+                })
 
         for item in story_data.get("storyContent", []):
             typename = item.get("__typename")
@@ -325,7 +329,10 @@ def load_story(sid):
             images = result["images"]
             with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
                 future_to_idx = {
-                    executor.submit(generate_filename_with_gemini, img["caption"]): i
+                    executor.submit(
+                        generate_filename_with_gemini,
+                        img.get("naming_hint") or img["caption"]
+                    ): i
                     for i, img in enumerate(images)
                 }
                 for future in concurrent.futures.as_completed(future_to_idx):
@@ -445,7 +452,13 @@ if story:
                         target_file_title = get_unique_wiki_filename(raw_fname, api_url=MEDIA_API_URL)
                         status_box.info(f"⬇️ Downloading & uploading `{target_file_title}`...")
 
-                        img_resp = requests.get(img_data["url"], timeout=30)
+                        download_url = img_data["url"]
+                        head_resp = requests.head(download_url, timeout=10)
+                        content_len = int(head_resp.headers.get("Content-Length", 0))
+                        if content_len > 10 * 1024 * 1024:  # Over 10 MB -> fetch smaller version
+                            download_url = f"{download_url}?w=3000&auto=format&q=85"
+
+                        img_resp = requests.get(download_url, timeout=30)
                         img_resp.raise_for_status()
 
                         _, ext = os.path.splitext(target_file_title)
