@@ -410,9 +410,9 @@ if story:
                 with col_preview:
                     st.image(img["url"], use_container_width=True)
                     st.checkbox(
-                        "Include in upload",
-                        value=True,
-                        key=f"inc_{sid}_{idx}",
+                        "Image is a collage, set aside for manual cropping",
+                        value=False,
+                        key=f"collage_{sid}_{idx}",
                     )
 
                 with col_details:
@@ -438,23 +438,18 @@ if story:
                     log_container.write("🔐 Authenticating with bahai.media...")
                     get_csrf_token(session, api_url=MEDIA_API_URL)
 
-                    selected_indices = [
-                        i for i in range(len(story["images"]))
-                        if st.session_state.get(f"inc_{sid}_{i}", True)
-                    ]
-
-                    total_steps = len(selected_indices) + 2  # images + category + Module:BWNS
+                    COLLAGE_OUTPUT_DIR = "/home/sarah/Desktop/Projects/Tools/Bahaimedia/output"
+                    total_images = len(story["images"])
+                    total_steps = total_images + 2  # images + category + Module:BWNS
                     current_step = 0
                     uploaded_count = 0
+                    staged_count = 0
 
-                    # 1. Download & Upload Each Selected Image
-                    for i in selected_indices:
-                        img_data = story["images"][i]
+                    # 1. Process Each Image (Upload or Set Aside Collage)
+                    for i, img_data in enumerate(story["images"]):
+                        is_collage = st.session_state.get(f"collage_{sid}_{i}", False)
                         raw_fname = st.session_state[f"fname_{sid}_{i}"].strip()
                         wikitext = st.session_state[f"wtext_{sid}_{i}"].strip()
-
-                        target_file_title = get_unique_wiki_filename(raw_fname, api_url=MEDIA_API_URL)
-                        log_container.write(f"⬇️ Downloading & uploading `{target_file_title}`...")
 
                         download_url = img_data["url"]
                         head_resp = requests.head(download_url, timeout=10)
@@ -465,31 +460,51 @@ if story:
                         img_resp = requests.get(download_url, timeout=30)
                         img_resp.raise_for_status()
 
-                        _, ext = os.path.splitext(target_file_title)
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=ext or ".jpg") as tmp_file:
-                            tmp_file.write(img_resp.content)
-                            tmp_path = tmp_file.name
+                        if is_collage:
+                            os.makedirs(COLLAGE_OUTPUT_DIR, exist_ok=True)
+                            clean_fname = re.sub(r'^file:', '', raw_fname, flags=re.IGNORECASE)
+                            base_name, ext = os.path.splitext(clean_fname)
+                            if not ext:
+                                ext = ".jpg"
+                            local_img_path = os.path.join(COLLAGE_OUTPUT_DIR, f"{base_name}{ext}")
+                            local_txt_path = os.path.join(COLLAGE_OUTPUT_DIR, f"{base_name}.txt")
 
-                        try:
-                            upload_file_binary(
-                                filename=target_file_title,
-                                file_path=tmp_path,
-                                summary=f"Uploaded from BWNS story {sid}",
-                                session=session,
-                                api_url=MEDIA_API_URL,
-                            )
-                            upload_to_mediawiki(
-                                title=target_file_title,
-                                content=wikitext,
-                                summary=f"Added file description for BWNS story {sid}",
-                                session=session,
-                                api_url=MEDIA_API_URL,
-                            )
-                            uploaded_count += 1
-                            log_container.success(f"✅ Uploaded `{target_file_title}`")
-                        finally:
-                            if os.path.exists(tmp_path):
-                                os.remove(tmp_path)
+                            with open(local_img_path, "wb") as f:
+                                f.write(img_resp.content)
+                            with open(local_txt_path, "w", encoding="utf-8") as f:
+                                f.write(wikitext)
+
+                            staged_count += 1
+                            log_container.info(f"✂️ Set aside collage `{base_name}{ext}` (+ `.txt`) to `{COLLAGE_OUTPUT_DIR}`")
+                        else:
+                            target_file_title = get_unique_wiki_filename(raw_fname, api_url=MEDIA_API_URL)
+                            log_container.write(f"⬇️ Downloading & uploading `{target_file_title}`...")
+
+                            _, ext = os.path.splitext(target_file_title)
+                            with tempfile.NamedTemporaryFile(delete=False, suffix=ext or ".jpg") as tmp_file:
+                                tmp_file.write(img_resp.content)
+                                tmp_path = tmp_file.name
+
+                            try:
+                                upload_file_binary(
+                                    filename=target_file_title,
+                                    file_path=tmp_path,
+                                    summary=f"Uploaded from BWNS story {sid}",
+                                    session=session,
+                                    api_url=MEDIA_API_URL,
+                                )
+                                upload_to_mediawiki(
+                                    title=target_file_title,
+                                    content=wikitext,
+                                    summary=f"Added file description for BWNS story {sid}",
+                                    session=session,
+                                    api_url=MEDIA_API_URL,
+                                )
+                                uploaded_count += 1
+                                log_container.success(f"✅ Uploaded `{target_file_title}`")
+                            finally:
+                                if os.path.exists(tmp_path):
+                                    os.remove(tmp_path)
 
                         current_step += 1
                         progress_bar.progress(current_step / total_steps)
