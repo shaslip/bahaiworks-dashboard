@@ -282,6 +282,7 @@ def refresh_max_id():
 def skip_to_next_story():
     st.session_state.bwns_target_id += 1
     st.session_state.bwns_current_story = None
+    st.session_state.bwns_auto_fetch = True
 
 col_info, col_refresh = st.columns([4, 1])
 with col_info:
@@ -322,6 +323,9 @@ def load_story(sid):
                     images[i]["wikitext"] = build_file_wikitext(images[i]["caption"], sid)
 
     st.session_state.bwns_current_story = result
+
+if st.session_state.pop("bwns_auto_fetch", False):
+    load_story(st.session_state.bwns_target_id)
 
 with col_fetch:
     st.write("")  # Vertical alignment spacer
