@@ -332,9 +332,6 @@ with col_fetch:
 with col_next:
     st.write("")
     st.button("⏭️ Skip / Next Story ID", on_click=skip_to_next_story, use_container_width=True)
-        st.session_state.bwns_target_id += 1
-        st.session_state.bwns_current_story = None
-        st.rerun()
 
 st.divider()
 
