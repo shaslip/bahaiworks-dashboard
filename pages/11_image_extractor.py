@@ -330,7 +330,11 @@ def create_wiki_text_file(txt_path, caption, book_title, access_control="",
 
 st.title("🖼️ Image Extractor")
 
-tab1, tab2 = st.tabs(["📚 Book Image Extractor", "✂️ Local Collage Cropper"])
+tab1, tab2, tab3 = st.tabs([
+    "📚 Book Image Extractor", 
+    "✂️ Local Collage Cropper", 
+    "🌐 Wiki Category Cropper"
+])
 
 with tab1:
     st.sidebar.header("Configuration")
@@ -798,3 +802,109 @@ with tab2:
                             saved_names.append(out_img_name)
 
                         crop_log.success(f"✅ Split `{fname}` into **{len(crops)}** images: `{', '.join(saved_names)}`")
+
+with tab3:
+    st.subheader("🌐 Crop Wiki Category Collages")
+
+    col_dir, col_count = st.columns([3, 1])
+    with col_dir:
+        wiki_collage_dir = st.text_input(
+            "Output Directory",
+            value="/home/sarah/Desktop/Projects/Tools/Bahaimedia/output/",
+            key="wiki_collage_dir",
+        )
+    with col_count:
+        wiki_expected_subimages = st.number_input(
+            "Expected Sub-images (0 = Auto-detect)",
+            min_value=0,
+            max_value=12,
+            value=0,
+            step=1,
+            key="wiki_expected_subimages",
+        )
+
+    cat_col, btn_col = st.columns([3, 1])
+    with cat_col:
+        wiki_category = st.text_input(
+            "Bahai.media Category",
+            placeholder="e.g., Category:Images from The American Bahá'í",
+        )
+    with btn_col:
+        st.write("")
+        st.write("")
+        fetch_clicked = st.button("🔍 Fetch Category Images")
+
+    if fetch_clicked and wiki_category.strip():
+        with st.spinner(f"Fetching images from `{wiki_category.strip()}`..."):
+            st.session_state["cat_images"] = fetch_category_images(wiki_category.strip())
+
+    cat_images = st.session_state.get("cat_images", [])
+    if cat_images:
+        st.write(f"Found **{len(cat_images)}** file(s). Select the collages you want to download and split:")
+
+        cols_per_row = 3
+        selected_cat_items = []
+        for row_start in range(0, len(cat_images), cols_per_row):
+            row_items = cat_images[row_start:row_start + cols_per_row]
+            cols = st.columns(cols_per_row)
+            for col, item in zip(cols, row_items):
+                with col:
+                    with st.container(border=True):
+                        st.image(item["thumb_url"], use_container_width=True)
+                        if st.checkbox(item["filename"], value=False, key=f"cat_sel_{item['filename']}"):
+                            selected_cat_items.append(item)
+
+        if st.button("⬇️ Download & Crop Selected Collages", type="primary"):
+            if not selected_cat_items:
+                st.warning("Please select at least one collage image.")
+            else:
+                os.makedirs(wiki_collage_dir, exist_ok=True)
+                originals_dir = os.path.join(wiki_collage_dir, "originals")
+                os.makedirs(originals_dir, exist_ok=True)
+                crop_log = st.container(border=True)
+
+                for item in selected_cat_items:
+                    fname = item["filename"]
+                    base_name, ext = os.path.splitext(fname)
+                    wikitext = item["wikitext"]
+
+                    try:
+                        resp = requests.get(item["url"], timeout=30)
+                        resp.raise_for_status()
+                        img_bytes = resp.content
+                    except Exception as e:
+                        crop_log.error(f"❌ Failed to download `{fname}`: {e}")
+                        continue
+
+                    # Save uncropped backup to originals/
+                    with open(os.path.join(originals_dir, fname), "wb") as f:
+                        f.write(img_bytes)
+                    with open(os.path.join(originals_dir, f"{base_name}.txt"), "w", encoding="utf-8") as f:
+                        f.write(wikitext)
+
+                    pil_img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+                    crops = crop_collage_images(pil_img, expected_count=wiki_expected_subimages)
+
+                    if len(crops) <= 1:
+                        crop_log.warning(f"⚠️ Only detected {len(crops)} region in `{fname}` — skipping split (backup saved in `originals/`).")
+                        continue
+
+                    # Crop 1 keeps the original filename; Crops 2..N use -1, -2, etc.
+                    saved_names = []
+                    for idx, crop_bgr in enumerate(crops):
+                        if idx == 0:
+                            out_base = base_name
+                        else:
+                            out_base = f"{base_name}-{idx}"
+
+                        out_img_name = f"{out_base}{ext}"
+                        out_img_path = os.path.join(wiki_collage_dir, out_img_name)
+                        out_txt_path = os.path.join(wiki_collage_dir, f"{out_base}.txt")
+
+                        cv2.imwrite(out_img_path, crop_bgr)
+                        with open(out_txt_path, "w", encoding="utf-8") as f:
+                            f.write(wikitext)
+
+                        saved_names.append(out_img_name)
+
+                    crop_log.success(f"✅ Split `{fname}` into **{len(crops)}** images: `{', '.join(saved_names)}`")
