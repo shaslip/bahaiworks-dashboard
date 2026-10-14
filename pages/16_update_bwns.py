@@ -164,15 +164,17 @@ def scrape_bwns_story(story_id):
             return {"status": "error", "message": f"HTTP {response.status_code}", "final_url": response.url}
 
         final_url = response.url
-        if "/podcasts/" in final_url:
-            return {"status": "podcast", "final_url": final_url}
+        is_podcast = "/podcasts/" in final_url
 
         # Reconstruct Next.js flight stream
         chunks = re.findall(r'self\.__next_f\.push\(\[1,"(.*?)"\]\)', response.text)
         full_payload = "".join(json.loads(f'"{c}"') for c in chunks)
 
-        target_marker = f'"storyNumber":{story_id}'
+        target_marker = f'"_locales":["en"],"storyNumber":{story_id}'
         idx = full_payload.find(target_marker)
+        if idx == -1:
+            target_marker = f'"storyNumber":{story_id}'
+            idx = full_payload.find(target_marker)
         if idx == -1:
             return {"status": "error", "message": "Could not find storyNumber in page JSON.", "final_url": final_url}
 
@@ -190,11 +192,13 @@ def scrape_bwns_story(story_id):
         if story_data.get("thumbnail"):
             thumb_url = story_data["thumbnail"].get("responsiveImage", {}).get("src")
             thumb_desc = (story_data.get("thumbnailDescription") or "").strip()
+            if not thumb_desc and is_podcast:
+                thumb_desc = (story_data.get("description") or "").strip()
             if thumb_url:
                 clean_url = thumb_url.split("?")[0]
                 images_and_captions.append({
                     "url": clean_url,
-                    "caption": thumb_desc,  # Left blank if no thumbnailDescription
+                    "caption": thumb_desc,
                     "naming_hint": thumb_desc or story_data.get("description") or title,
                 })
 
