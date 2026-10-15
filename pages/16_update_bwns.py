@@ -382,6 +382,12 @@ with col_next:
     st.write("")
     st.button("⏭️ Skip / Next Story ID", on_click=skip_to_next_story, width="stretch")
 
+auto_advance = st.checkbox(
+    "⚡ Auto-advance and fetch next story after upload",
+    value=True,
+    key="bwns_auto_advance",
+)
+
 st.divider()
 
 # ==============================================================================
@@ -556,6 +562,13 @@ if story:
                         f"🎉 Done! Uploaded {uploaded_count} image(s), verified `{cat_title}`, and updated `Module:BWNS`. "
                         f"Click **⏭️ Skip / Next Story ID** at the top when ready for Story {sid + 1}."
                     )
+
+                    if auto_advance:
+                        st.toast(f"🎉 Story {sid} complete! Uploaded {uploaded_count} image(s). Loading Story {sid + 1}...")
+                        st.session_state.bwns_next_id_after_upload = sid + 1
+                        st.session_state.bwns_current_story = None
+                        st.session_state.bwns_auto_fetch = True
+                        st.rerun()
 
                 except Exception as e:
                     st.error(f"❌ Upload failed: {e}")
