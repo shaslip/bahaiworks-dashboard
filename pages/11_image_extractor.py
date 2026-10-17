@@ -572,7 +572,7 @@ with tab2:
     delete_originals = st.checkbox("Move original uncropped collage files into an `originals/` subfolder after cropping", value=True)
 
     if os.path.isdir(collage_dir):
-        valid_exts = (".jpg", ".jpeg", ".png", ".webp")
+        valid_exts = (".jpg", ".jpeg", ".png", ".webp", ".gif")
         image_files = sorted([
             f for f in os.listdir(collage_dir)
             if os.path.isfile(os.path.join(collage_dir, f)) and f.lower().endswith(valid_exts)
@@ -599,6 +599,7 @@ with tab2:
                     for fname in selected_files:
                         img_path = os.path.join(collage_dir, fname)
                         base_name, ext = os.path.splitext(fname)
+                        out_ext = ".png" if ext.lower() == ".gif" else ext
                         txt_path = os.path.join(collage_dir, f"{base_name}.txt")
 
                         txt_content = None
@@ -614,7 +615,7 @@ with tab2:
                             continue
 
                         for idx, crop_bgr in enumerate(crops, start=1):
-                            out_img_name = f"{base_name}-{idx}{ext}"
+                            out_img_name = f"{base_name}-{idx}{out_ext}"
                             out_img_path = os.path.join(collage_dir, out_img_name)
                             cv2.imwrite(out_img_path, crop_bgr)
 
@@ -623,7 +624,7 @@ with tab2:
                                 with open(out_txt_path, "w", encoding="utf-8") as f:
                                     f.write(txt_content)
 
-                        crop_log.success(f"✅ Split `{fname}` into **{len(crops)}** images (`{base_name}-1{ext}` .. `{base_name}-{len(crops)}{ext}`)")
+                        crop_log.success(f"✅ Split `{fname}` into **{len(crops)}** images (`{base_name}-1{out_ext}` .. `{base_name}-{len(crops)}{out_ext}`)")
 
                         if delete_originals:
                             os.replace(img_path, os.path.join(originals_dir, fname))
@@ -691,6 +692,8 @@ with tab3:
                 for item in selected_cat_items:
                     fname = item["filename"]
                     base_name, ext = os.path.splitext(fname)
+                    is_gif = ext.lower() == ".gif"
+                    out_ext = ".png" if is_gif else ext
                     wikitext = item["wikitext"]
 
                     try:
@@ -708,6 +711,12 @@ with tab3:
                         crop_log.warning(f"⚠️ Only detected {len(crops)} region in `{fname}` — skipping split.")
                         continue
 
+                    if is_gif:
+                        crop_log.warning(
+                            f"⚠️ `{fname}` is a `.gif` and was converted to `.png` (`{base_name}.png`). "
+                            f"This will not overwrite `File:{fname}` on the wiki when re-uploaded — manual deletion of the original `.gif` is required."
+                        )
+
                     # Crop 1 keeps the original filename; Crops 2..N use -1, -2, etc.
                     saved_names = []
                     for idx, crop_bgr in enumerate(crops):
@@ -716,7 +725,7 @@ with tab3:
                         else:
                             out_base = f"{base_name}-{idx}"
 
-                        out_img_name = f"{out_base}{ext}"
+                        out_img_name = f"{out_base}{out_ext}"
                         out_img_path = os.path.join(wiki_collage_dir, out_img_name)
                         out_txt_path = os.path.join(wiki_collage_dir, f"{out_base}.txt")
 
