@@ -355,12 +355,13 @@ with tab1:
     offset_mode = st.radio(
         "Select Offset Mode",
         ["Auto-detect Offset", "Manual Offset", "Fall back to electronic page"],
+        index=1,
         help="Determines how physical page numbers are calculated for generic books."
     )
 
     misc_offset_input = None
     if offset_mode == "Manual Offset":
-        misc_offset_input = st.text_input("Enter Manual Offset", placeholder="e.g., 14")
+        misc_offset_input = st.text_input("Enter Manual Offset", value="0", placeholder="e.g., 14")
 
     if st.button("🚀 Process Images", type="primary"):
         if not pdf_filename:
