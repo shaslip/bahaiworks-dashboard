@@ -1678,11 +1678,6 @@ with tab_dups:
                         except Exception as e:
                             st.error(f"Error loading group details: {e}")
                             st.stop()
-                                
-                with col_p2:
-                    if st.button("⏭️ Skip", use_container_width=True):
-                        st.session_state["dup_processed"].add(seed_title)
-                        st.rerun()
                         
             group = st.session_state.get("dup_current_group")
             if group:
@@ -1715,8 +1710,6 @@ with tab_dups:
                     st.session_state["dup_selected_winner"] = winner_title
                     for idx in range(len(titles)):
                         st.session_state[f"dup_chk_{idx}"] = (idx == selected_idx)
-                    clean_w = winner_title.replace("File:", "", 1)
-                    st.session_state["dup_new_name_input"] = os.path.splitext(clean_w)[0]
 
                 for idx, t in enumerate(group["titles"]):
                     col_hdr, col_chk = st.columns([4, 1])
