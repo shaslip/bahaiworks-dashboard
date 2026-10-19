@@ -1143,7 +1143,7 @@ with tab_wanted_cats:
             
             # Display nicely in a dataframe
             df = pd.DataFrame(to_create)
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.dataframe(df, width='stretch', hide_index=True)
             
             if st.button("🚀 Batch Create Categories (Multi-threaded)", type="primary"):
                 progress_bar = st.progress(0)
@@ -1577,6 +1577,7 @@ with tab_dups:
                 st.session_state["dup_current_group"] = None
                 st.session_state["dup_prev_winner"] = None
                 st.session_state.pop("dup_selected_winner", None)
+                st.session_state.pop("dup_group_initialized", None)
             except Exception as e:
                 st.error(f"Error fetching duplicate list: {e}")
 
@@ -1600,9 +1601,9 @@ with tab_dups:
                     col_p1, col_p2, _ = st.columns([1, 1, 2])
                     
                     with col_p1:
-                        load_clicked = st.button("📥 Load & Process", type="primary", use_container_width=True)
+                        load_clicked = st.button("📥 Load & Process", type="primary", width='stretch')
                     with col_p2:
-                        if st.button("⏭️ Skip", use_container_width=True):
+                        if st.button("⏭️ Skip", width='stretch'):
                             st.session_state["dup_processed"].add(seed_title)
                             st.rerun()
                             
@@ -1674,6 +1675,7 @@ with tab_dups:
                             }
                             st.session_state["dup_prev_winner"] = None
                             st.session_state.pop("dup_selected_winner", None)
+                            st.session_state.pop("dup_group_initialized", None)
                             st.rerun()
                         except Exception as e:
                             st.error(f"Error loading group details: {e}")
@@ -1688,28 +1690,33 @@ with tab_dups:
                     else:
                         st.warning("Could not load image preview.")
                 with col_top2:
-                    if st.button("⏭️ Skip Group", use_container_width=True):
+                    if st.button("⏭️ Skip Group", width='stretch'):
                         for t in group["titles"]:
                             st.session_state["dup_processed"].add(t)
                         st.session_state["dup_current_group"] = None
                         st.session_state.pop("dup_selected_winner", None)
+                    st.session_state.pop("dup_group_initialized", None)
                         st.rerun()
                         
                 st.divider()
                 st.subheader("1. File Pages Comparison")
                 
-                if "dup_selected_winner" not in st.session_state or st.session_state["dup_selected_winner"] not in group["titles"]:
-                    st.session_state["dup_selected_winner"] = group["titles"][0]
+                if "dup_group_initialized" not in st.session_state:
+                    st.session_state["dup_group_initialized"] = True
+                    st.session_state["dup_selected_winner"] = None
                     for idx, t in enumerate(group["titles"]):
-                        st.session_state[f"dup_chk_{idx}"] = (idx == 0)
+                        st.session_state[f"dup_chk_{idx}"] = False
                         st.session_state[f"dup_wt_{idx}"] = group["details"][t]["wikitext"]
                     st.session_state["dup_new_name_input"] = ""
 
                 def select_winner(selected_idx, titles):
-                    winner_title = titles[selected_idx]
-                    st.session_state["dup_selected_winner"] = winner_title
-                    for idx in range(len(titles)):
-                        st.session_state[f"dup_chk_{idx}"] = (idx == selected_idx)
+                    if st.session_state[f"dup_chk_{selected_idx}"]:
+                        st.session_state["dup_selected_winner"] = titles[selected_idx]
+                        for idx in range(len(titles)):
+                            if idx != selected_idx:
+                                st.session_state[f"dup_chk_{idx}"] = False
+                    else:
+                        st.session_state["dup_selected_winner"] = None
 
                 for idx, t in enumerate(group["titles"]):
                     col_hdr, col_chk = st.columns([4, 1])
@@ -1735,13 +1742,11 @@ with tab_dups:
                 st.divider()
                 st.subheader("2. Resolution")
                 
-                winner = st.session_state["dup_selected_winner"]
-                winner_idx = group["titles"].index(winner)
-                final_wikitext = st.session_state[f"dup_wt_{winner_idx}"]
+                winner = st.session_state.get("dup_selected_winner")
                 
-                # Separate base filename and extension so extension cannot be edited/broken
-                clean_winner = winner.replace("File:", "", 1)
-                base_name, ext = os.path.splitext(clean_winner)
+                # Separate base filename and extension (use first file's extension as placeholder until winner is chosen)
+                ref_title = winner if winner else group["titles"][0]
+                _, ext = os.path.splitext(ref_title.replace("File:", "", 1))
                 
                 col_fn1, col_fn2 = st.columns([4, 1])
                 with col_fn1:
@@ -1749,7 +1754,13 @@ with tab_dups:
                 with col_fn2:
                     st.text_input("Extension", value=ext, disabled=True)
                     
-                if st.button("🚀 Resolve Duplicates", type="primary"):
+                if not winner:
+                    st.warning("Please mark one of the files above as the winner before resolving.")
+                    
+                if st.button("🚀 Resolve Duplicates", type="primary", disabled=(winner is None)):
+                    winner_idx = group["titles"].index(winner)
+                    final_wikitext = st.session_state[f"dup_wt_{winner_idx}"]
+                    
                     new_base_clean = new_base_name.strip()
                     if new_base_clean:
                         final_title = f"File:{new_base_clean}{ext}"
@@ -1833,6 +1844,7 @@ with tab_dups:
                             st.session_state["dup_processed"].add(t)
                         st.session_state["dup_current_group"] = None
                         st.session_state.pop("dup_selected_winner", None)
+                        st.session_state.pop("dup_group_initialized", None)
                         st.session_state["dup_auto_load"] = True
                         st.rerun()
                         
