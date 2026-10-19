@@ -1695,7 +1695,7 @@ with tab_dups:
                             st.session_state["dup_processed"].add(t)
                         st.session_state["dup_current_group"] = None
                         st.session_state.pop("dup_selected_winner", None)
-                    st.session_state.pop("dup_group_initialized", None)
+                        st.session_state.pop("dup_group_initialized", None)
                         st.rerun()
                         
                 st.divider()
