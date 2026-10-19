@@ -1556,24 +1556,46 @@ with tab_5yp:
 # ==============================================================================
 with tab_dups:
     st.header("🗂️ Resolve Duplicate Files (bahai.media)")
-    st.info("Processes Special:ListDuplicatedFiles one group at a time. Deletes duplicate files and replaces them with redirects to the winning file.")
+    st.info("Processes duplicate files one group at a time using the MediaWiki API. Deletes duplicate files and replaces them with redirects to the winning file.")
     
     MEDIA_API = "https://bahai.media/api.php"
     
     if st.button("🔍 Fetch / Refresh Duplicate Files List", type="primary"):
-        with st.spinner("Querying Special:ListDuplicatedFiles on bahai.media..."):
+        with st.spinner("Scanning bahai.media via API (generator=allimages&prop=duplicatefiles)..."):
             params = {
                 "action": "query",
-                "list": "querypage",
-                "qppage": "Listduplicatedfiles",
-                "qplimit": "max",
+                "generator": "allimages",
+                "gailimit": "max",
+                "prop": "duplicatefiles",
+                "dflimit": "max",
                 "format": "json"
             }
+            dup_titles = []
+            status_scan = st.empty()
+            batch_num = 0
+            
             try:
-                resp = requests.get(MEDIA_API, params=params, timeout=15).json()
-                results = resp.get("query", {}).get("querypage", {}).get("results", [])
-                
-                st.session_state["dup_queue"] = [r["title"] for r in results]
+                while True:
+                    batch_num += 1
+                    status_scan.caption(f"Scanning image batch {batch_num}... (Found {len(dup_titles)} files with duplicates so far)")
+                    resp = requests.get(MEDIA_API, params=params, timeout=15).json()
+                    
+                    if "error" in resp:
+                        st.error(f"API Error: {resp['error'].get('info')}")
+                        break
+                        
+                    pages = resp.get("query", {}).get("pages", {})
+                    for pid, pdata in pages.items():
+                        if "duplicatefiles" in pdata:
+                            dup_titles.append(pdata["title"])
+                            
+                    if "continue" in resp and "gaicontinue" in resp["continue"]:
+                        params.update(resp["continue"])
+                    else:
+                        break
+                        
+                status_scan.empty()
+                st.session_state["dup_queue"] = sorted(list(set(dup_titles)))
                 st.session_state["dup_processed"] = set()
                 st.session_state["dup_current_group"] = None
                 st.session_state["dup_winner_radio"] = None
