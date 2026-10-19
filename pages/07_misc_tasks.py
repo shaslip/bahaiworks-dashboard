@@ -1597,7 +1597,7 @@ with tab_dups:
                 load_clicked = False
                 
                 if not auto_load:
-                    st.markdown(f"### Next File: `{seed_title}`")
+                    st.markdown(f"### Next File: `{seed_title.replace('File:', '', 1)}`")
                     col_p1, col_p2, _ = st.columns([1, 1, 2])
                     
                     with col_p1:
@@ -1721,7 +1721,7 @@ with tab_dups:
                 for idx, t in enumerate(group["titles"]):
                     col_hdr, col_chk = st.columns([4, 1])
                     with col_hdr:
-                        st.markdown(f"#### `{t}`")
+                        st.markdown(f"#### `{t.replace('File:', '', 1)}`")
                     with col_chk:
                         st.checkbox(
                             "Mark as winner",
@@ -1731,7 +1731,7 @@ with tab_dups:
                         )
                     rds = group["details"][t]["redirects"]
                     if rds:
-                        st.caption(f"**Incoming Redirects:** {', '.join([f'`{r}`' for r in rds])}")
+                        st.caption(f"**Incoming Redirects:** {', '.join([f'`{r.replace('File:', '', 1)}`' for r in rds])}")
                     st.text_area(
                         f"Page Content for {t}",
                         key=f"dup_wt_{idx}",
@@ -1761,7 +1761,7 @@ with tab_dups:
                     winner_idx = group["titles"].index(winner)
                     final_wikitext = st.session_state[f"dup_wt_{winner_idx}"]
                     
-                    new_base_clean = new_base_name.strip()
+                    new_base_clean = re.sub(r'^File:\s*', '', new_base_name.strip(), flags=re.IGNORECASE)
                     if new_base_clean:
                         final_title = f"File:{new_base_clean}{ext}"
                     else:
