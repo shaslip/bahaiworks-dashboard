@@ -1747,11 +1747,11 @@ with tab_dups:
                     
                 if st.button("🚀 Resolve Duplicates", type="primary"):
                     new_base_clean = new_base_name.strip()
-                    if not new_base_clean:
-                        st.error("Filename cannot be empty.")
-                        st.stop()
+                    if new_base_clean:
+                        final_title = f"File:{new_base_clean}{ext}"
+                    else:
+                        final_title = winner
                         
-                    final_title = f"File:{new_base_clean}{ext}"
                     losers = [t for t in group["titles"] if t != winner]
                     
                     status_box = st.empty()
