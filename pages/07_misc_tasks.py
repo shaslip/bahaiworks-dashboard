@@ -1576,7 +1576,7 @@ with tab_dups:
                 st.session_state["dup_processed"] = set()
                 st.session_state["dup_current_group"] = None
                 st.session_state["dup_prev_winner"] = None
-                st.session_state.pop("dup_winner_radio", None)
+                st.session_state.pop("dup_selected_winner", None)
             except Exception as e:
                 st.error(f"Error fetching duplicate list: {e}")
 
@@ -1661,7 +1661,7 @@ with tab_dups:
                                     "details": group_details
                                 }
                                 st.session_state["dup_prev_winner"] = None
-                                st.session_state.pop("dup_winner_radio", None)
+                                st.session_state.pop("dup_selected_winner", None)
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Error loading group details: {e}")
@@ -1685,42 +1685,66 @@ with tab_dups:
                         for t in group["titles"]:
                             st.session_state["dup_processed"].add(t)
                         st.session_state["dup_current_group"] = None
-                        st.session_state.pop("dup_winner_radio", None)
+                        st.session_state.pop("dup_selected_winner", None)
                         st.rerun()
                         
                 st.divider()
                 st.subheader("1. File Pages Comparison")
                 
-                for t in group["titles"]:
-                    st.markdown(f"#### `{t}`")
+                if "dup_selected_winner" not in st.session_state or st.session_state["dup_selected_winner"] not in group["titles"]:
+                    st.session_state["dup_selected_winner"] = group["titles"][0]
+                    for idx, t in enumerate(group["titles"]):
+                        st.session_state[f"dup_chk_{idx}"] = (idx == 0)
+                        st.session_state[f"dup_wt_{idx}"] = group["details"][t]["wikitext"]
+                    clean_init = group["titles"][0].replace("File:", "", 1)
+                    st.session_state["dup_new_name_input"] = os.path.splitext(clean_init)[0]
+
+                def select_winner(selected_idx, titles):
+                    winner_title = titles[selected_idx]
+                    st.session_state["dup_selected_winner"] = winner_title
+                    for idx in range(len(titles)):
+                        st.session_state[f"dup_chk_{idx}"] = (idx == selected_idx)
+                    clean_w = winner_title.replace("File:", "", 1)
+                    st.session_state["dup_new_name_input"] = os.path.splitext(clean_w)[0]
+
+                for idx, t in enumerate(group["titles"]):
+                    col_hdr, col_chk = st.columns([4, 1])
+                    with col_hdr:
+                        st.markdown(f"#### `{t}`")
+                    with col_chk:
+                        st.checkbox(
+                            "Mark as winner",
+                            key=f"dup_chk_{idx}",
+                            on_change=select_winner,
+                            args=(idx, group["titles"])
+                        )
                     rds = group["details"][t]["redirects"]
                     if rds:
                         st.caption(f"**Incoming Redirects:** {', '.join([f'`{r}`' for r in rds])}")
-                    st.code(group["details"][t]["wikitext"], language="mediawiki")
+                    st.text_area(
+                        f"Page Content for {t}",
+                        key=f"dup_wt_{idx}",
+                        height=180,
+                        label_visibility="collapsed"
+                    )
                     
                 st.divider()
                 st.subheader("2. Resolution")
                 
-                winner = st.radio("Select Winning File:", group["titles"], key="dup_winner_radio")
+                winner = st.session_state["dup_selected_winner"]
+                winner_idx = group["titles"].index(winner)
+                final_wikitext = st.session_state[f"dup_wt_{winner_idx}"]
                 
                 # Separate base filename and extension so extension cannot be edited/broken
                 clean_winner = winner.replace("File:", "", 1)
                 base_name, ext = os.path.splitext(clean_winner)
                 
-                # Update the pre-filled inputs whenever the user switches the radio button selection
-                if st.session_state.get("dup_prev_winner") != winner:
-                    st.session_state["dup_prev_winner"] = winner
-                    st.session_state["dup_new_name_input"] = base_name
-                    st.session_state["dup_winner_wt_input"] = group["details"][winner]["wikitext"]
-                    
                 col_fn1, col_fn2 = st.columns([4, 1])
                 with col_fn1:
-                    new_base_name = st.text_input("Final Filename", key="dup_new_name_input")
+                    new_base_name = st.text_input("Final Filename (edit only if renaming)", key="dup_new_name_input")
                 with col_fn2:
                     st.text_input("Extension", value=ext, disabled=True)
                     
-                final_wikitext = st.text_area("Winning File Page Content", key="dup_winner_wt_input", height=250)
-                
                 if st.button("🚀 Resolve Duplicates", type="primary"):
                     new_base_clean = new_base_name.strip()
                     if not new_base_clean:
@@ -1804,7 +1828,7 @@ with tab_dups:
                         for t in group["titles"]:
                             st.session_state["dup_processed"].add(t)
                         st.session_state["dup_current_group"] = None
-                        st.session_state.pop("dup_winner_radio", None)
+                        st.session_state.pop("dup_selected_winner", None)
                         st.rerun()
                         
                     except Exception as e:
