@@ -1732,10 +1732,15 @@ with tab_dups:
                     rds = group["details"][t]["redirects"]
                     if rds:
                         st.caption(f"**Incoming Redirects:** {', '.join([f'`{r.replace('File:', '', 1)}`' for r in rds])}")
+                    
+                    current_wt = st.session_state.get(f"dup_wt_{idx}", "")
+                    line_count = max(current_wt.count("\n") + 1, 3)
+                    dynamic_height = max(100, (line_count + 2) * 24)
+                    
                     st.text_area(
                         f"Page Content for {t}",
                         key=f"dup_wt_{idx}",
-                        height=180,
+                        height=dynamic_height,
                         label_visibility="collapsed"
                     )
                     
