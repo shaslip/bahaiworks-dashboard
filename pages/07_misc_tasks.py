@@ -1770,6 +1770,25 @@ with tab_dups:
                     losers = [t for t in group["titles"] if t != winner]
                     
                     status_box = st.empty()
+                    
+                    # Pre-flight check if renaming
+                    if final_title != winner:
+                        status_box.info(f"Checking if `{final_title}` already exists...")
+                        check_params = {
+                            "action": "query",
+                            "titles": final_title,
+                            "format": "json"
+                        }
+                        try:
+                            check_resp = requests.get(MEDIA_API, params=check_params, timeout=10).json()
+                            pages = check_resp.get("query", {}).get("pages", {})
+                            if any(int(pid) > 0 for pid in pages):
+                                status_box.error(f"⚠️ A page or file named `{final_title.replace('File:', '', 1)}` already exists on bahai.media! Please choose a different name.")
+                                st.stop()
+                        except Exception as e:
+                            status_box.error(f"❌ Error checking filename availability: {e}")
+                            st.stop()
+                            
                     shared_session = requests.Session()
                     
                     try:
