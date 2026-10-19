@@ -1696,8 +1696,7 @@ with tab_dups:
                     for idx, t in enumerate(group["titles"]):
                         st.session_state[f"dup_chk_{idx}"] = (idx == 0)
                         st.session_state[f"dup_wt_{idx}"] = group["details"][t]["wikitext"]
-                    clean_init = group["titles"][0].replace("File:", "", 1)
-                    st.session_state["dup_new_name_input"] = os.path.splitext(clean_init)[0]
+                    st.session_state["dup_new_name_input"] = ""
 
                 def select_winner(selected_idx, titles):
                     winner_title = titles[selected_idx]
