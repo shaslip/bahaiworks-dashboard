@@ -733,7 +733,7 @@ with tab_media:
     
     col_img1, col_img2 = st.columns(2)
     with col_img1:
-        vol_num = st.text_input("Volume Number", value="5", placeholder="e.g. 5")
+        vol_num = st.text_input("Volume Number", value="6", placeholder="e.g. 6")
     with col_img2:
         issue_num = st.text_input("Issue Number (No)", placeholder="e.g. 7")
     
