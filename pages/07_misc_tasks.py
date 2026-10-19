@@ -1590,82 +1590,94 @@ with tab_dups:
             st.caption(f"Remaining items in batch: **{len(remaining_queue)}**")
             seed_title = remaining_queue[0]
             
-            # Prompt user to Process or Skip BEFORE loading the group via API
+            # Prompt user to Process or Skip BEFORE loading the group via API (unless auto-loading after a resolve)
             if st.session_state.get("dup_current_group") is None:
-                st.markdown(f"### Next File: `{seed_title}`")
-                col_p1, col_p2, _ = st.columns([1, 1, 2])
+                auto_load = st.session_state.pop("dup_auto_load", False)
+                load_clicked = False
                 
-                with col_p1:
-                    if st.button("📥 Load & Process", type="primary", use_container_width=True):
-                        with st.spinner(f"Loading duplicate group for `{seed_title}`..."):
-                            params = {
-                                "action": "query",
-                                "titles": seed_title,
-                                "prop": "duplicatefiles|imageinfo",
-                                "iiprop": "url",
-                                "dflimit": "max",
-                                "dflocalonly": 1,
-                                "format": "json"
-                            }
-                            try:
-                                resp = requests.get(MEDIA_API, params=params, timeout=10).json()
-                                pages = resp.get("query", {}).get("pages", {})
-                                
-                                group_titles = [seed_title]
-                                img_url = None
-                                
-                                for pid, pdata in pages.items():
-                                    if "imageinfo" in pdata:
-                                        img_url = pdata["imageinfo"][0]["url"]
-                                    for df in pdata.get("duplicatefiles", []):
-                                        dup_title = f"File:{df['name'].replace('_', ' ')}"
-                                        if dup_title not in group_titles:
-                                            group_titles.append(dup_title)
-                                
-                                # If only 1 file is found, it was already resolved or isn't a local duplicate
-                                if len(group_titles) < 2:
-                                    st.session_state["dup_processed"].add(seed_title)
-                                    st.rerun()
-                                    
-                                # Fetch Wikitext and Incoming Redirects for every file in the group
-                                group_details = {}
-                                for t in group_titles:
-                                    wt, _ = fetch_wikitext(t, api_url=MEDIA_API)
-                                    
-                                    r_params = {
-                                        "action": "query",
-                                        "titles": t,
-                                        "prop": "redirects",
-                                        "rdlimit": "max",
-                                        "format": "json"
-                                    }
-                                    r_resp = requests.get(MEDIA_API, params=r_params, timeout=10).json()
-                                    r_pages = r_resp.get("query", {}).get("pages", {})
-                                    rds = []
-                                    for rpid, rpdata in r_pages.items():
-                                        for rd in rpdata.get("redirects", []):
-                                            rds.append(rd["title"])
-                                            
-                                    group_details[t] = {
-                                        "wikitext": wt or "",
-                                        "redirects": rds
-                                    }
-                                    
-                                # Fallback if seed title didn't return an image URL
-                                if not img_url:
-                                    img_url = get_image_url(group_titles[0], api_url=MEDIA_API)
-                                    
-                                st.session_state["dup_current_group"] = {
-                                    "titles": group_titles,
-                                    "img_url": img_url,
-                                    "details": group_details
-                                }
-                                st.session_state["dup_prev_winner"] = None
-                                st.session_state.pop("dup_selected_winner", None)
+                if not auto_load:
+                    st.markdown(f"### Next File: `{seed_title}`")
+                    col_p1, col_p2, _ = st.columns([1, 1, 2])
+                    
+                    with col_p1:
+                        load_clicked = st.button("📥 Load & Process", type="primary", use_container_width=True)
+                    with col_p2:
+                        if st.button("⏭️ Skip", use_container_width=True):
+                            st.session_state["dup_processed"].add(seed_title)
+                            st.rerun()
+                            
+                if load_clicked or auto_load:
+                    with st.spinner(f"Loading duplicate group for `{seed_title}`..."):
+                        params = {
+                            "action": "query",
+                            "titles": seed_title,
+                            "prop": "duplicatefiles|imageinfo",
+                            "iiprop": "url",
+                            "dflimit": "max",
+                            "dflocalonly": 1,
+                            "format": "json"
+                        }
+                        try:
+                            resp = requests.get(MEDIA_API, params=params, timeout=10).json()
+                            pages = resp.get("query", {}).get("pages", {})
+                            
+                            group_titles = [seed_title]
+                            img_url = None
+                            
+                            for pid, pdata in pages.items():
+                                if "imageinfo" in pdata:
+                                    img_url = pdata["imageinfo"][0]["url"]
+                                for df in pdata.get("duplicatefiles", []):
+                                    dup_title = f"File:{df['name'].replace('_', ' ')}"
+                                    if dup_title not in group_titles:
+                                        group_titles.append(dup_title)
+                            
+                            # If only 1 file is found, it was already resolved or isn't a local duplicate
+                            if len(group_titles) < 2:
+                                st.session_state["dup_processed"].add(seed_title)
+                                if auto_load:
+                                    st.session_state["dup_auto_load"] = True
                                 st.rerun()
-                            except Exception as e:
-                                st.error(f"Error loading group details: {e}")
-                                st.stop()
+                                
+                            # Fetch Wikitext and Incoming Redirects for every file in the group
+                            group_details = {}
+                            for t in group_titles:
+                                wt, _ = fetch_wikitext(t, api_url=MEDIA_API)
+                                
+                                r_params = {
+                                    "action": "query",
+                                    "titles": t,
+                                    "prop": "redirects",
+                                    "rdlimit": "max",
+                                    "format": "json"
+                                }
+                                r_resp = requests.get(MEDIA_API, params=r_params, timeout=10).json()
+                                r_pages = r_resp.get("query", {}).get("pages", {})
+                                rds = []
+                                for rpid, rpdata in r_pages.items():
+                                    for rd in rpdata.get("redirects", []):
+                                        rds.append(rd["title"])
+                                        
+                                group_details[t] = {
+                                    "wikitext": wt or "",
+                                    "redirects": rds
+                                }
+                                
+                            # Fallback if seed title didn't return an image URL
+                            if not img_url:
+                                img_url = get_image_url(group_titles[0], api_url=MEDIA_API)
+                                
+                            st.session_state["dup_current_group"] = {
+                                "titles": group_titles,
+                                "img_url": img_url,
+                                "details": group_details
+                            }
+                            st.session_state["dup_prev_winner"] = None
+                            st.session_state.pop("dup_selected_winner", None)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error loading group details: {e}")
+                            st.stop()
                                 
                 with col_p2:
                     if st.button("⏭️ Skip", use_container_width=True):
@@ -1823,11 +1835,12 @@ with tab_dups:
                                 
                         status_box.success(f"✅ Resolved! All duplicates now point to `{final_title}`.")
                         
-                        # Mark all titles in this group as processed and advance to the next group
+                        # Mark all titles in this group as processed and auto-load the next group
                         for t in group["titles"]:
                             st.session_state["dup_processed"].add(t)
                         st.session_state["dup_current_group"] = None
                         st.session_state.pop("dup_selected_winner", None)
+                        st.session_state["dup_auto_load"] = True
                         st.rerun()
                         
                     except Exception as e:
