@@ -6,7 +6,7 @@ import glob
 import urllib.parse
 import pandas as pd
 import concurrent.futures
-from src.mediawiki_uploader import upload_to_bahaiworks, fetch_wikitext, upload_to_mediawiki, get_csrf_token, upload_file_binary, move_page
+from src.mediawiki_uploader import upload_to_bahaiworks, fetch_wikitext, upload_to_mediawiki, get_csrf_token, upload_file_binary, move_page, delete_page, get_image_url
 from src.sitelink_manager import set_sitelink
 from src.wikibase_importer import get_or_create_author
 
@@ -38,7 +38,7 @@ with st.expander("ℹ️ Help / Instructions"):
 st.markdown("---")
 
 # --- TABS ---
-tab_create_author, tab_ac, tab_update_author, tab_maintenance, tab_media, tab_fix_pages, tab_periodicals, tab_wanted_cats, tab_5yp = st.tabs([
+tab_create_author, tab_ac, tab_update_author, tab_maintenance, tab_media, tab_fix_pages, tab_periodicals, tab_wanted_cats, tab_5yp, tab_dups = st.tabs([
     "👤 Create Author Pages", 
     "📖 AC Messages", 
     "📝 Update Author list",
@@ -47,7 +47,8 @@ tab_create_author, tab_ac, tab_update_author, tab_maintenance, tab_media, tab_fi
     "📄 Fix Page Numbering",
     "📰 Periodical Categories",
     "📅 Wanted Categories",
-    "🔄 5YP Image Migration"
+    "🔄 5YP Image Migration",
+    "🗂️ Duplicate Files"
 ])
 
 # --- Author page maintenance and exclusions ---
@@ -1549,3 +1550,251 @@ with tab_5yp:
                     
                 finally:
                     shared_session.close()
+
+# ==============================================================================
+# TAB 10: DUPLICATE FILES
+# ==============================================================================
+with tab_dups:
+    st.header("🗂️ Resolve Duplicate Files (bahai.media)")
+    st.info("Processes Special:ListDuplicatedFiles one group at a time. Deletes duplicate files and replaces them with redirects to the winning file.")
+    
+    MEDIA_API = "https://bahai.media/api.php"
+    
+    if st.button("🔍 Fetch / Refresh Duplicate Files List", type="primary"):
+        with st.spinner("Querying Special:ListDuplicatedFiles on bahai.media..."):
+            params = {
+                "action": "query",
+                "list": "querypage",
+                "qppage": "Listduplicatedfiles",
+                "qplimit": "max",
+                "format": "json"
+            }
+            try:
+                resp = requests.get(MEDIA_API, params=params, timeout=15).json()
+                results = resp.get("query", {}).get("querypage", {}).get("results", [])
+                
+                st.session_state["dup_queue"] = [r["title"] for r in results]
+                st.session_state["dup_processed"] = set()
+                st.session_state["dup_current_group"] = None
+                st.session_state["dup_winner_radio"] = None
+                st.session_state["dup_prev_winner"] = None
+            except Exception as e:
+                st.error(f"Error fetching duplicate list: {e}")
+
+    if "dup_queue" in st.session_state:
+        # Filter out any files we have already resolved or skipped in this session
+        remaining_queue = [t for t in st.session_state["dup_queue"] if t not in st.session_state["dup_processed"]]
+        
+        if not remaining_queue:
+            st.success("🎉 All duplicate files in the queue have been processed!")
+        else:
+            st.caption(f"Remaining items in raw queue: **{len(remaining_queue)}**")
+            
+            # Fetch the details for the next group if not already loaded
+            if st.session_state.get("dup_current_group") is None:
+                seed_title = remaining_queue[0]
+                with st.spinner(f"Loading duplicate group for `{seed_title}`..."):
+                    params = {
+                        "action": "query",
+                        "titles": seed_title,
+                        "prop": "duplicatefiles|imageinfo",
+                        "iiprop": "url",
+                        "dflimit": "max",
+                        "format": "json"
+                    }
+                    try:
+                        resp = requests.get(MEDIA_API, params=params, timeout=10).json()
+                        pages = resp.get("query", {}).get("pages", {})
+                        
+                        group_titles = [seed_title]
+                        img_url = None
+                        
+                        for pid, pdata in pages.items():
+                            if "imageinfo" in pdata:
+                                img_url = pdata["imageinfo"][0]["url"]
+                            for df in pdata.get("duplicatefiles", []):
+                                dup_title = f"File:{df['name'].replace('_', ' ')}"
+                                if dup_title not in group_titles:
+                                    group_titles.append(dup_title)
+                        
+                        # If only 1 file is found, it was already resolved or isn't a duplicate anymore
+                        if len(group_titles) < 2:
+                            st.session_state["dup_processed"].add(seed_title)
+                            st.rerun()
+                            
+                        # Fetch Wikitext and Incoming Redirects for every file in the group
+                        group_details = {}
+                        for t in group_titles:
+                            wt, _ = fetch_wikitext(t, api_url=MEDIA_API)
+                            
+                            r_params = {
+                                "action": "query",
+                                "titles": t,
+                                "prop": "redirects",
+                                "rdlimit": "max",
+                                "format": "json"
+                            }
+                            r_resp = requests.get(MEDIA_API, params=r_params, timeout=10).json()
+                            r_pages = r_resp.get("query", {}).get("pages", {})
+                            rds = []
+                            for rpid, rpdata in r_pages.items():
+                                for rd in rpdata.get("redirects", []):
+                                    rds.append(rd["title"])
+                                    
+                            group_details[t] = {
+                                "wikitext": wt or "",
+                                "redirects": rds
+                            }
+                            
+                        # Fallback if seed title didn't return an image URL
+                        if not img_url:
+                            img_url = get_image_url(group_titles[0], api_url=MEDIA_API)
+                            
+                        st.session_state["dup_current_group"] = {
+                            "titles": group_titles,
+                            "img_url": img_url,
+                            "details": group_details
+                        }
+                        st.session_state["dup_prev_winner"] = None
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error loading group details: {e}")
+                        st.stop()
+                        
+            group = st.session_state["dup_current_group"]
+            if group:
+                col_top1, col_top2 = st.columns([3, 1])
+                with col_top1:
+                    if group["img_url"]:
+                        st.image(group["img_url"], width=350)
+                    else:
+                        st.warning("Could not load image preview.")
+                with col_top2:
+                    if st.button("⏭️ Skip Group", use_container_width=True):
+                        for t in group["titles"]:
+                            st.session_state["dup_processed"].add(t)
+                        st.session_state["dup_current_group"] = None
+                        st.rerun()
+                        
+                st.divider()
+                st.subheader("1. File Pages Comparison")
+                
+                for t in group["titles"]:
+                    st.markdown(f"#### `{t}`")
+                    rds = group["details"][t]["redirects"]
+                    if rds:
+                        st.caption(f"**Incoming Redirects:** {', '.join([f'`{r}`' for r in rds])}")
+                    st.code(group["details"][t]["wikitext"], language="mediawiki")
+                    
+                st.divider()
+                st.subheader("2. Resolution")
+                
+                winner = st.radio("Select Winning File:", group["titles"], key="dup_winner_radio")
+                
+                # Separate base filename and extension so extension cannot be edited/broken
+                clean_winner = winner.replace("File:", "", 1)
+                base_name, ext = os.path.splitext(clean_winner)
+                
+                # Update the pre-filled inputs whenever the user switches the radio button selection
+                if st.session_state.get("dup_prev_winner") != winner:
+                    st.session_state["dup_prev_winner"] = winner
+                    st.session_state["dup_new_name_input"] = base_name
+                    st.session_state["dup_winner_wt_input"] = group["details"][winner]["wikitext"]
+                    
+                col_fn1, col_fn2 = st.columns([4, 1])
+                with col_fn1:
+                    new_base_name = st.text_input("Final Filename", key="dup_new_name_input")
+                with col_fn2:
+                    st.text_input("Extension", value=ext, disabled=True)
+                    
+                final_wikitext = st.text_area("Winning File Page Content", key="dup_winner_wt_input", height=250)
+                
+                if st.button("🚀 Resolve Duplicates", type="primary"):
+                    new_base_clean = new_base_name.strip()
+                    if not new_base_clean:
+                        st.error("Filename cannot be empty.")
+                        st.stop()
+                        
+                    final_title = f"File:{new_base_clean}{ext}"
+                    losers = [t for t in group["titles"] if t != winner]
+                    
+                    status_box = st.empty()
+                    shared_session = requests.Session()
+                    
+                    try:
+                        status_box.info("🔐 Authenticating session...")
+                        get_csrf_token(shared_session, api_url=MEDIA_API)
+                        
+                        # Step A: Move winning file if the name was changed
+                        if final_title != winner:
+                            status_box.info(f"Moving `{winner}` to `{final_title}`...")
+                            move_page(
+                                from_title=winner,
+                                to_title=final_title,
+                                reason="Renaming file during duplicate resolution",
+                                session=shared_session,
+                                api_url=MEDIA_API
+                            )
+                            
+                        # Step B: Update Winner Content (ONLY if modified)
+                        original_wt = group["details"][winner]["wikitext"]
+                        if final_wikitext.strip() != original_wt.strip():
+                            status_box.info(f"Updating content on `{final_title}`...")
+                            upload_to_mediawiki(
+                                title=final_title,
+                                content=final_wikitext,
+                                summary="Updated file information during duplicate resolution",
+                                session=shared_session,
+                                api_url=MEDIA_API
+                            )
+                            
+                        # Step C: Delete losing files and recreate as redirects
+                        redirect_text = f"#REDIRECT [[{final_title}]]"
+                        for loser in losers:
+                            status_box.info(f"Deleting duplicate `{loser}`...")
+                            delete_page(
+                                title=loser,
+                                reason=f"Duplicate of [[{final_title}]]",
+                                session=shared_session,
+                                api_url=MEDIA_API
+                            )
+                            
+                            status_box.info(f"Creating redirect on `{loser}`...")
+                            upload_to_mediawiki(
+                                title=loser,
+                                content=redirect_text,
+                                summary=f"Redirecting duplicate file to [[{final_title}]]",
+                                session=shared_session,
+                                api_url=MEDIA_API
+                            )
+                            
+                        # Step D: Fix any incoming redirects to avoid double redirects
+                        redirects_to_fix = []
+                        for loser in losers:
+                            redirects_to_fix.extend(group["details"][loser]["redirects"])
+                        if final_title != winner:
+                            redirects_to_fix.extend(group["details"][winner]["redirects"])
+                            
+                        for rd_title in set(redirects_to_fix):
+                            if rd_title != final_title:
+                                status_box.info(f"Updating incoming redirect `{rd_title}`...")
+                                upload_to_mediawiki(
+                                    title=rd_title,
+                                    content=redirect_text,
+                                    summary=f"Fixing double redirect to point to [[{final_title}]]",
+                                    session=shared_session,
+                                    api_url=MEDIA_API
+                                )
+                                
+                        status_box.success(f"✅ Resolved! All duplicates now point to `{final_title}`.")
+                        
+                        # Mark all titles in this group as processed and advance to the next group
+                        for t in group["titles"]:
+                            st.session_state["dup_processed"].add(t)
+                        st.session_state["dup_current_group"] = None
+                        st.rerun()
+                        
+                    except Exception as e:
+                        st.error(f"❌ Error during resolution: {e}")
+                    finally:
+                        shared_session.close()
