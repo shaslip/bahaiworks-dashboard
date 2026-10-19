@@ -678,3 +678,44 @@ def move_page(from_title, to_title, reason="Bot move", session=None, api_url=API
     finally:
         if local_session:
             session.close()
+
+def delete_page(title, reason="Bot delete", session=None, api_url=API_URL):
+    """
+    Deletes a page (and its associated file, if in the File namespace) in MediaWiki.
+    """
+    local_session = False
+    if session is None:
+        session = requests.Session()
+        local_session = True
+        
+    try:
+        csrf_token = get_csrf_token(session, api_url=api_url)
+        
+        data = {
+            'action': 'delete',
+            'title': title,
+            'reason': reason,
+            'token': csrf_token,
+            'format': 'json'
+        }
+        
+        for attempt in range(5):
+            response = session.post(api_url, data=data)
+            if response.status_code == 429:
+                time.sleep(5 * (attempt + 1))
+                continue
+                
+            resp_json = response.json()
+            
+            if 'error' in resp_json:
+                if resp_json['error'].get('code') == 'ratelimited':
+                    time.sleep(5 * (attempt + 1))
+                    continue
+                raise Exception(resp_json['error']['info'])
+                
+            return resp_json
+            
+        raise Exception("Exceeded maximum retries for rate limit.")
+    finally:
+        if local_session:
+            session.close()
