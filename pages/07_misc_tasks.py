@@ -1709,12 +1709,65 @@ with tab_dups:
                         st.session_state[f"dup_wt_{idx}"] = group["details"][t]["wikitext"]
                     st.session_state["dup_new_name_input"] = ""
 
-                def select_winner(selected_idx, titles):
+                def merge_winner_wikitext(winner_idx, group_data):
+                    titles = group_data["titles"]
+                    winner_title = titles[winner_idx]
+                    winner_wt = group_data["details"][winner_title]["wikitext"]
+                    
+                    # 1. Collect and sort all {{bwn|X}} numbers across all files in the group
+                    bwn_nums = set()
+                    for t in titles:
+                        wt = group_data["details"][t]["wikitext"]
+                        for m in re.findall(r'\{\{bwn\|(\d+)\}\}', wt, flags=re.IGNORECASE):
+                            bwn_nums.add(int(m))
+                            
+                    if len(bwn_nums) > 1:
+                        sorted_bwn = "<br>".join([f"{{{{bwn|{n}}}}}" for n in sorted(bwn_nums)])
+                        winner_wt = re.sub(
+                            r'(\|\s*source\s*=\s*)\{\{bwn\|.*?\}\}(?:<br>\{\{bwn\|.*?\}\})*',
+                            lambda m: f"{m.group(1)}{sorted_bwn}",
+                            winner_wt,
+                            flags=re.IGNORECASE
+                        )
+                        
+                    # 2. Remove file-extension categories (JPG files, PNG files, etc.) and merge unique categories from losers
+                    filetype_cat_pattern = re.compile(
+                        r'^\[\[Category:\s*(?:JPG|JPEG|PNG|GIF|PDF|SVG|TIFF|WEBP)\s+files\s*(?:\|.*?)?\]\]\s*\n?',
+                        flags=re.IGNORECASE | re.MULTILINE
+                    )
+                    winner_wt = filetype_cat_pattern.sub('', winner_wt).rstrip()
+                    
+                    existing_cats_lower = {
+                        c.lower() for c in re.findall(r'\[\[Category:.*?\]\]', winner_wt, flags=re.IGNORECASE)
+                    }
+                    
+                    extra_cats = []
+                    for idx, t in enumerate(titles):
+                        if idx == winner_idx:
+                            continue
+                        loser_wt = filetype_cat_pattern.sub('', group_data["details"][t]["wikitext"])
+                        for cat in re.findall(r'\[\[Category:.*?\]\]', loser_wt, flags=re.IGNORECASE):
+                            if cat.lower() not in existing_cats_lower:
+                                existing_cats_lower.add(cat.lower())
+                                extra_cats.append(cat)
+                                
+                    if extra_cats:
+                        winner_wt += "\n" + "\n".join(extra_cats)
+                        
+                    return winner_wt
+
+                def select_winner(selected_idx, group_data):
+                    titles = group_data["titles"]
+                    # Reset all text areas to original first
+                    for idx, t in enumerate(titles):
+                        st.session_state[f"dup_wt_{idx}"] = group_data["details"][t]["wikitext"]
+                        
                     if st.session_state[f"dup_chk_{selected_idx}"]:
                         st.session_state["dup_selected_winner"] = titles[selected_idx]
                         for idx in range(len(titles)):
                             if idx != selected_idx:
                                 st.session_state[f"dup_chk_{idx}"] = False
+                        st.session_state[f"dup_wt_{selected_idx}"] = merge_winner_wikitext(selected_idx, group_data)
                     else:
                         st.session_state["dup_selected_winner"] = None
 
@@ -1727,7 +1780,7 @@ with tab_dups:
                             "Mark as winner",
                             key=f"dup_chk_{idx}",
                             on_change=select_winner,
-                            args=(idx, group["titles"])
+                            args=(idx, group)
                         )
                     rds = group["details"][t]["redirects"]
                     if rds:
