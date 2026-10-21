@@ -689,6 +689,7 @@ with tab3:
             else:
                 os.makedirs(wiki_collage_dir, exist_ok=True)
                 crop_log = st.container(border=True)
+                st.session_state["failed_wiki_crops"] = []
 
                 for item in selected_cat_items:
                     fname = item["filename"]
@@ -709,7 +710,16 @@ with tab3:
                     crops = crop_collage_images(pil_img, expected_count=wiki_expected_subimages)
 
                     if len(crops) <= 1:
-                        crop_log.warning(f"⚠️ Only detected {len(crops)} region in `{fname}` — skipping split.")
+                        crop_log.warning(f"⚠️ Only detected {len(crops)} region in `{fname}` — queued below for manual copy save.")
+                        st.session_state["failed_wiki_crops"].append({
+                            "filename": fname,
+                            "base_name": base_name,
+                            "out_ext": out_ext,
+                            "is_gif": is_gif,
+                            "wikitext": wikitext,
+                            "img_bytes": img_bytes,
+                            "thumb_url": item["thumb_url"],
+                        })
                         continue
 
                     if is_gif:
@@ -737,3 +747,67 @@ with tab3:
                         saved_names.append(out_img_name)
 
                     crop_log.success(f"✅ Split `{fname}` into **{len(crops)}** images: `{', '.join(saved_names)}`")
+
+        failed_crops = st.session_state.get("failed_wiki_crops", [])
+        if failed_crops:
+            st.divider()
+            st.subheader("⚠️ Manual Fallback: Save Uncropped Copies")
+            st.write("Auto-crop could not detect multiple regions for the following image(s). Choose how many copies to save for manual cropping:")
+
+            remaining_failed = []
+            for f_item in failed_crops:
+                fname = f_item["filename"]
+                with st.container(border=True):
+                    f_col1, f_col2, f_col3 = st.columns([1, 2, 1])
+                    with f_col1:
+                        st.image(f_item["thumb_url"], use_container_width=True)
+                    with f_col2:
+                        st.markdown(f"**`{fname}`**")
+                        num_copies = st.number_input(
+                            "Number of regions (files to create)",
+                            min_value=2,
+                            max_value=12,
+                            value=max(2, wiki_expected_subimages),
+                            step=1,
+                            key=f"manual_count_{fname}",
+                        )
+                    with f_col3:
+                        st.write("")
+                        st.write("")
+                        save_clicked = st.button("💾 Save Copies", key=f"save_manual_{fname}", type="primary")
+
+                    if save_clicked:
+                        os.makedirs(wiki_collage_dir, exist_ok=True)
+                        base_name = f_item["base_name"]
+                        out_ext = f_item["out_ext"]
+                        wikitext = f_item["wikitext"]
+                        pil_img = Image.open(io.BytesIO(f_item["img_bytes"])).convert("RGB")
+
+                        saved_names = []
+                        for idx in range(num_copies):
+                            out_base = base_name if idx == 0 else f"{base_name}-{idx}"
+                            out_img_name = f"{out_base}{out_ext}"
+                            out_img_path = os.path.join(wiki_collage_dir, out_img_name)
+                            out_txt_path = os.path.join(wiki_collage_dir, f"{out_base}.txt")
+
+                            if f_item["is_gif"]:
+                                pil_img.save(out_img_path, format="PNG")
+                            else:
+                                with open(out_img_path, "wb") as img_f:
+                                    img_f.write(f_item["img_bytes"])
+
+                            with open(out_txt_path, "w", encoding="utf-8") as txt_f:
+                                txt_f.write(wikitext)
+
+                            saved_names.append(out_img_name)
+
+                        if f_item["is_gif"]:
+                            st.warning(
+                                f"⚠️ `{fname}` is a `.gif` and was saved as `.png` (`{base_name}.png`). "
+                                f"Manual deletion of the original `.gif` on the wiki is required."
+                            )
+                        st.success(f"✅ Saved **{num_copies}** uncropped copies: `{', '.join(saved_names)}`")
+                    else:
+                        remaining_failed.append(f_item)
+
+            st.session_state["failed_wiki_crops"] = remaining_failed
