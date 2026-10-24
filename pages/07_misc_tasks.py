@@ -38,7 +38,7 @@ with st.expander("ℹ️ Help / Instructions"):
 st.markdown("---")
 
 # --- TABS ---
-tab_create_author, tab_ac, tab_update_author, tab_maintenance, tab_media, tab_fix_pages, tab_periodicals, tab_wanted_cats, tab_5yp, tab_dups = st.tabs([
+tab_create_author, tab_ac, tab_update_author, tab_maintenance, tab_media, tab_fix_pages, tab_periodicals, tab_wanted_cats, tab_5yp, tab_dups, tab_double_redirects = st.tabs([
     "👤 Create Author Pages", 
     "📖 AC Messages", 
     "📝 Update Author list",
@@ -48,7 +48,8 @@ tab_create_author, tab_ac, tab_update_author, tab_maintenance, tab_media, tab_fi
     "📰 Periodical Categories",
     "📅 Wanted Categories",
     "🔄 5YP Image Migration",
-    "🗂️ Duplicate Files"
+    "🗂️ Duplicate Files",
+    "🔀 Double Redirects"
 ])
 
 # --- Author page maintenance and exclusions ---
@@ -1929,3 +1930,158 @@ with tab_dups:
                         st.error(f"❌ Error during resolution: {e}")
                     finally:
                         shared_session.close()
+
+# ==============================================================================
+# TAB 11: DOUBLE REDIRECTS
+# ==============================================================================
+with tab_double_redirects:
+    st.header("🔀 Fix Double Redirects")
+    st.info("Scans Special:DoubleRedirects on the selected wiki and updates them to point directly to the final target page.")
+
+    dr_wiki = st.radio("Target Wiki", ["bahai.media", "bahai.works"], index=0, key="dr_wiki_radio")
+    DR_API = "https://bahai.media/api.php" if dr_wiki == "bahai.media" else "https://bahai.works/api.php"
+
+    if st.button("🔍 Scan Double Redirects", type="primary"):
+        with st.spinner(f"Scanning {dr_wiki} for double redirects..."):
+            params = {
+                "action": "query",
+                "list": "querypage",
+                "qppage": "DoubleRedirects",
+                "qplimit": "max",
+                "format": "json"
+            }
+            try:
+                resp = requests.get(DR_API, params=params, timeout=15).json()
+                results = resp.get("query", {}).get("querypage", {}).get("results", [])
+                
+                if not results:
+                    st.session_state["dr_list"] = []
+                else:
+                    titles = [item["title"] for item in results]
+                    resolved_list = []
+                    
+                    # Resolve redirect chains in batches of 50 using the API's redirects=1 parameter
+                    for i in range(0, len(titles), 50):
+                        chunk = titles[i:i+50]
+                        r_params = {
+                            "action": "query",
+                            "titles": "|".join(chunk),
+                            "redirects": 1,
+                            "format": "json"
+                        }
+                        r_resp = requests.get(DR_API, params=r_params, timeout=15).json()
+                        redirects_data = r_resp.get("query", {}).get("redirects", [])
+                        
+                        # Build a map of step-by-step redirects: {from_title: (to_title, fragment)}
+                        step_map = {}
+                        for r in redirects_data:
+                            step_map[r["from"]] = (r["to"], r.get("tofragment", ""))
+                            
+                        # Trace each starting title to its final destination
+                        for start_title in chunk:
+                            if start_title not in step_map:
+                                continue
+                                
+                            first_target = step_map[start_title][0]
+                            curr = start_title
+                            frag = ""
+                            visited = {curr}
+                            
+                            while curr in step_map:
+                                next_node, next_frag = step_map[curr]
+                                if next_frag:
+                                    frag = next_frag
+                                if next_node in visited:
+                                    break  # Prevent infinite loops on circular redirects
+                                visited.add(next_node)
+                                curr = next_node
+                                
+                            final_target = f"{curr}#{frag}" if frag else curr
+                            
+                            if final_target != start_title and final_target != first_target:
+                                resolved_list.append({
+                                    "Redirect Page": start_title,
+                                    "Current Target": first_target,
+                                    "Final Target": final_target
+                                })
+                                
+                    st.session_state["dr_list"] = resolved_list
+                    st.session_state["dr_target_wiki"] = dr_wiki
+                    st.session_state["dr_target_api"] = DR_API
+            except Exception as e:
+                st.error(f"Error scanning double redirects: {e}")
+
+    if "dr_list" in st.session_state:
+        dr_list = st.session_state["dr_list"]
+        if not dr_list:
+            st.success("🎉 No double redirects found!")
+        else:
+            st.write(f"Found **{len(dr_list)}** double redirect(s) on **{st.session_state.get('dr_target_wiki')}**:")
+            st.dataframe(pd.DataFrame(dr_list), width='stretch', hide_index=True)
+
+            if st.button("🚀 Fix All Double Redirects", type="primary"):
+                active_wiki = st.session_state["dr_target_wiki"]
+                active_api = st.session_state["dr_target_api"]
+                
+                progress_bar = st.progress(0)
+                status_box = st.empty()
+                shared_session = requests.Session()
+                
+                try:
+                    status_box.info("🔐 Authenticating session...")
+                    get_csrf_token(shared_session, api_url=active_api)
+                    
+                    success_count = 0
+                    for i, item in enumerate(dr_list):
+                        page_title = item["Redirect Page"]
+                        final_target = item["Final Target"]
+                        
+                        status_box.write(f"Fixing ({i+1}/{len(dr_list)}): `{page_title}` ➔ `{final_target}`...")
+                        
+                        try:
+                            old_text, _ = fetch_wikitext(page_title, session=shared_session, api_url=active_api)
+                            
+                            # Replace target inside existing #REDIRECT [[...]] to preserve any categories/templates
+                            if old_text and re.search(r'#REDIRECT\s*\[\[.*?\]\]', old_text, flags=re.IGNORECASE):
+                                new_text = re.sub(
+                                    r'(#REDIRECT\s*\[\[).*?(\]\])',
+                                    lambda m: f"{m.group(1)}{final_target}{m.group(2)}",
+                                    old_text,
+                                    count=1,
+                                    flags=re.IGNORECASE
+                                )
+                            else:
+                                new_text = f"#REDIRECT [[{final_target}]]"
+                                
+                            summary = f"Bot: Fixing double redirect to [[{final_target}]]"
+                            
+                            if active_wiki == "bahai.works":
+                                upload_to_bahaiworks(
+                                    title=page_title,
+                                    content=new_text,
+                                    summary=summary,
+                                    check_exists=False,
+                                    session=shared_session
+                                )
+                            else:
+                                upload_to_mediawiki(
+                                    title=page_title,
+                                    content=new_text,
+                                    summary=summary,
+                                    api_url=active_api,
+                                    session=shared_session
+                                )
+                            success_count += 1
+                        except Exception as e:
+                            st.error(f"Error fixing {page_title}: {e}")
+                            
+                        progress_bar.progress((i + 1) / len(dr_list))
+                        
+                    status_box.success(f"✅ Fixed {success_count}/{len(dr_list)} double redirects!")
+                    if success_count > 0:
+                        st.balloons()
+                    del st.session_state["dr_list"]
+                except Exception as e:
+                    st.error(f"Authentication or execution failed: {e}")
+                finally:
+                    shared_session.close()
