@@ -97,6 +97,15 @@ def apply_final_formatting(text, title, year):
 
 st.set_page_config(page_title="Book Re-Proofreader", page_icon="📚", layout="wide")
 
+st.markdown("""
+    <style>
+        [data-testid="stAppViewContainer"],
+        [data-testid="stMain"] {
+            overflow-y: auto !important;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
 # ==============================================================================
 # 1. QUEUE & STATE MANAGEMENT
 # ==============================================================================
