@@ -509,53 +509,65 @@ if execution_mode == "All Books (Production)":
                 from multiprocessing import Manager
                 os.environ["PYTHONPATH"] = project_root
                 
-                with Manager() as manager:
-                    shared_logs = manager.dict()
-                    for i in range(len(batches)): shared_logs[i] = manager.list()
-                    
-                    executor = concurrent.futures.ProcessPoolExecutor(max_workers=num_batches)
-                    futures = []
-                    for batch_id, batch_pages in enumerate(batches):
-                        if not batch_pages: continue
-                        future = executor.submit(
-                            process_pdf_batch, batch_id, batch_pages, local_pdf_path, ocr_strategy, 
-                            master_pdf_filename, pdf_dir, shared_logs[batch_id]
-                        )
-                        futures.append(future)
-                        
-                    # Restored live visibility loop with 429 monitoring
+                for attempt in range(2):
                     fatal_error = False
-                    while True:
-                        all_done = True
-                        for batch_id, future in enumerate(futures):
-                            current_logs = list(shared_logs.get(batch_id, []))
-                            if current_logs and batch_id in batch_placeholders:
-                                batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
-                                
-                                # Check for 429 / Rate Limit
-                                for log_msg in current_logs:
-                                    if "FATAL_RATE_LIMIT" in log_msg:
-                                        fatal_error = True
-                                        break
-                                        
-                            if fatal_error:
+                    with Manager() as manager:
+                        shared_logs = manager.dict()
+                        for i in range(len(batches)): shared_logs[i] = manager.list()
+                        
+                        executor = concurrent.futures.ProcessPoolExecutor(max_workers=num_batches)
+                        futures = []
+                        for batch_id, batch_pages in enumerate(batches):
+                            if not batch_pages: continue
+                            future = executor.submit(
+                                process_pdf_batch, batch_id, batch_pages, local_pdf_path, ocr_strategy, 
+                                master_pdf_filename, pdf_dir, shared_logs[batch_id]
+                            )
+                            futures.append(future)
+                            
+                        # Restored live visibility loop with 429 monitoring
+                        while True:
+                            all_done = True
+                            for batch_id, future in enumerate(futures):
+                                current_logs = list(shared_logs.get(batch_id, []))
+                                if current_logs and batch_id in batch_placeholders:
+                                    batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
+                                    
+                                    # Check for 429 / Rate Limit
+                                    for log_msg in current_logs:
+                                        if "FATAL_RATE_LIMIT" in log_msg:
+                                            fatal_error = True
+                                            break
+                                            
+                                if fatal_error:
+                                    break
+                                    
+                                if not future.done():
+                                    all_done = False
+                                    
+                            if fatal_error or all_done:
                                 break
-                                
-                            if not future.done():
-                                all_done = False
-                                
-                        if fatal_error or all_done:
-                            break
-                        time.sleep(1)
+                            time.sleep(1)
+                            
+                        executor.shutdown(wait=False, cancel_futures=True)
                         
                     if fatal_error:
-                        executor.shutdown(wait=False, cancel_futures=True)
-                        log_container.error("❌ FATAL: 429 Rate Limit or Quota Error detected. Halting execution to prevent raw text saving.")
-                        queue_data[target_book]["status"] = "ERROR: 429 Rate Limit"
-                        save_queue(queue_data)
-                        st.stop()
-                        
-                    executor.shutdown(wait=False, cancel_futures=True)
+                        if attempt == 0:
+                            log_container.warning("⚠️ 429 Rate Limit or Quota Error detected. Sleeping for 15 minutes before retrying once...")
+                            retry_countdown = log_container.empty()
+                            for remaining in range(900, 0, -1):
+                                mins, secs = divmod(remaining, 60)
+                                retry_countdown.code(f"Retrying OCR in: {mins:02d}:{secs:02d}")
+                                time.sleep(1)
+                            retry_countdown.empty()
+                            log_container.info("🔄 Retrying OCR batch processing...")
+                        else:
+                            log_container.error("❌ FATAL: 429 Rate Limit or Quota Error occurred a second time. Halting execution.")
+                            queue_data[target_book]["status"] = "ERROR: 429 Rate Limit"
+                            save_queue(queue_data)
+                            st.stop()
+                    else:
+                        break
                     
                 log_container.write("🔄 Assembling pages into Master JSON...")
                 master_data = {}
