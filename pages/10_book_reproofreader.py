@@ -767,19 +767,19 @@ if not state.get("subpages"):
     st.stop() # Halts all execution until authorized
 
 # Display Map
-st.subheader(f"📖 Map: {target_book}")
-map_display = []
-for sp in state["subpages"]:
-    pdf_pages = state["route_map"].get(sp, {}).get("pdf_pages", [])
-    page_labels = [str(p["pdf_num"]) for p in pdf_pages]
-    needs_split = state["route_map"].get(sp, {}).get("needs_split", False)
-    
-    map_display.append({
-        "Wiki Subpage": sp,
-        "Mapped PDF Pages": ", ".join(page_labels) if page_labels else "None",
-        "Needs Split Logic": "Yes" if needs_split else "No"
-    })
-st.dataframe(map_display, width='stretch', hide_index=True)
+with st.expander(f"📖 Map: {target_book} ({len(state['subpages'])} subpages)", expanded=False):
+    map_display = []
+    for sp in state["subpages"]:
+        pdf_pages = state["route_map"].get(sp, {}).get("pdf_pages", [])
+        page_labels = [str(p["pdf_num"]) for p in pdf_pages]
+        needs_split = state["route_map"].get(sp, {}).get("needs_split", False)
+        
+        map_display.append({
+            "Wiki Subpage": sp,
+            "Mapped PDF Pages": ", ".join(page_labels) if page_labels else "None",
+            "Needs Split Logic": "Yes" if needs_split else "No"
+        })
+    st.dataframe(map_display, width='stretch', height=250, hide_index=True)
 
 # ==============================================================================
 # STEP 2: MASTER JSON GENERATION
