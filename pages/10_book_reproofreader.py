@@ -381,12 +381,12 @@ queue_data = load_queue()
 col_input, col_add_btn = st.columns([4, 1])
 with col_input:
     new_book_input = st.text_input(
-        "Add Book to Queue (Paste Bahai.works URL or Wiki Title)", 
+        "Load Book (Paste Bahai.works URL or Wiki Title)", 
         placeholder="e.g., https://bahai.works/The_B%C3%A1b_(Balyuzi) or The Báb (Balyuzi)",
         label_visibility="collapsed"
     )
 with col_add_btn:
-    if st.button("➕ Add to Queue", width='stretch'):
+    if st.button("🎯 Load Book", width='stretch'):
         if new_book_input.strip():
             raw_val = new_book_input.strip()
             if "bahai.works/" in raw_val:
@@ -396,11 +396,9 @@ with col_add_btn:
             if clean_title not in queue_data:
                 queue_data[clean_title] = {"status": "PENDING"}
                 save_queue(queue_data)
-                st.success(f"Added '{clean_title}' to queue!")
-                time.sleep(0.5)
-                st.rerun()
-            else:
-                st.warning(f"'{clean_title}' is already in the queue.")
+                
+            st.session_state["selected_book"] = clean_title
+            st.rerun()
 
 if queue_data:
     with st.expander("📋 Processing Queue", expanded=False):
@@ -713,7 +711,9 @@ st.divider()
 # --- Select Any Book & Reset State ---
 col1, col2 = st.columns([3, 1])
 with col1:
-    target_book = st.selectbox("Select Target Book (All Statuses Available)", all_books)
+    if "selected_book" not in st.session_state or st.session_state["selected_book"] not in all_books:
+        st.session_state["selected_book"] = all_books[0]
+    target_book = st.selectbox("Select Target Book (All Statuses Available)", all_books, key="selected_book")
 with col2:
     st.write("")
     st.write("")
