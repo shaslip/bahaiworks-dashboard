@@ -688,14 +688,34 @@ if execution_mode == "All Books (Production)":
                         with open(ch_file_path, "r", encoding="utf-8") as f:
                             final_wikitext = f.read()
                         
-                        res = upload_to_bahaiworks(sp, final_wikitext, "Bot: Parallel Batch Reproofread", session=session)
-                        if res.get('edit', {}).get('result') == 'Success':
-                            if "uploaded_subpages" not in state: state["uploaded_subpages"] = []
-                            if sp not in state["uploaded_subpages"]:
-                                state["uploaded_subpages"].append(sp)
-                        else:
-                            log_container.error(f"❌ Upload failed for {sp}: {res}")
-                            st.stop()
+                        upload_success = False
+                        for attempt in range(2):
+                            try:
+                                get_csrf_token(session)
+                                res = upload_to_bahaiworks(sp, final_wikitext, "Bot: Parallel Batch Reproofread", session=session)
+                            except Exception as e:
+                                res = {"error": str(e)}
+                                
+                            if res.get('edit', {}).get('result') == 'Success':
+                                upload_success = True
+                                if "uploaded_subpages" not in state: state["uploaded_subpages"] = []
+                                if sp not in state["uploaded_subpages"]:
+                                    state["uploaded_subpages"].append(sp)
+                                break
+                            else:
+                                if attempt == 0:
+                                    log_container.warning(f"⚠️ Upload failed for {sp}: {res}. Sleeping for 15 minutes before retrying once...")
+                                    retry_countdown = log_container.empty()
+                                    for remaining in range(900, 0, -1):
+                                        mins, secs = divmod(remaining, 60)
+                                        retry_countdown.code(f"Retrying upload in: {mins:02d}:{secs:02d}")
+                                        time.sleep(1)
+                                    retry_countdown.empty()
+                                else:
+                                    log_container.error(f"❌ Upload failed a second time for {sp}: {res}. Halting pipeline.")
+                                    queue_data[target_book]["status"] = "ERROR: Upload Failed"
+                                    save_queue(queue_data)
+                                    st.stop()
                 
                 save_book_state(safe_title, state)
                 queue_data[target_book]["status"] = "COMPLETED"
