@@ -16,7 +16,7 @@ from google.generativeai.types import HarmCategory, HarmBlockThreshold
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
 # Your specific model
-MODEL_NAME = 'gemini-3-flash-preview'
+MODEL_NAME = 'gemini-3.8-flash'
 
 def check_fatal_rate_limit(e):
     """Helper to detect 429 Rate Limit or Quota errors and raise them immediately."""
