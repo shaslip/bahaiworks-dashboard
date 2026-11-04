@@ -483,21 +483,28 @@ if execution_mode == "All Books (Production)":
             state = load_book_state(safe_title)
             
             # --- AUTO STEP 1: Generate Map ---
-            log_container.write(f"🔍 Generating Chapter Map for {target_book}...")
-            subpages = get_all_subpages(target_book, session)
-            route_map, master_pdf_filename, wikitext_cache, ordered_subpages = build_sequential_route_map(subpages, session, input_folder)
-            
-            if not route_map or not master_pdf_filename:
-                log_container.error(f"❌ Could not find PDF references for {target_book}. Marking ERROR and skipping.")
-                queue_data[target_book]["status"] = "ERROR: No Map"
-                save_queue(queue_data)
-                continue
+            if not state.get("subpages") or not state.get("route_map") or not state.get("master_pdf"):
+                log_container.write(f"🔍 Generating Chapter Map for {target_book}...")
+                subpages = get_all_subpages(target_book, session)
+                route_map, master_pdf_filename, wikitext_cache, ordered_subpages = build_sequential_route_map(subpages, session, input_folder)
                 
-            state["subpages"] = ordered_subpages
-            state["route_map"] = route_map
-            state["master_pdf"] = master_pdf_filename
-            state["wikitext_cache"] = wikitext_cache
-            save_book_state(safe_title, state)
+                if not route_map or not master_pdf_filename:
+                    log_container.error(f"❌ Could not find PDF references for {target_book}. Marking ERROR and skipping.")
+                    queue_data[target_book]["status"] = "ERROR: No Map"
+                    save_queue(queue_data)
+                    continue
+                    
+                state["subpages"] = ordered_subpages
+                state["route_map"] = route_map
+                state["master_pdf"] = master_pdf_filename
+                state["wikitext_cache"] = wikitext_cache
+                save_book_state(safe_title, state)
+            else:
+                log_container.write(f"🗺️ Loaded existing Chapter Map for {target_book} from cache.")
+                ordered_subpages = state["subpages"]
+                route_map = state["route_map"]
+                master_pdf_filename = state["master_pdf"]
+                wikitext_cache = state.get("wikitext_cache", {})
             
             # --- AUTO STEP 2: Generate Master JSON ---
             local_pdf_path = find_local_pdf(master_pdf_filename, input_folder)
