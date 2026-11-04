@@ -438,7 +438,7 @@ if execution_mode == "All Books (Production)":
     start_idx = pending_books.index(starting_book)
     target_pending_books = pending_books[start_idx:]
         
-    st.info(f"Found {len(target_pending_books)} book(s) to process starting from `{starting_book}`. The script will process Steps 1-3, auto-upload if no splits are needed, and sleep for 2 hours between books.")
+    st.info(f"Found {len(target_pending_books)} book(s) to process starting from `{starting_book}`. The script will process Steps 1-3, auto-upload if no splits are needed, and sleep for 5 minutes between books.")
     
     col_start, col_stop = st.columns([1, 1])
     with col_start:
@@ -699,9 +699,9 @@ if execution_mode == "All Books (Production)":
             
             # Sleep logic between books
             if idx < len(target_pending_books) - 1:
-                log_container.info("⏳ Sleeping for 2 hours before processing the next book...")
+                log_container.info("⏳ Sleeping for 5 minutes before processing the next book...")
                 countdown = st.empty()
-                for remaining in range(7200, 0, -1):
+                for remaining in range(300, 0, -1):
                     mins, secs = divmod(remaining, 60)
                     hours, mins = divmod(mins, 60)
                     countdown.code(f"Next book starts in: {hours:02d}:{mins:02d}:{secs:02d}")
