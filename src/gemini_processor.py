@@ -19,10 +19,20 @@ genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 MODEL_NAME = 'gemini-3.8-flash'
 
 def check_fatal_rate_limit(e):
-    """Helper to detect 429 Rate Limit or Quota errors and raise them immediately."""
+    """Helper to detect 429 Rate Limit, Resource Exhausted, or Quota errors and raise them immediately."""
     error_msg = str(e).lower()
-    if "429" in error_msg or "quota" in error_msg or "rate limit" in error_msg:
+    if any(k in error_msg for k in ["429", "quota", "rate limit", "resource_exhausted", "resource exhausted", " fatal_"]):
         raise Exception(f"FATAL_RATE_LIMIT: {str(e)}")
+
+def is_network_error(e):
+    """Detects transient network, timeout, or 5xx server errors."""
+    error_msg = str(e).lower()
+    net_keywords = [
+        "deadline", "timeout", "timed out", "503", "504", "500", "502",
+        "unavailable", "connection", "reset by peer", "broken pipe",
+        "transport", "socket", "eof", "dns", "name resolution"
+    ]
+    return any(k in error_msg for k in net_keywords)
 
 def parse_range_string(range_str):
     pages = []
@@ -223,15 +233,24 @@ def transcribe_with_document_ai(image):
         # Configure the process request
         request = documentai.ProcessRequest(name=name, raw_document=raw_document)
 
-        # Process the document
-        result = client.process_document(request=request, timeout=120)
-        
-        # Return the raw text
-        return result.document.text
+        # Process the document with network retry
+        max_net_retries = 4
+        for attempt in range(max_net_retries):
+            try:
+                result = client.process_document(request=request, timeout=120)
+                return result.document.text
+            except Exception as e:
+                check_fatal_rate_limit(e)
+                if is_network_error(e):
+                    if attempt < max_net_retries - 1:
+                        time.sleep(15)
+                        continue
+                    raise Exception(f"FATAL_RATE_LIMIT: Network connection dead during DocAI: {e}")
+                raise e
 
     except Exception as e:
         check_fatal_rate_limit(e)
-        return f"_ERROR: {str(e)}"
+        return f"DOCAI_ERROR: {str(e)}"
 
 def reformat_raw_text(raw_text):
     """
@@ -265,26 +284,32 @@ def reformat_raw_text(raw_text):
     RAW TEXT START:
     """
     
-    try:
-        # We append the text to the prompt
-        full_prompt = prompt + f"\n{raw_text}\nRAW TEXT END"
-        
-        response = model.generate_content(
-            full_prompt,
-            request_options={"timeout": 120}
-        )
-        
-        # Throw the clean error flag so batch_worker can trigger the DocAI fallback
-        if response.prompt_feedback.block_reason:
-             return "FORMATTING_ERROR" 
-             
-        text = response.text.strip()
-        text = re.sub(r'^[ \t]+', '', text, flags=re.MULTILINE)
-        return text
-        
-    except Exception as e:
-        check_fatal_rate_limit(e)
-        return "FORMATTING_ERROR"
+    full_prompt = prompt + f"\n{raw_text}\nRAW TEXT END"
+    max_net_retries = 4
+    
+    for attempt in range(max_net_retries):
+        try:
+            response = model.generate_content(
+                full_prompt,
+                request_options={"timeout": 120}
+            )
+            
+            # Throw the clean error flag so batch_worker can trigger the DocAI fallback
+            if response.prompt_feedback.block_reason:
+                 return "FORMATTING_ERROR" 
+                 
+            text = response.text.strip()
+            text = re.sub(r'^[ \t]+', '', text, flags=re.MULTILINE)
+            return text
+            
+        except Exception as e:
+            check_fatal_rate_limit(e)
+            if is_network_error(e):
+                if attempt < max_net_retries - 1:
+                    time.sleep(15)
+                    continue
+                raise Exception(f"FATAL_RATE_LIMIT: Network connection dead during reformat: {e}")
+            return "FORMATTING_ERROR"
 
 def proofread_page(image):
     """
@@ -344,9 +369,9 @@ def proofread_with_formatting(image):
     7.  Output ONLY the clean wikitext with no conversational filler.
     """
     
-    max_retries = 1
+    max_retries = 4
     
-    for attempt in range(max_retries + 1):
+    for attempt in range(max_retries):
         try:
             # Generate content
             response = model.generate_content(
@@ -371,10 +396,12 @@ def proofread_with_formatting(image):
         except Exception as e:
             check_fatal_rate_limit(e)
             print(f"Attempt {attempt + 1} Error: {str(e)}")
-            if attempt < max_retries:
-                time.sleep(15)
-            else:
-                return f"GEMINI_ERROR: {str(e)}"
+            if is_network_error(e):
+                if attempt < max_retries - 1:
+                    time.sleep(15)
+                    continue
+                raise Exception(f"FATAL_RATE_LIMIT: Network connection dead during Gemini OCR: {e}")
+            return f"GEMINI_ERROR: {str(e)}"
 
 def get_chapter_split_indices(page_text, target_chapter, unmapped_chapters, custom_instruction):
     """
