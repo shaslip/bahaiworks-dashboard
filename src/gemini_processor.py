@@ -245,16 +245,19 @@ def reformat_raw_text(raw_text):
     model = genai.GenerativeModel(MODEL_NAME)
     
     prompt = """
-    You are a MediaWiki formatting engine. 
-    I will provide raw OCR text. Your job is to format it for a Baha'i archive.
+    You are a strict MediaWiki formatting engine. 
+    I will provide raw OCR text. Your job is to format it into valid MediaWiki wikitext for a Baha'i archive.
     
     RULES:
     1.  **Do NOT rewrite content.** Only format it.
     2.  **Remove** page headers, running heads, and page numbers.
     3.  **ORTHOGRAPHY:** You MUST match the curly apostrophe (’) for Baha'i terms:
-        - "Bahá’í", "Bahá’u’lláh", "‘Abdu’l-Bahá" (match case of origional document)
-    4.  **FORMATTING:**
-        - Use `== Header ==` for section headers.
+        - "Bahá’í", "Bahá’u’lláh", "‘Abdu’l-Bahá" (match case of original document)
+    4.  **STRICT MEDIAWIKI FORMATTING (NO MARKDOWN):**
+        - Format strictly for MediaWiki. HTML tags supported by MediaWiki (such as `<div>`, `<center>`, `<blockquote>`, `<br>`) are allowed when appropriate.
+        - Use `== Header ==` for section headers (NEVER use Markdown `#` headers).
+        - Use `'''bold'''` for bold and `''italic''` for italics (NEVER use Markdown asterisks `*` or `**`, or underscores `_`).
+        - Do NOT wrap your output in Markdown code blocks (no ```mediawiki or ```).
     5.  Preserve paragraph breaks.
     6.  **BLANK PAGES:** If the text provided contains no meaningful content, or if after removing headers/page numbers there is no main content left, return ONLY the string: --BLANK--
     7.  **NO CONVERSATION:** Output ONLY the formatted wikitext or --BLANK--. Do not include any conversational filler like "Here is the text" or "I am ready".
@@ -329,15 +332,16 @@ def proofread_with_formatting(image):
         -   Write "Bahá’í" (Not Bahá'í)
         -   Write "Bahá’u’lláh" (Not Bahá'u'lláh)
         -   Write "‘Abdu’l-Bahá" (Not 'Abdu'l-Bahá)
-    5.  **FORMATTING:**
+    5.  **STRICT MEDIAWIKI FORMATTING (NO MARKDOWN):**
+        -   Output MUST be valid MediaWiki syntax, NOT Markdown.
+        -   NEVER use Markdown syntax: do NOT use `**bold**` or `*italic*`, do NOT use `#` for headers, and do NOT wrap the output in ``` code fences.
         -   If you see a **Header** (that is part of the text, not a running head), use `== Header ==`.
         -   If you see a **Table**, use `{| class="wikitable" ... |}`.
-        -   If you see **Bold** or *Italic*, use `'''bold'''` and `''italic''`.
-        -   For other cases, use standard MediaWiki formatting where appropriate.
+        -   If you see **Bold** or *Italic*, use MediaWiki apostrophes: `'''bold'''` and `''italic''`.
+        -   Standard HTML tags supported by MediaWiki (such as `<div>`, `<center>`, `<blockquote>`, `<br>`) are allowed where appropriate for layout/alignment, but `<poem>` tags are not supported.
         -   If the text has an OBVIOUS typo (e.g. "sentance"), transcribe it as: {{sic|sentance|sentence}}
-        -   Note: <poem> tags are not supported.
     6.  Paragraph breaks require an extra return.
-    7.  Output ONLY the clean wikitext.
+    7.  Output ONLY the clean wikitext with no conversational filler.
     """
     
     max_retries = 1
