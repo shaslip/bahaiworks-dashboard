@@ -9,6 +9,7 @@ import fitz  # PyMuPDF
 import concurrent.futures
 import math
 import multiprocessing
+from urllib.parse import unquote
 
 # --- Force spawn to prevent gRPC crashes in background processes ---
 try:
@@ -377,6 +378,30 @@ except Exception as e:
 # --- Master Queue Display ---
 queue_data = load_queue()
 
+col_input, col_add_btn = st.columns([4, 1])
+with col_input:
+    new_book_input = st.text_input(
+        "Add Book to Queue (Paste Bahai.works URL or Wiki Title)", 
+        placeholder="e.g., https://bahai.works/The_B%C3%A1b_(Balyuzi) or The Báb (Balyuzi)",
+        label_visibility="collapsed"
+    )
+with col_add_btn:
+    if st.button("➕ Add to Queue", width='stretch'):
+        if new_book_input.strip():
+            raw_val = new_book_input.strip()
+            if "bahai.works/" in raw_val:
+                raw_val = raw_val.split("bahai.works/")[-1].split("?")[0].split("#")[0]
+            clean_title = unquote(raw_val).replace("_", " ").strip("/")
+            
+            if clean_title not in queue_data:
+                queue_data[clean_title] = {"status": "PENDING"}
+                save_queue(queue_data)
+                st.success(f"Added '{clean_title}' to queue!")
+                time.sleep(0.5)
+                st.rerun()
+            else:
+                st.warning(f"'{clean_title}' is already in the queue.")
+
 if queue_data:
     with st.expander("📋 Processing Queue", expanded=False):
         df = [{"Book Title": title, "Status": data.get("status", "UNKNOWN")} for title, data in queue_data.items()]
@@ -410,9 +435,9 @@ if execution_mode == "All Books (Production)":
     
     col_start, col_stop = st.columns([1, 1])
     with col_start:
-        start_auto = st.button("▶️ Start Automation Loop", type="primary", use_container_width=True)
+        start_auto = st.button("▶️ Start Automation Loop", type="primary", width='stretch')
     with col_stop:
-        if st.button("🛑 Stop Execution", use_container_width=True):
+        if st.button("🛑 Stop Execution", width='stretch'):
             st.warning("Automation stopped.")
             st.stop()
             
@@ -775,18 +800,18 @@ elif master_json_exists:
         st.warning("Only do this if you need to re-OCR the entire document. This will overwrite the existing file.")
         col_gen, col_stop = st.columns([1, 1])
         with col_gen:
-            regenerate_master = st.button("🔄 Re-generate Master JSON", use_container_width=True)
+            regenerate_master = st.button("🔄 Re-generate Master JSON", width='stretch')
         with col_stop:
-            if st.button("🛑 Stop Generation", key="stop_regen", use_container_width=True):
+            if st.button("🛑 Stop Generation", key="stop_regen", width='stretch'):
                 st.warning("Execution stopped.")
                 st.stop()
 else:
     st.info(f"Master JSON not found for {state['master_pdf']}. This step will OCR all mapped pages.")
     col_gen, col_stop = st.columns([1, 1])
     with col_gen:
-        regenerate_master = st.button("🚀 Generate Master JSON", type="primary", use_container_width=True)
+        regenerate_master = st.button("🚀 Generate Master JSON", type="primary", width='stretch')
     with col_stop:
-        if st.button("🛑 Stop Generation", key="stop_gen", use_container_width=True):
+        if st.button("🛑 Stop Generation", key="stop_gen", width='stretch'):
             st.warning("Execution stopped.")
             st.stop()
 
