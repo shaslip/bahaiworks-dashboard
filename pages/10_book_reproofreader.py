@@ -410,37 +410,33 @@ with col_add_btn:
             st.rerun()
 
 if queue_data:
-    with st.expander("📋 Processing Queue (Editable — Change Status or Delete Rows)", expanded=False):
-        df = [{"Book Title": title, "Status": data.get("status", "UNKNOWN")} for title, data in queue_data.items()]
+    with st.expander("📋 Processing Queue", expanded=False):
+        df = [
+            {"Exclude": False, "Book Title": title, "Status": data.get("status", "UNKNOWN")}
+            for title, data in queue_data.items()
+        ]
         edited_df = st.data_editor(
             df,
             width='stretch',
             height=350,
             hide_index=True,
-            num_rows="dynamic",
+            disabled=["Book Title", "Status"],
             column_config={
-                "Book Title": st.column_config.TextColumn("Book Title", required=True),
-                "Status": st.column_config.SelectboxColumn(
-                    "Status",
-                    options=["PENDING", "SKIPPED", "READY", "COMPLETED", "ERROR: No Map", "ERROR: Missing PDF", "ERROR: 429 Rate Limit", "ERROR: Upload Failed"],
-                    required=True
-                )
+                "Exclude": st.column_config.CheckboxColumn("Exclude", default=False),
+                "Book Title": st.column_config.TextColumn("Book Title"),
+                "Status": st.column_config.TextColumn("Status"),
             },
-            key="queue_editor"
+            key="queue_table"
         )
-        if st.button("💾 Save Queue Changes", type="primary", width='stretch'):
-            new_queue = {}
+        if st.button("🚫 Exclude Checked Books", type="primary", width='stretch'):
+            excluded_any = False
             for row in edited_df:
-                t = (row.get("Book Title") or "").strip()
-                s = (row.get("Status") or "PENDING").strip()
-                if t:
-                    orig = queue_data.get(t, {})
-                    orig["status"] = s
-                    new_queue[t] = orig
-            save_queue(new_queue)
-            st.success("✅ Queue updated!")
-            time.sleep(0.5)
-            st.rerun()
+                if row.get("Exclude") and row.get("Book Title") in queue_data:
+                    queue_data[row["Book Title"]]["status"] = "SKIPPED"
+                    excluded_any = True
+            if excluded_any:
+                save_queue(queue_data)
+                st.rerun()
 
 all_books = list(queue_data.keys())
 if not all_books:
