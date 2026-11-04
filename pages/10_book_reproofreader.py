@@ -756,7 +756,17 @@ if execution_mode == "All Books (Production)":
                 save_book_state(safe_title, state)
                 queue_data[target_book]["status"] = "COMPLETED"
                 save_queue(queue_data)
-                log_container.success(f"✅ {target_book} automatically uploaded and marked COMPLETED.")
+                
+                # Cleanup local chapter .txt files
+                deleted_count = 0
+                for sp in state["subpages"]:
+                    safe_sp = sp.replace("/", "_")
+                    ch_file_path = os.path.join(pdf_dir, f"{safe_sp}.txt")
+                    if os.path.exists(ch_file_path):
+                        os.remove(ch_file_path)
+                        deleted_count += 1
+                        
+                log_container.success(f"✅ {target_book} automatically uploaded, marked COMPLETED, and cleaned up ({deleted_count} local .txt files removed).")
             else:
                 # Finalize Book as READY
                 queue_data[target_book]["status"] = "READY"
