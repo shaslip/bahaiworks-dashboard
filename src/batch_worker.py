@@ -45,61 +45,65 @@ def process_pdf_batch(batch_id, page_list, pdf_path, ocr_strategy, short_name, p
         final_text = ""
         force_docai = (ocr_strategy == "DocAI Only") or permanent_docai or (docai_cooldown_pages > 0)
 
-        if force_docai:
-            if ocr_strategy == "DocAI Only":
-                mode_label = "DocAI Only Mode"
-            elif permanent_docai:
-                mode_label = "Permanent DocAI Fallback"
-            else:
-                mode_label = f"Cooldown DocAI ({docai_cooldown_pages} left)"
-                docai_cooldown_pages -= 1
-                if docai_cooldown_pages == 0:
-                    shared_log_list.append(f"🟢 Cooldown complete. Re-enabling Gemini for next page.")
-            
-            shared_log_list.append(f"🤖 [{mode_label}] Processing Page {page_num}...")
-            
-            raw_ocr = transcribe_with_document_ai(img)
-            if "DOCAI_ERROR" in raw_ocr:
-                shared_log_list.append(f"⚠️ DocAI Failed. Attempting Gemini Rescue...")
-                final_text = proofread_with_formatting(img)
-            else:
-                final_text = reformat_raw_text(raw_ocr)
-                if "FORMATTING_ERROR" in final_text:
-                    shared_log_list.append(f"⚠️ DocAI Formatting Failed. Attempting Gemini Rescue...")
-                    rescue_text = proofread_with_formatting(img)
-                    if "GEMINI_ERROR" in rescue_text or "Recitation" in rescue_text:
-                        shared_log_list.append(f"⚠️ Rescue also failed. Saving RAW OCR text.")
-                        final_text = raw_ocr + "\n\n"
-                    else:
-                        final_text = rescue_text
-
-        else:
-            final_text = proofread_with_formatting(img)
-            is_gemini_error = "GEMINI_ERROR" in final_text or "Recitation" in final_text or "Copyright" in final_text
-
-            if is_gemini_error:
-                gemini_consecutive_failures += 1
-                if gemini_consecutive_failures == 2:
-                    docai_cooldown_pages = 5
-                    shared_log_list.append(f"⚠️ 2 Consecutive Failures. Switching to DocAI for next 5 pages.")
-                elif gemini_consecutive_failures >= 3:
-                    permanent_docai = True
-                    shared_log_list.append(f"⛔ 3rd Strike. Switching to DocAI for remainder of batch.")
+        try:
+            if force_docai:
+                if ocr_strategy == "DocAI Only":
+                    mode_label = "DocAI Only Mode"
+                elif permanent_docai:
+                    mode_label = "Permanent DocAI Fallback"
                 else:
-                    shared_log_list.append(f"⚠️ Gemini Error ({gemini_consecutive_failures}/2). Retrying with DocAI...")
-
+                    mode_label = f"Cooldown DocAI ({docai_cooldown_pages} left)"
+                    docai_cooldown_pages -= 1
+                    if docai_cooldown_pages == 0:
+                        shared_log_list.append(f"🟢 Cooldown complete. Re-enabling Gemini for next page.")
+                
+                shared_log_list.append(f"🤖 [{mode_label}] Processing Page {page_num}...")
+                
                 raw_ocr = transcribe_with_document_ai(img)
                 if "DOCAI_ERROR" in raw_ocr:
-                    final_text = "DOCAI_ERROR" 
+                    shared_log_list.append(f"⚠️ DocAI Failed. Attempting Gemini Rescue...")
+                    final_text = proofread_with_formatting(img)
                 else:
-                    formatted_text = reformat_raw_text(raw_ocr)
-                    if "FORMATTING_ERROR" in formatted_text:
-                        shared_log_list.append(f"⚠️ Formatting failed. Saving RAW OCR text.")
-                        final_text = raw_ocr + "\n\n"
-                    else:
-                        final_text = formatted_text
+                    final_text = reformat_raw_text(raw_ocr)
+                    if "FORMATTING_ERROR" in final_text:
+                        shared_log_list.append(f"⚠️ DocAI Formatting Failed. Attempting Gemini Rescue...")
+                        rescue_text = proofread_with_formatting(img)
+                        if "GEMINI_ERROR" in rescue_text or "Recitation" in rescue_text:
+                            shared_log_list.append(f"⚠️ Rescue also failed. Saving RAW OCR text.")
+                            final_text = raw_ocr + "\n\n"
+                        else:
+                            final_text = rescue_text
+
             else:
-                gemini_consecutive_failures = 0
+                final_text = proofread_with_formatting(img)
+                is_gemini_error = "GEMINI_ERROR" in final_text or "Recitation" in final_text or "Copyright" in final_text
+
+                if is_gemini_error:
+                    gemini_consecutive_failures += 1
+                    if gemini_consecutive_failures == 2:
+                        docai_cooldown_pages = 5
+                        shared_log_list.append(f"⚠️ 2 Consecutive Failures. Switching to DocAI for next 5 pages.")
+                    elif gemini_consecutive_failures >= 3:
+                        permanent_docai = True
+                        shared_log_list.append(f"⛔ 3rd Strike. Switching to DocAI for remainder of batch.")
+                    else:
+                        shared_log_list.append(f"⚠️ Gemini Error ({gemini_consecutive_failures}/2). Retrying with DocAI...")
+
+                    raw_ocr = transcribe_with_document_ai(img)
+                    if "DOCAI_ERROR" in raw_ocr:
+                        final_text = "DOCAI_ERROR" 
+                    else:
+                        formatted_text = reformat_raw_text(raw_ocr)
+                        if "FORMATTING_ERROR" in formatted_text:
+                            shared_log_list.append(f"⚠️ Formatting failed. Saving RAW OCR text.")
+                            final_text = raw_ocr + "\n\n"
+                        else:
+                            final_text = formatted_text
+                else:
+                    gemini_consecutive_failures = 0
+        except Exception as e:
+            shared_log_list.append(f"🚨 FATAL_RATE_LIMIT on Page {page_num}: {e}")
+            return False
 
         system_error_flags = ["GEMINI_ERROR", "DOCAI_ERROR", "FORMATTING_ERROR"]
         if not final_text or any(flag in final_text for flag in system_error_flags):
