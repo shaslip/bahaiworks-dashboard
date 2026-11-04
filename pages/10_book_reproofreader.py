@@ -608,7 +608,15 @@ if execution_mode == "All Books (Production)":
                 if not pdf_targets:
                     current_wikitext = state["wikitext_cache"].get(active_chapter, "")
                     overflow = state.get("overflow_cache", {}).get(active_chapter, "")
-                    combined_text = overflow.strip() if overflow else current_wikitext.strip()
+                    
+                    safe_tags = []
+                    access_match = re.search(r'<accesscontrol>.*?</accesscontrol>', current_wikitext, flags=re.IGNORECASE | re.DOTALL)
+                    if access_match: safe_tags.append(access_match.group(0))
+                    header_match = re.search(r'\{\{header(?:[^{}]|\{\{[^}]*\}\})*\}\}', current_wikitext, flags=re.IGNORECASE | re.DOTALL)
+                    if header_match: safe_tags.append(header_match.group(0))
+                    preserved_prefix = "\n".join(safe_tags) + "\n" if safe_tags else ""
+                    
+                    combined_text = (preserved_prefix + overflow.strip()) if overflow else current_wikitext.strip()
                     
                     if combined_text:
                         combined_text = apply_final_formatting(combined_text, active_chapter, found_year)
@@ -649,19 +657,23 @@ if execution_mode == "All Books (Production)":
                         current_wikitext, _ = inject_text_into_page(current_wikitext, target["label"], all_extracted_text[target["pdf_num"]], master_pdf_filename)
                         
                 final_wikitext = current_wikitext
+                preserved_prefix = ""
                 match = re.search(r'\{\{page\|', final_wikitext, flags=re.IGNORECASE)
                 if match:
                     leading_text = final_wikitext[:match.start()]
                     safe_tags = []
                     access_match = re.search(r'<accesscontrol>.*?</accesscontrol>', leading_text, flags=re.IGNORECASE | re.DOTALL)
                     if access_match: safe_tags.append(access_match.group(0))
+                    header_match = re.search(r'\{\{header(?:[^{}]|\{\{[^}]*\}\})*\}\}', leading_text, flags=re.IGNORECASE | re.DOTALL)
+                    if header_match: safe_tags.append(header_match.group(0))
                     preserved_prefix = "\n".join(safe_tags) + "\n" if safe_tags else ""
-                    final_wikitext = preserved_prefix + final_wikitext[match.start():]
+                    final_wikitext = final_wikitext[match.start():]
                 else:
                     final_wikitext = ""
                     
                 overflow = state.get("overflow_cache", {}).get(active_chapter, "")
                 if overflow: final_wikitext = f"{overflow}\n\n{final_wikitext}".strip()
+                final_wikitext = preserved_prefix + final_wikitext
                 final_wikitext = apply_final_formatting(final_wikitext, active_chapter, found_year)
                 
                 safe_sp = active_chapter.replace("/", "_")
