@@ -410,9 +410,37 @@ with col_add_btn:
             st.rerun()
 
 if queue_data:
-    with st.expander("📋 Processing Queue", expanded=False):
+    with st.expander("📋 Processing Queue (Editable — Change Status or Delete Rows)", expanded=False):
         df = [{"Book Title": title, "Status": data.get("status", "UNKNOWN")} for title, data in queue_data.items()]
-        st.dataframe(df, width='stretch', hide_index=True)
+        edited_df = st.data_editor(
+            df,
+            width='stretch',
+            height=350,
+            hide_index=True,
+            num_rows="dynamic",
+            column_config={
+                "Book Title": st.column_config.TextColumn("Book Title", required=True),
+                "Status": st.column_config.SelectboxColumn(
+                    "Status",
+                    options=["PENDING", "SKIPPED", "READY", "COMPLETED", "ERROR: No Map", "ERROR: Missing PDF", "ERROR: 429 Rate Limit", "ERROR: Upload Failed"],
+                    required=True
+                )
+            },
+            key="queue_editor"
+        )
+        if st.button("💾 Save Queue Changes", type="primary", width='stretch'):
+            new_queue = {}
+            for row in edited_df:
+                t = (row.get("Book Title") or "").strip()
+                s = (row.get("Status") or "PENDING").strip()
+                if t:
+                    orig = queue_data.get(t, {})
+                    orig["status"] = s
+                    new_queue[t] = orig
+            save_queue(new_queue)
+            st.success("✅ Queue updated!")
+            time.sleep(0.5)
+            st.rerun()
 
 all_books = list(queue_data.keys())
 if not all_books:
@@ -432,9 +460,9 @@ if execution_mode == "All Books (Production)":
         st.success("No 'PENDING' books found in the queue.")
         st.stop()
         
-    # Sort alphabetically and allow selection of starting point
+    # Sort alphabetically and allow selection of starting point in the main area
     pending_books.sort()
-    starting_book = st.sidebar.selectbox("Start Production From:", pending_books)
+    starting_book = st.selectbox("Start Production From:", pending_books)
     start_idx = pending_books.index(starting_book)
     target_pending_books = pending_books[start_idx:]
         
