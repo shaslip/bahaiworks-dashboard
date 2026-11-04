@@ -456,7 +456,7 @@ if execution_mode == "All Books (Production)":
         st.success("No 'PENDING' books found in the queue.")
         st.stop()
         
-    # Sort alphabetically and allow selection of starting point in the main area
+    # Sort alphabetically and allow selection of starting point
     pending_books.sort()
     starting_book = st.selectbox("Start Production From:", pending_books)
     start_idx = pending_books.index(starting_book)
