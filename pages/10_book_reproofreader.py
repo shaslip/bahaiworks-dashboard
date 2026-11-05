@@ -724,14 +724,18 @@ if execution_mode == "All Books (Production)":
             
             if not will_need_split:
                 log_container.write("🌐 No split logic required. Auto-uploading to Wiki...")
+                spam_blocked_book = False
+                
                 for sp in state["subpages"]:
+                    if sp in state.get("uploaded_subpages", []):
+                        continue
+                        
                     safe_sp = sp.replace("/", "_")
                     ch_file_path = os.path.join(pdf_dir, f"{safe_sp}.txt")
                     if os.path.exists(ch_file_path):
                         with open(ch_file_path, "r", encoding="utf-8") as f:
                             final_wikitext = f.read()
                         
-                        upload_success = False
                         for attempt in range(2):
                             try:
                                 get_csrf_token(session)
@@ -740,12 +744,28 @@ if execution_mode == "All Books (Production)":
                                 res = {"error": str(e)}
                                 
                             if res.get('edit', {}).get('result') == 'Success':
-                                upload_success = True
                                 if "uploaded_subpages" not in state: state["uploaded_subpages"] = []
                                 if sp not in state["uploaded_subpages"]:
                                     state["uploaded_subpages"].append(sp)
+                                save_book_state(safe_title, state)
                                 break
                             else:
+                                err_str = str(res)
+                                if "spam filter" in err_str.lower():
+                                    if attempt == 0:
+                                        trigger_match = re.search(r'triggered our spam filter:\s*([^\s\'"}]+)', err_str, re.IGNORECASE)
+                                        if trigger_match:
+                                            bad_domain = trigger_match.group(1).strip()
+                                            log_container.warning(f"⚠️ Spam filter triggered by '{bad_domain}' on {sp}. Wrapping in <nowiki> and retrying immediately...")
+                                            url_pattern = re.compile(rf'(?<!<nowiki>)(?:https?://|www\.)?[^\s<>\[\]"\'|]*{re.escape(bad_domain)}[^\s<>\[\]"\'|]*', re.IGNORECASE)
+                                            final_wikitext = url_pattern.sub(lambda m: f"<nowiki>{m.group(0)}</nowiki>", final_wikitext)
+                                            with open(ch_file_path, "w", encoding="utf-8") as f:
+                                                f.write(final_wikitext)
+                                            continue
+                                    log_container.error(f"❌ Spam filter blocked {sp} again. Keeping local .txt files and moving to next book.")
+                                    spam_blocked_book = True
+                                    break
+                                    
                                 if attempt == 0:
                                     log_container.warning(f"⚠️ Upload failed for {sp}: {res}. Sleeping for 15 minutes before retrying once...")
                                     retry_countdown = log_container.empty()
@@ -759,6 +779,15 @@ if execution_mode == "All Books (Production)":
                                     queue_data[target_book]["status"] = "ERROR: Upload Failed"
                                     save_queue(queue_data)
                                     st.stop()
+                                    
+                        if spam_blocked_book:
+                            break
+                
+                if spam_blocked_book:
+                    save_book_state(safe_title, state)
+                    queue_data[target_book]["status"] = "ERROR: Spam Filter"
+                    save_queue(queue_data)
+                    continue
                 
                 save_book_state(safe_title, state)
                 queue_data[target_book]["status"] = "COMPLETED"
