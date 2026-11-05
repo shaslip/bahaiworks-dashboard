@@ -1319,15 +1319,31 @@ if subpages_to_upload:
             with open(ch_file_path, "r", encoding="utf-8") as f:
                 final_wikitext = f.read()
                 
-            res = upload_to_bahaiworks(active_chapter, final_wikitext, "Bot: Parallel Batch Reproofread", session=session)
-            
-            if res.get('edit', {}).get('result') == 'Success':
-                state["uploaded_subpages"].append(active_chapter)
-                save_book_state(safe_title, state)
-                log_container.write(f"✅ Success: {active_chapter}")
-            else:
-                log_container.error(f"❌ Upload failed: {res}")
-                st.stop()
+            for attempt in range(2):
+                try:
+                    res = upload_to_bahaiworks(active_chapter, final_wikitext, "Bot: Parallel Batch Reproofread", session=session)
+                except Exception as e:
+                    res = {"error": str(e)}
+                
+                if res.get('edit', {}).get('result') == 'Success':
+                    state["uploaded_subpages"].append(active_chapter)
+                    save_book_state(safe_title, state)
+                    log_container.write(f"✅ Success: {active_chapter}")
+                    break
+                else:
+                    err_str = str(res)
+                    if "spam filter" in err_str.lower() and attempt == 0:
+                        trigger_match = re.search(r'triggered our spam filter:\s*([^\s\'"}]+)', err_str, re.IGNORECASE)
+                        if trigger_match:
+                            bad_domain = trigger_match.group(1).strip()
+                            log_container.warning(f"⚠️ Spam filter triggered by '{bad_domain}' on {active_chapter}. Wrapping in <nowiki> and retrying...")
+                            url_pattern = re.compile(rf'(?<!<nowiki>)(?:https?://|www\.)?[^\s<>\[\]"\'|]*{re.escape(bad_domain)}[^\s<>\[\]"\'|]*', re.IGNORECASE)
+                            final_wikitext = url_pattern.sub(lambda m: f"<nowiki>{m.group(0)}</nowiki>", final_wikitext)
+                            with open(ch_file_path, "w", encoding="utf-8") as f:
+                                f.write(final_wikitext)
+                            continue
+                    log_container.error(f"❌ Upload failed for {active_chapter}: {res}")
+                    st.stop()
                 
         progress_bar.progress(1.0)
         queue_data[target_book]["status"] = "COMPLETED"
