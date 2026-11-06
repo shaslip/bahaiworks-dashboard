@@ -8,7 +8,6 @@ import requests
 import fitz  # PyMuPDF
 import concurrent.futures
 import math
-import multiprocessing
 import unicodedata
 from urllib.parse import unquote
 
@@ -657,52 +656,47 @@ if execution_mode == "All Books (Production)":
                     with log_container.expander(f"Batch {i+1} Status ({page_label})", expanded=True):
                         batch_placeholders[i] = st.empty()
                 
-                from multiprocessing import Manager
-                os.environ["PYTHONPATH"] = project_root
-                
                 for attempt in range(2):
                     fatal_error = False
                     fatal_error_msg = ""
-                    with Manager() as manager:
-                        shared_logs = manager.dict()
-                        for i in range(len(batches)): shared_logs[i] = manager.list()
+                    shared_logs = {i: [] for i in range(len(batches))}
+                    
+                    executor = concurrent.futures.ThreadPoolExecutor(max_workers=num_batches)
+                    futures = []
+                    for batch_id, batch_pages in enumerate(batches):
+                        if not batch_pages: continue
+                        future = executor.submit(
+                            process_pdf_batch, batch_id, batch_pages, local_pdf_path, ocr_strategy, 
+                            master_pdf_filename, pdf_dir, shared_logs[batch_id]
+                        )
+                        futures.append(future)
                         
-                        executor = concurrent.futures.ProcessPoolExecutor(max_workers=num_batches)
-                        futures = []
-                        for batch_id, batch_pages in enumerate(batches):
-                            if not batch_pages: continue
-                            future = executor.submit(
-                                process_pdf_batch, batch_id, batch_pages, local_pdf_path, ocr_strategy, 
-                                master_pdf_filename, pdf_dir, shared_logs[batch_id]
-                            )
-                            futures.append(future)
-                            
-                        # Restored live visibility loop with 429 monitoring
-                        while True:
-                            all_done = True
-                            for batch_id, future in enumerate(futures):
-                                current_logs = list(shared_logs.get(batch_id, []))
-                                if current_logs and batch_id in batch_placeholders:
-                                    batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
-                                    
-                                    # Check for 429 / Rate Limit / Fatal Error
-                                    for log_msg in current_logs:
-                                        if "FATAL_RATE_LIMIT" in log_msg:
-                                            fatal_error = True
-                                            fatal_error_msg = f"[Batch {batch_id + 1}] {log_msg}"
-                                            break
-                                            
-                                if fatal_error:
-                                    break
-                                    
-                                if not future.done():
-                                    all_done = False
-                                    
-                            if fatal_error or all_done:
+                    # Restored live visibility loop with 429 monitoring
+                    while True:
+                        all_done = True
+                        for batch_id, future in enumerate(futures):
+                            current_logs = list(shared_logs.get(batch_id, []))
+                            if current_logs and batch_id in batch_placeholders:
+                                batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
+                                
+                                # Check for 429 / Rate Limit / Fatal Error
+                                for log_msg in current_logs:
+                                    if "FATAL_RATE_LIMIT" in log_msg:
+                                        fatal_error = True
+                                        fatal_error_msg = f"[Batch {batch_id + 1}] {log_msg}"
+                                        break
+                                        
+                            if fatal_error:
                                 break
-                            time.sleep(1)
-                            
-                        executor.shutdown(wait=False, cancel_futures=True)
+                                
+                            if not future.done():
+                                all_done = False
+                                
+                        if fatal_error or all_done:
+                            break
+                        time.sleep(1)
+                        
+                    executor.shutdown(wait=False, cancel_futures=True)
                         
                     if fatal_error:
                         if attempt == 0:
@@ -1076,56 +1070,50 @@ if master_json_path and (not master_json_exists and locals().get('regenerate_mas
             with master_log.expander(f"Batch {i+1} Status ({page_label})", expanded=True):
                 batch_placeholders[i] = st.empty()
 
-        from multiprocessing import Manager
-        os.environ["PYTHONPATH"] = project_root
+        shared_logs = {i: [] for i in range(len(batches))}
 
-        with Manager() as manager:
-            shared_logs = manager.dict()
-            for i in range(len(batches)):
-                shared_logs[i] = manager.list()
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=num_batches)
+        futures = []
+        for batch_id, batch_pages in enumerate(batches):
+            if not batch_pages: continue
+            future = executor.submit(
+                process_pdf_batch,
+                batch_id, batch_pages, local_pdf_path, ocr_strategy, 
+                state["master_pdf"], pdf_dir, shared_logs[batch_id]
+            )
+            futures.append(future)
 
-            executor = concurrent.futures.ProcessPoolExecutor(max_workers=num_batches)
-            futures = []
-            for batch_id, batch_pages in enumerate(batches):
-                if not batch_pages: continue
-                future = executor.submit(
-                    process_pdf_batch,
-                    batch_id, batch_pages, local_pdf_path, ocr_strategy, 
-                    state["master_pdf"], pdf_dir, shared_logs[batch_id]
-                )
-                futures.append(future)
-
-            fatal_error = False
-            fatal_error_msg = ""
-            while True:
-                all_done = True
-                for batch_id, future in enumerate(futures):
-                    current_logs = list(shared_logs.get(batch_id, []))
-                    if current_logs and batch_id in batch_placeholders:
-                        batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
-                        
-                        # Check for 429 / Rate Limit / Fatal Error
-                        for log_msg in current_logs:
-                            if "FATAL_RATE_LIMIT" in log_msg:
-                                fatal_error = True
-                                fatal_error_msg = f"[Batch {batch_id + 1}] {log_msg}"
-                                break
-                    if fatal_error:
-                        break
-                        
-                    if not future.done():
-                        all_done = False
-                        
-                if fatal_error or all_done:
+        fatal_error = False
+        fatal_error_msg = ""
+        while True:
+            all_done = True
+            for batch_id, future in enumerate(futures):
+                current_logs = list(shared_logs.get(batch_id, []))
+                if current_logs and batch_id in batch_placeholders:
+                    batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
+                    
+                    # Check for 429 / Rate Limit / Fatal Error
+                    for log_msg in current_logs:
+                        if "FATAL_RATE_LIMIT" in log_msg:
+                            fatal_error = True
+                            fatal_error_msg = f"[Batch {batch_id + 1}] {log_msg}"
+                            break
+                if fatal_error:
                     break
-                time.sleep(1)
+                    
+                if not future.done():
+                    all_done = False
+                    
+            if fatal_error or all_done:
+                break
+            time.sleep(1)
 
-            if fatal_error:
-                executor.shutdown(wait=False, cancel_futures=True)
-                master_log.error(f"❌ FATAL: `{fatal_error_msg}`. Halting execution to prevent raw text saving.")
-                st.stop()
-                
+        if fatal_error:
             executor.shutdown(wait=False, cancel_futures=True)
+            master_log.error(f"❌ FATAL: `{fatal_error_msg}`. Halting execution to prevent raw text saving.")
+            st.stop()
+            
+        executor.shutdown(wait=False, cancel_futures=True)
 
         master_log.write("🔄 Assembling pages into Master JSON...")
         master_data = {}
