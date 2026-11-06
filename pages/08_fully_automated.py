@@ -8,13 +8,6 @@ import fitz  # PyMuPDF
 import requests
 import concurrent.futures
 import math
-import multiprocessing
-
-# --- Force spawn to prevent gRPC crashes in background processes ---
-try:
-    multiprocessing.set_start_method('spawn', force=True)
-except RuntimeError:
-    pass
 
 # --- Path Setup ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -445,79 +438,59 @@ if __name__ == '__main__':
                 with st.expander(f"Batch {i+1} Status ({page_label})", expanded=True):
                     batch_placeholders[i] = st.empty()
 
-            # --- NEW: MULTIPROCESSING SETUP ---
-            from multiprocessing import Manager
-            
-            os.environ["PYTHONPATH"] = project_root
-            
-            with Manager() as manager:
-                # Create a managed dictionary to hold managed lists for each batch
-                shared_logs = manager.dict()
-                for i in range(len(batches)):
-                    shared_logs[i] = manager.list()
+            # --- THREADING SETUP ---
+            shared_logs = {i: [] for i in range(len(batches))}
 
-                with st.spinner(f"Processing {short_name} in {len(batches)} parallel batches..."):
-                    # Pass the silencer directly into the workers as they boot up
-                    executor = concurrent.futures.ProcessPoolExecutor(
-                        max_workers=num_batches
+            with st.spinner(f"Processing {short_name} in {len(batches)} parallel batches..."):
+                executor = concurrent.futures.ThreadPoolExecutor(
+                    max_workers=num_batches
+                )
+
+                futures = []
+                for batch_id, batch_pages in enumerate(batches):
+                    future = executor.submit(
+                        process_pdf_batch,
+                        batch_id,          # batch_id
+                        batch_pages,       # page_list
+                        pdf_path,          # pdf_path
+                        ocr_strategy,      # ocr_strategy
+                        short_name,        # short_name
+                        project_root,      # project_root
+                        shared_logs[batch_id] # shared_log_list
                     )
+                    futures.append(future)
 
-                    # --- NEW: Submit tasks to the executor to generate futures ---
-                    futures = []
-                    for batch_id, batch_pages in enumerate(batches):
-                        future = executor.submit(
-                            process_pdf_batch,
-                            batch_id,          # batch_id
-                            batch_pages,       # page_list
-                            pdf_path,          # pdf_path
-                            ocr_strategy,      # ocr_strategy
-                            short_name,        # short_name
-                            project_root,      # project_root
-                            shared_logs[batch_id] # shared_log_list
-                        )
-                        futures.append(future)
-
-                    # --- REAL-TIME POLLING LOOP ---
-                    while True:
-                        all_done = True
-                        for batch_id, future in enumerate(futures):
-                            current_logs = list(shared_logs[batch_id])
-                            if current_logs:
-                                batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
-                            
-                            if not future.done():
-                                all_done = False
-                                
-                        if all_done:
-                            break
-                            
-                        time.sleep(1)
-
-                    # Check if any batch worker crashed or returned False (Fatal Rate Limit)
-                    batch_failed = False
+                # --- REAL-TIME POLLING LOOP ---
+                while True:
+                    all_done = True
                     for batch_id, future in enumerate(futures):
-                        exc = future.exception()
-                        if exc:
-                            st.error(f"🚨 Worker Batch {batch_id + 1} crashed with exception: {exc}")
-                            batch_failed = True
-                        elif future.result() is False:
-                            st.error(f"🚨 Worker Batch {batch_id + 1} halted early (check batch logs above for rate limit or fatal error).")
-                            batch_failed = True
+                        current_logs = list(shared_logs[batch_id])
+                        if current_logs:
+                            batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
+                        
+                        if not future.done():
+                            all_done = False
+                            
+                    if all_done:
+                        break
+                        
+                    time.sleep(1)
 
-                # --- FORCE SHUTDOWN TO PREVENT THE UI HANG ---
-                executor.shutdown(wait=False, cancel_futures=True)
-                
-                # Ruthlessly kill the background workers so gRPC threads don't cause a RAM leak
-                import os, signal
-                if hasattr(executor, '_processes') and executor._processes is not None:
-                    for pid in executor._processes.keys():
-                        try:
-                            os.kill(pid, signal.SIGKILL)
-                        except OSError:
-                            pass
+                # Check if any batch worker crashed or returned False (Fatal Rate Limit)
+                batch_failed = False
+                for batch_id, future in enumerate(futures):
+                    exc = future.exception()
+                    if exc:
+                        st.error(f"🚨 Worker Batch {batch_id + 1} crashed with exception: {exc}")
+                        batch_failed = True
+                    elif future.result() is False:
+                        st.error(f"🚨 Worker Batch {batch_id + 1} halted early (check batch logs above for rate limit or fatal error).")
+                        batch_failed = True
 
-                if batch_failed:
-                    st.stop()
+            executor.shutdown(wait=False, cancel_futures=True)
+
+            if batch_failed:
+                st.stop()
 
             # 4d. Sequential Merge & Wiki Injection
             log_area.text(f"🔄 Merging parallel batches and injecting wikitext for {short_name}...")
