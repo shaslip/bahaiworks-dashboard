@@ -1,21 +1,25 @@
 import os
 import json
 import io
+import threading
 import fitz  # PyMuPDF
 from PIL import Image
 from src.gemini_processor import proofread_with_formatting, transcribe_with_document_ai, reformat_raw_text
 
+_fitz_lock = threading.Lock()
+
 def get_page_image_data(pdf_path, page_num_1_based):
-    doc = fitz.open(pdf_path)
-    if page_num_1_based > len(doc):
+    with _fitz_lock:
+        doc = fitz.open(pdf_path)
+        if page_num_1_based > len(doc):
+            doc.close()
+            return None  
+        
+        page = doc.load_page(page_num_1_based - 1)
+        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+        png_bytes = pix.tobytes("png")
         doc.close()
-        return None  
-    
-    page = doc.load_page(page_num_1_based - 1)
-    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
-    img = Image.open(io.BytesIO(pix.tobytes("png")))
-    doc.close()
-    return img
+    return Image.open(io.BytesIO(png_bytes))
 
 def process_pdf_batch(batch_id, page_list, pdf_path, ocr_strategy, short_name, project_root, shared_log_list):
     gemini_consecutive_failures = 0
