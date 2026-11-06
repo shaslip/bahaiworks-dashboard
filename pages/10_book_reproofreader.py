@@ -390,13 +390,6 @@ def resolve_pdf_path(state, root_folder):
         return find_local_pdf(master_pdf, root_folder)
     return None
 
-def find_local_pdf(filename, root_folder):
-    for dirpath, _, filenames in os.walk(root_folder):
-        for f in filenames:
-            if f.lower() == filename.lower():
-                return os.path.join(dirpath, f)
-    return None
-
 # ==============================================================================
 # 3. UI & MAIN LOGIC
 # ==============================================================================
