@@ -542,6 +542,7 @@ if execution_mode == "All Books (Production)":
                 
                 for attempt in range(2):
                     fatal_error = False
+                    fatal_error_msg = ""
                     with Manager() as manager:
                         shared_logs = manager.dict()
                         for i in range(len(batches)): shared_logs[i] = manager.list()
@@ -564,10 +565,11 @@ if execution_mode == "All Books (Production)":
                                 if current_logs and batch_id in batch_placeholders:
                                     batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
                                     
-                                    # Check for 429 / Rate Limit
+                                    # Check for 429 / Rate Limit / Fatal Error
                                     for log_msg in current_logs:
                                         if "FATAL_RATE_LIMIT" in log_msg:
                                             fatal_error = True
+                                            fatal_error_msg = f"[Batch {batch_id + 1}] {log_msg}"
                                             break
                                             
                                 if fatal_error:
@@ -584,7 +586,7 @@ if execution_mode == "All Books (Production)":
                         
                     if fatal_error:
                         if attempt == 0:
-                            log_container.warning("⚠️ 429 Rate Limit or Quota Error detected. Sleeping for 15 minutes before retrying once...")
+                            log_container.warning(f"⚠️ Fatal API/Network error detected: `{fatal_error_msg}`. Sleeping for 15 minutes before retrying once...")
                             retry_countdown = log_container.empty()
                             for remaining in range(900, 0, -1):
                                 mins, secs = divmod(remaining, 60)
@@ -593,8 +595,8 @@ if execution_mode == "All Books (Production)":
                             retry_countdown.empty()
                             log_container.info("🔄 Retrying OCR batch processing...")
                         else:
-                            log_container.error("❌ FATAL: 429 Rate Limit or Quota Error occurred a second time. Halting execution.")
-                            queue_data[target_book]["status"] = "ERROR: 429 Rate Limit"
+                            log_container.error(f"❌ FATAL (Failed twice): `{fatal_error_msg}`. Halting execution.")
+                            queue_data[target_book]["status"] = f"ERROR: {fatal_error_msg[:80]}"
                             save_queue(queue_data)
                             st.stop()
                     else:
