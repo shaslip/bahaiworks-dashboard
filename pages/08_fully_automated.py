@@ -171,122 +171,59 @@ def find_and_fix_tag_by_page_num(wikitext, pdf_filename, pdf_page_num, correct_l
                 return wikitext
     return wikitext
 
-def get_all_pdf_files(root_folder):
-    """Recursively finds all PDF files, ignoring those marked as '-old', 'scan', and sorts them naturally."""
-    pdf_files = []
+def build_local_pdf_map(root_folder):
+    """Recursively finds all PDF files and maps lowercase filename -> full local path."""
+    pdf_map = {}
     for dirpath, _, filenames in os.walk(root_folder):
         for f in filenames:
-            # Define substrings to exclude
-            blacklist = ["-old", "-full", "-cle", "-old2"]
+            if f.lower().endswith(".pdf"):
+                # Normalize spaces/underscores in keys so MediaWiki titles match local files
+                norm_key = f.lower().replace(" ", "_")
+                pdf_map[norm_key] = os.path.join(dirpath, f)
+    return pdf_map
+
+def get_all_wiki_text_pages(base_wiki_title, session=None):
+    """Queries MediaWiki API for all subpages under base_wiki_title ending in /Text."""
+    req_session = session or requests
+    prefix = base_wiki_title.replace("_", " ").strip()
+    if not prefix.endswith("/"):
+        prefix += "/"
+        
+    pages = []
+    apcontinue = None
+    
+    while True:
+        params = {
+            "action": "query",
+            "list": "allpages",
+            "apprefix": prefix,
+            "apnamespace": 0,
+            "aplimit": "max",
+            "format": "json"
+        }
+        if apcontinue:
+            params["apcontinue"] = apcontinue
             
-            # Check if it is a PDF, doesn't start with 'scan', and doesn't contain blacklisted strings
-            filename_lower = f.lower()
-            if (filename_lower.endswith(".pdf") and 
-                not filename_lower.startswith("scan") and 
-                not any(x in filename_lower for x in blacklist)):
+        res = req_session.get(API_URL, params=params, timeout=30).json()
+        for p in res.get("query", {}).get("allpages", []):
+            title = p["title"]
+            if title.endswith("/Text"):
+                pages.append(title)
                 
-                full_path = os.path.join(dirpath, f)
-                pdf_files.append(full_path)
-    
-    # Natural sort (Issue 2 comes before Issue 10)
-    pdf_files.sort(key=lambda x: [int(c) if c.isdigit() else c.lower() for c in re.split(r'(\d+)', x)])
-    return pdf_files
-
-def get_wiki_title(local_path, root_folder, base_wiki_title, pattern_override=None):
-    """
-    Determines the Wiki Page Title based on filename and folder structure.
-    """
-    filename = os.path.basename(local_path)
-    name_no_ext = os.path.splitext(filename)[0]
-
-    # --- STRATEGY 0: UI Pattern Override ---
-    if pattern_override:
-        # Extract all potential numbers
-        nums = re.findall(r'(\d+(?:-\d+)?)', name_no_ext)
-        n = nums[0] if nums else ""
-        
-        v = ""
-        i = ""
-        vol_match = re.search(r'(?:Vol|Volume)[\W_]*(\d+)', name_no_ext, re.IGNORECASE)
-        if vol_match: v = vol_match.group(1)
-        
-        iss_match = re.search(r'(?:No|Issue|Number)[\W_]*(\d+(?:-\d+)?)', name_no_ext, re.IGNORECASE)
-        if iss_match: i = iss_match.group(1)
-        
-        # If standard numbers were found but no explicit prefix, guess based on count
-        if len(nums) >= 2 and not v and not i:
-            v, i = nums[0], nums[1]
-        elif len(nums) == 1 and not v and not i:
-            i = nums[0] 
+        if "continue" in res:
+            apcontinue = res["continue"]["apcontinue"]
+        else:
+            break
             
-        formatted = pattern_override.replace('{base}', base_wiki_title).replace('{v}', v).replace('{i}', i).replace('{n}', n)
-        return formatted
+    # Natural sort (so Volume 2 / Issue 2 comes before Volume 10 / Issue 10)
+    pages.sort(key=lambda x: [int(c) if c.isdigit() else c.lower() for c in re.split(r'(\d+)', x)])
+    return pages
 
-    try:
-        rel_path = os.path.relpath(local_path, root_folder)
-    except ValueError:
-        rel_path = local_path
-
-    # --- STRATEGY 1: Canadian Baha'i News Specific (Canadian_Bahai_News_24.pdf) ---
-    cbn_match = re.search(r'Canadian_Bahai_News_(\d+(?:-\d+)?)', filename, re.IGNORECASE)
-    if cbn_match:
-        issue_identifier = cbn_match.group(1)
-        target_base = "Canadian_Bahá’í_News" if "Canadian" in base_wiki_title else base_wiki_title
-        return f"{target_base}/Issue_{issue_identifier}/Text"
-
-    # --- STRATEGY 2: Explicit Filename (Vol 1 No 1) ---
-    vol_issue_match = re.search(r'(?:Vol|Volume)[\W_]*(\d+)[\W_]*(?:No|Issue|Number)[\W_]*(\d+(?:-\d+)?)', filename, re.IGNORECASE)
-    if vol_issue_match:
-        vol = int(vol_issue_match.group(1))
-        issue = vol_issue_match.group(2)
-        return f"{base_wiki_title}/Volume_{vol}/Issue_{issue}/Text"
-
-    # --- STRATEGY 3: Folder Structure (Volume 1/...) ---
-    parts = rel_path.split(os.sep)
-    path_vol = None
-    path_issue = None
-    
-    for part in parts:
-        if not path_vol:
-            v_match = re.search(r'^(?:Vol|Volume)[\W_]*(\d+)$', part, re.IGNORECASE)
-            if v_match: path_vol = int(v_match.group(1))
-        if not path_issue:
-            i_match = re.search(r'^(?:No|Issue)[\W_]*(\d+)$', part, re.IGNORECASE)
-            if i_match: path_issue = int(i_match.group(1))
-
-    if path_vol:
-        final_issue = path_issue
-        if not final_issue:
-            num_match = re.search(r'(\d+)', filename)
-            if num_match: final_issue = int(num_match.group(1))
-        
-        if final_issue:
-            return f"{base_wiki_title}/Volume_{path_vol}/Issue_{final_issue}/Text"
-
-    # --- STRATEGY 4: Implicit "04-01" (Volume-Issue) ---
-    hyphen_vol_match = re.search(r'(\d+)-(\d+)', name_no_ext)
-    if hyphen_vol_match:
-        v_str = hyphen_vol_match.group(1)
-        i_str = hyphen_vol_match.group(2)
-        if v_str.startswith('0') or i_str.startswith('0'):
-            vol_num = int(v_str)
-            issue_num = int(i_str)
-            return f"{base_wiki_title}/Volume_{vol_num}/Issue_{issue_num}/Text"
-
-    # --- STRATEGY 5: Explicit Single Number with Prefix (Volume_5 or No_5) ---
-    explicit_vol = re.search(r'(?:Vol|Volume)[\W_]*(\d+)', name_no_ext, re.IGNORECASE)
-    if explicit_vol:
-        return f"{base_wiki_title}/Volume_{explicit_vol.group(1)}/Text"
-        
-    explicit_no = re.search(r'(?:No|Number)[\W_]*(\d+(?:-\d+)?)', name_no_ext, re.IGNORECASE)
-    if explicit_no:
-        return f"{base_wiki_title}/No_{explicit_no.group(1)}/Text"
-
-    # --- STRATEGY 6: Fallback "Name_24" or "Name_24-25" (No Volume) ---
-    simple_issue_match = re.search(r'(\d+(?:-\d+)?)', name_no_ext)
-    if simple_issue_match:
-        return f"{base_wiki_title}/Issue_{simple_issue_match.group(1)}/Text"
-
+def extract_pdf_filename_from_wikitext(wikitext):
+    """Extracts the PDF filename from the first {{page|...|file=FILENAME.pdf|...}} tag."""
+    match = re.search(r'\{\{page\|[^}]*?file\s*=\s*([^|}\n]+)', wikitext, re.IGNORECASE | re.DOTALL)
+    if match:
+        return match.group(1).strip()
     return None
 
 # ==============================================================================
@@ -328,11 +265,6 @@ if __name__ == '__main__':
     input_folder = st.sidebar.text_input("Local PDF Folder", value="/media/sarah/4TB/Projects/Bahai.works/English/Canada/1948-1975_CBN/")
     base_title = st.sidebar.text_input("Base Wiki Title", value="Canadian_Bahá’í_News")
 
-    # --- Pattern Override ---
-    st.sidebar.markdown("### Title Pattern Override")
-    st.sidebar.caption("Leave blank for auto-detect. Variables: `{base}`, `{v}` (Vol), `{i}` (Issue), `{n}` (Any Num).\n\n*Ex: `{base}/Volume_{n}/Text`*")
-    pattern_override = st.sidebar.text_input("Custom Pattern", value="")
-
     run_mode = st.sidebar.radio("Run Mode", ["Test (1 PDF Only)", "Production (All PDFs)"])
 
     ocr_strategy = st.sidebar.radio(
@@ -352,12 +284,12 @@ if __name__ == '__main__':
         st.rerun()
 
     state_display = st.sidebar.empty()
-    state_display.markdown(f"**Current State:**\n- File Index: `{state['current_file_index']}`")
+    state_display.markdown(f"**Current State:**\n- Wiki Page Index: `{state['current_file_index']}`")
 
     # --- Manual State Modification ---
     with st.sidebar.expander("🔧 Modify Position"):
         # Input fields initialized with current state values
-        new_file_index = st.number_input("File Index (0-based)", min_value=0, value=state['current_file_index'])
+        new_file_index = st.number_input("Wiki Page Index (0-based)", min_value=0, value=state['current_file_index'])
         
         if st.button("Update State"):
             # Update the JSON file with your manual values
@@ -372,22 +304,32 @@ if __name__ == '__main__':
         st.warning("Please provide a valid local folder path.")
         st.stop()
 
-    # 1. Scan Files
-    pdf_files = get_all_pdf_files(input_folder)
-    total_files = len(pdf_files)
+    if not base_title.strip():
+        st.warning("Please provide a valid Base Wiki Title.")
+        st.stop()
 
-    if total_files == 0:
-        st.error("No PDF files found in the directory.")
+    # 1. Build Local PDF Map & Query Wiki Pages
+    local_pdf_map = build_local_pdf_map(input_folder)
+    if not local_pdf_map:
+        st.error("No PDF files found in the local directory.")
+        st.stop()
+
+    with st.spinner(f"🔍 Searching Bahai.works for `{base_title}` subpages..."):
+        wiki_pages = get_all_wiki_text_pages(base_title)
+    total_pages_count = len(wiki_pages)
+
+    if total_pages_count == 0:
+        st.error(f"No `/Text` subpages found on Wiki under `{base_title}`.")
         st.stop()
 
     # --- GUARD CLAUSE ---
-    if state['current_file_index'] >= total_files:
-        st.warning(f"⚠️ Saved index ({state['current_file_index']}) is larger than total files ({total_files}). Resetting start position to 0.")
+    if state['current_file_index'] >= total_pages_count:
+        st.warning(f"⚠️ Saved index ({state['current_file_index']}) is larger than total Wiki pages ({total_pages_count}). Resetting start position to 0.")
         state['current_file_index'] = 0
         # Save the corrected state immediately
         save_state(0, "auto_reset")
 
-    st.info(f"📂 Found {total_files} PDF files in `{input_folder}`")
+    st.info(f"🌐 Found **{total_pages_count}** `/Text` pages on Wiki under `{base_title}` (and **{len(local_pdf_map)}** local PDFs indexed).")
 
     # 2. Status Display
     status_container = st.container(border=True)
@@ -414,50 +356,59 @@ if __name__ == '__main__':
 
         current_idx = state['current_file_index']
         
-        # If resuming, we start from the file index in state
+        # If resuming, we start from the index in state
         # If "Test Mode" is on, we only loop ONCE.
-        end_idx = current_idx + 1 if run_mode.startswith("Test") else total_files
+        end_idx = current_idx + 1 if run_mode.startswith("Test") else total_pages_count
 
-        for i in range(current_idx, end_idx):
-            pdf_path = pdf_files[i]
+        for idx in range(current_idx, end_idx):
+            wiki_title = wiki_pages[idx]
             
-            # 4a. Resolve Titles
-            wiki_title = get_wiki_title(pdf_path, input_folder, base_title, pattern_override)
-            
-            if not wiki_title:
-                st.error(f"Could not determine Wiki Title for {pdf_path}. Skipping.")
+            status_container.markdown(f"### 🔨 Processing Wiki Page {idx+1}/{total_pages_count}: `{wiki_title}`")
+
+            # 4a. Fetch Live Wikitext First to Discover Required PDF
+            log_area.text(f"🌐 Fetching live text from {wiki_title}...")
+            max_retries = 3
+            for attempt in range(max_retries):
+                live_wikitext, error = fetch_wikitext(wiki_title, session=session)
+                if not error:
+                    break
+                if attempt < max_retries - 1:
+                    time.sleep(30)
+            if error:
+                st.error(f"CRITICAL ERROR: Could not fetch '{wiki_title}'. Error: {error}")
+                st.stop()
+
+            live_wikitext = normalize_page_templates(live_wikitext, session)
+
+            # 4b. Extract PDF filename from {{page|...|file=...}} and match locally
+            wiki_pdf_name = extract_pdf_filename_from_wikitext(live_wikitext)
+            if not wiki_pdf_name:
+                st.warning(f"⚠️ No `{{{{page|...|file=...}}}}` tag found on `{wiki_title}`. Skipping.")
+                save_state(idx + 1, "running", last_file_path=wiki_title)
                 continue
 
-            short_name = os.path.basename(pdf_path)
-            
-            status_container.markdown(f"### 🔨 Processing File {i+1}/{total_files}: `{short_name}`")
-            status_container.caption(f"Target Wiki Page: `{wiki_title}`")
+            lookup_key = wiki_pdf_name.lower().replace(" ", "_")
+            pdf_path = local_pdf_map.get(lookup_key)
 
-            # --- NEW: Local Working Copy Setup ---
+            if not pdf_path:
+                st.warning(f"⚠️ Wiki page `{wiki_title}` expects `{wiki_pdf_name}`, which was not found in `{input_folder}`. Skipping.")
+                save_state(idx + 1, "running", last_file_path=wiki_title)
+                continue
+
+            # Use the exact filename found on disk for processing, or wiki_pdf_name for tag matching
+            short_name = os.path.basename(pdf_path)
+            status_container.caption(f"Matched Local PDF: `{short_name}` (Wiki `file={wiki_pdf_name}`)")
+
+            # --- Local Working Copy Setup ---
             wip_file_path = os.path.join(project_root, f"wip_{short_name}.txt")
 
             if not os.path.exists(wip_file_path):
-                log_area.text(f"🌐 Fetching live text from {wiki_title} to start local editing...")
-                max_retries = 3
-                for attempt in range(max_retries):
-                    current_wikitext, error = fetch_wikitext(wiki_title, session=session)
-                    if not error:
-                        break
-                    if attempt < max_retries - 1:
-                        time.sleep(30)
-                if error:
-                    st.error(f"CRITICAL ERROR: Could not fetch '{wiki_title}'. Error: {error}")
-                    st.stop()
-                
-                # Save the initial fetch to our local working file
-                current_wikitext = normalize_page_templates(current_wikitext, session)
-
                 # Save the initial fetch to our local working file
                 with open(wip_file_path, "w", encoding="utf-8") as f:
-                    f.write(current_wikitext)
+                    f.write(live_wikitext)
 
-                save_state(i, "merging", last_file_path=short_name)
-                state_display.markdown(f"**Current State:**\n- File Index: `{i}`")
+                save_state(idx, "merging", last_file_path=short_name)
+                state_display.markdown(f"**Current State:**\n- Wiki Page Index: `{idx}`")
 
             else:
                 log_area.text(f"📂 Resuming from local working copy for {short_name}...")
@@ -574,7 +525,7 @@ if __name__ == '__main__':
             # --- Calculate the anchor offset for Roman Numeral logic ---
             anchor_pdf_page = find_anchor_offset(current_wikitext)
 
-            save_state(i, "merging", last_file_path=short_name)
+            save_state(idx, "merging", last_file_path=short_name)
 
             for page_num in pages_to_process:
                 if stop_info:
@@ -594,7 +545,7 @@ if __name__ == '__main__':
                     if is_last_page:
                         pass # Let it fall through to the cleanup phase below
                     else:
-                        save_state(i, "merging", last_file_path=short_name)
+                        save_state(idx, "merging", last_file_path=short_name)
                         continue
 
                 if is_last_page and final_text:
@@ -677,8 +628,8 @@ if __name__ == '__main__':
                             os.remove(batch_file_path)
 
             # Update State (Success for entire file)
-            save_state(i + 1, "running", last_file_path=short_name)
-            state_display.markdown(f"**Current State:**\n- File Index: `{i + 1}`")
+            save_state(idx + 1, "running", last_file_path=short_name)
+            state_display.markdown(f"**Current State:**\n- Wiki Page Index: `{idx + 1}`")
             with status_container:
                 st.success(f"✅ Finished Document: {short_name}")
 
@@ -687,6 +638,6 @@ if __name__ == '__main__':
 
         # End of Loop
         st.success("🎉 Batch Processing Complete!")
-        save_state(end_idx, "done", last_file_path=short_name)
+        save_state(end_idx, "done", last_file_path=short_name if 'short_name' in locals() else None)
         if 'short_name' in locals():
-            state_display.markdown(f"**Current State:**\n- File Index: `{end_idx}`")
+            state_display.markdown(f"**Current State:**\n- Wiki Page Index: `{end_idx}`")
