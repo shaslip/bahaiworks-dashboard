@@ -361,11 +361,14 @@ def build_sequential_route_map(subpages, session, input_folder):
     return route_map, master_pdf_filename, wikitext_cache, ordered_subpages
 
 def normalize_filename(name):
-    """Normalizes spaces/underscores, strips accents/apostrophes, and lowercases for fuzzy matching."""
-    nfkd = unicodedata.normalize('NFKD', name)
+    """Normalizes spaces/underscores, strips accents/punctuation, and lowercases for fuzzy matching."""
+    base, ext = os.path.splitext(name)
+    nfkd = unicodedata.normalize('NFKD', base)
     ascii_str = "".join([c for c in nfkd if not unicodedata.combining(c)])
-    ascii_str = re.sub(r"['’‘`]", "", ascii_str)
-    return ascii_str.lower().replace(" ", "_")
+    # Strip commas, colons, apostrophes, and other punctuation
+    ascii_str = re.sub(r"[,:;.'’‘`!?\-\(\)\[\]]", "", ascii_str)
+    clean_base = re.sub(r"[\s_]+", "_", ascii_str.lower()).strip("_")
+    return clean_base + ext.lower()
 
 def find_local_pdf(filename, root_folder):
     if not filename or not root_folder or not os.path.exists(root_folder):
@@ -1205,7 +1208,7 @@ if subpages_to_process:
         if "overflow_cache" not in state:
             state["overflow_cache"] = {}
         
-        local_pdf_path = find_local_pdf(state["master_pdf"], input_folder)
+        local_pdf_path = resolve_pdf_path(state, input_folder)
         if not local_pdf_path:
             st.error(f"Local PDF not found for '{state['master_pdf']}'")
             st.stop()
@@ -1423,7 +1426,7 @@ if subpages_to_upload:
         status_text = st.empty()
         log_container = st.container(border=True)
         
-        local_pdf_path = find_local_pdf(state["master_pdf"], input_folder)
+        local_pdf_path = resolve_pdf_path(state, input_folder)
         pdf_dir = os.path.dirname(local_pdf_path) if local_pdf_path else ""
         
         if "uploaded_subpages" not in state:
@@ -1491,7 +1494,7 @@ else:
         save_queue(queue_data)
         
         # Locate the directory and delete the .txt files
-        local_pdf_path = find_local_pdf(state["master_pdf"], input_folder)
+        local_pdf_path = resolve_pdf_path(state, input_folder)
         if local_pdf_path:
             pdf_dir = os.path.dirname(local_pdf_path)
             deleted_count = 0
