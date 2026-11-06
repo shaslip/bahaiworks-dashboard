@@ -11,12 +11,6 @@ import math
 import unicodedata
 from urllib.parse import unquote
 
-# --- Force spawn to prevent gRPC crashes in background processes ---
-try:
-    multiprocessing.set_start_method('spawn', force=True)
-except RuntimeError:
-    pass
-
 # --- Path Setup ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
