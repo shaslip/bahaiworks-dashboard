@@ -546,6 +546,7 @@ if execution_mode == "All Books (Production)":
     pending_books = [b for b, d in queue_data.items() if d.get("status", "").upper() == "PENDING"]
     
     if not pending_books:
+        st.session_state["auto_running"] = False
         st.success("No 'PENDING' books found in the queue.")
         st.stop()
         
@@ -559,13 +560,15 @@ if execution_mode == "All Books (Production)":
     
     col_start, col_stop = st.columns([1, 1])
     with col_start:
-        start_auto = st.button("▶️ Start Automation Loop", type="primary", width='stretch')
+        if st.button("▶️ Start Automation Loop", type="primary", width='stretch'):
+            st.session_state["auto_running"] = True
     with col_stop:
         if st.button("🛑 Stop Execution", width='stretch'):
+            st.session_state["auto_running"] = False
             st.warning("Automation stopped.")
             st.stop()
             
-    if start_auto:
+    if st.session_state.get("auto_running", False):
         overall_progress = st.progress(0)
         overall_status = st.empty()
         
@@ -864,7 +867,10 @@ if execution_mode == "All Books (Production)":
             # Sleep logic between books
             if idx < len(target_pending_books) - 1:
                 log_container.info("⏳ Sleeping for 5 minutes before processing the next book...")
-                countdown = st.empty()
+                col_timer, col_skip = log_container.columns([3, 1])
+                countdown = col_timer.empty()
+                if col_skip.button("⏭️ Skip Wait", key=f"skip_wait_{idx}", width='stretch'):
+                    st.rerun()
                 for remaining in range(300, 0, -1):
                     mins, secs = divmod(remaining, 60)
                     hours, mins = divmod(mins, 60)
@@ -872,6 +878,7 @@ if execution_mode == "All Books (Production)":
                     time.sleep(1)
                 countdown.empty()
                 
+        st.session_state["auto_running"] = False
         st.success("🎉 Automated queue complete! Switch back to '1 Book (Test)' to manually upload books marked as READY.")
         
     st.stop()
