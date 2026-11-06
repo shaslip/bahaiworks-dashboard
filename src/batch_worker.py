@@ -75,7 +75,6 @@ def process_pdf_batch(batch_id, page_list, pdf_path, ocr_strategy, short_name, p
                             final_text = rescue_text
 
             else:
-                shared_log_list.append(f"🔍 [Gemini] Processing Page {page_num}...")
                 final_text = proofread_with_formatting(img)
                 is_gemini_error = "GEMINI_ERROR" in final_text or "Recitation" in final_text or "Copyright" in final_text
 
