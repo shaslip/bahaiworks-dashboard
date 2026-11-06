@@ -712,112 +712,72 @@ if execution_mode == "All Books (Production)":
                 log_container.write(f"📄 Master JSON already exists for {master_pdf_filename}.")
                 with open(master_json_path, 'r', encoding='utf-8') as f:
                     master_data = json.load(f)
-                    
-            # --- AUTO STEP 3: Offline Batch Processing ---
-            log_container.write("💾 Processing subpages locally...")
-            subpages_to_process = [sp for sp in state["subpages"] if sp not in state.get("completed_subpages", [])]
-            if "overflow_cache" not in state: state["overflow_cache"] = {}
-            
-            for active_chapter in subpages_to_process:
-                active_chapter_idx = state["subpages"].index(active_chapter)
-                next_chapter = state["subpages"][active_chapter_idx + 1] if active_chapter_idx + 1 < len(state["subpages"]) else None
-                
-                current_wikitext_for_year = state["wikitext_cache"].get(active_chapter, "")
-                found_year = None
-                cat_match = re.search(r'\[\[Category:\s*(\d{4})\s*\]\]', current_wikitext_for_year, re.IGNORECASE)
-                if cat_match: found_year = cat_match.group(1)
-                
-                page_data = state["route_map"].get(active_chapter, {})
-                pdf_targets = page_data.get("pdf_pages", [])
-                
-                # Unmapped Chapter
-                if not pdf_targets:
-                    current_wikitext = state["wikitext_cache"].get(active_chapter, "")
-                    overflow = state.get("overflow_cache", {}).get(active_chapter, "")
-                    
-                    safe_tags = []
-                    access_match = re.search(r'<accesscontrol>.*?</accesscontrol>', current_wikitext, flags=re.IGNORECASE | re.DOTALL)
-                    if access_match: safe_tags.append(access_match.group(0))
-                    header_match = re.search(r'\{\{header(?:[^{}]|\{\{[^}]*\}\})*\}\}', current_wikitext, flags=re.IGNORECASE | re.DOTALL)
-                    if header_match: safe_tags.append(header_match.group(0))
-                    preserved_prefix = "\n".join(safe_tags) + "\n" if safe_tags else ""
-                    
-                    combined_text = (preserved_prefix + overflow.strip()) if overflow else current_wikitext.strip()
-                    
-                    if combined_text:
-                        combined_text = apply_final_formatting(combined_text, active_chapter, found_year)
-                        safe_sp = active_chapter.replace("/", "_")
-                        with open(os.path.join(pdf_dir, f"{safe_sp}.txt"), "w", encoding="utf-8") as f:
-                            f.write(combined_text)
-                    state["completed_subpages"].append(active_chapter)
-                    save_book_state(safe_title, state)
-                    continue
-                    
-                pages_to_process_ch = [t["pdf_num"] for t in pdf_targets]
-                all_extracted_text = {int(p): master_data[str(p)] for p in pages_to_process_ch if str(p) in master_data}
-                
-                # LLM Split logic
-                all_ghost_chapters = [ch for ch in state["subpages"] if not state["route_map"].get(ch, {}).get("pdf_pages")]
-                pending_ghosts = [ch for ch in all_ghost_chapters if ch not in state.get("completed_subpages", []) and ch not in state.get("overflow_cache", {}) and ch != active_chapter]
-                next_chapter_needs_split = state["route_map"].get(next_chapter, {}).get("needs_split", False) if next_chapter else False
-                
-                if pages_to_process_ch and (pending_ghosts or next_chapter_needs_split):
-                    last_page_num = pages_to_process_ch[-1]
-                    last_page_text = all_extracted_text.get(last_page_num, "")
-                    if last_page_text:
-                        unmapped_to_pass = [ch for ch in pending_ghosts if ch != next_chapter]
-                        split_results = apply_chunked_split(last_page_text, next_chapter, unmapped_to_pass, "Look for the start of a new section or chapter heading.")
-                        
-                        if "_previous_" in split_results:
-                            all_extracted_text[last_page_num] = split_results["_previous_"]
-                        for found_chap, text_content in split_results.items():
-                            if found_chap != "_previous_" and text_content.strip():
-                                existing_overflow = state["overflow_cache"].get(found_chap, "")
-                                if text_content.strip() not in existing_overflow:
-                                    state["overflow_cache"][found_chap] = f"{existing_overflow}\n\n{text_content}".strip()
-                                    
-                # Inject current chapter text
-                current_wikitext = state["wikitext_cache"].get(active_chapter, "")
-                for target in pdf_targets:
-                    if all_extracted_text.get(target["pdf_num"]):
-                        current_wikitext, _ = inject_text_into_page(current_wikitext, target["label"], all_extracted_text[target["pdf_num"]], master_pdf_filename)
-                        
-                final_wikitext = current_wikitext
-                preserved_prefix = ""
-                match = re.search(r'\{\{page\|', final_wikitext, flags=re.IGNORECASE)
-                if match:
-                    leading_text = final_wikitext[:match.start()]
-                    safe_tags = []
-                    access_match = re.search(r'<accesscontrol>.*?</accesscontrol>', leading_text, flags=re.IGNORECASE | re.DOTALL)
-                    if access_match: safe_tags.append(access_match.group(0))
-                    header_match = re.search(r'\{\{header(?:[^{}]|\{\{[^}]*\}\})*\}\}', leading_text, flags=re.IGNORECASE | re.DOTALL)
-                    if header_match: safe_tags.append(header_match.group(0))
-                    preserved_prefix = "\n".join(safe_tags) + "\n" if safe_tags else ""
-                    final_wikitext = final_wikitext[match.start():]
-                else:
-                    final_wikitext = ""
-                    
-                overflow = state.get("overflow_cache", {}).get(active_chapter, "")
-                if overflow: final_wikitext = f"{overflow}\n\n{final_wikitext}".strip()
-                final_wikitext = preserved_prefix + final_wikitext
-                final_wikitext = apply_final_formatting(final_wikitext, active_chapter, found_year)
-                
-                safe_sp = active_chapter.replace("/", "_")
-                with open(os.path.join(pdf_dir, f"{safe_sp}.txt"), "w", encoding="utf-8") as f:
-                    f.write(final_wikitext)
-                    
-                state["completed_subpages"].append(active_chapter)
-                save_book_state(safe_title, state)
-                
-            # --- AUTO STEP 4: Conditional Wiki Upload ---
-            will_need_split = False
+
+            # --- CHECK IF SPLIT / MANUAL REVIEW IS NEEDED BEFORE STEP 3 ---
+            split_reasons = []
             for sp in state["subpages"]:
                 route_info = state.get("route_map", {}).get(sp, {})
-                if not route_info.get("pdf_pages") or route_info.get("needs_split", False):
-                    will_need_split = True
-                    break
-            
-            if not will_need_split:
+                if not route_info.get("pdf_pages"):
+                    split_reasons.append(f"`{sp}` (Unmapped / No {{page}} tags)")
+                elif route_info.get("needs_split", False):
+                    split_reasons.append(f"`{sp}` (Needs Split / Text before first {{page}} tag)")
+
+            if split_reasons:
+                queue_data[target_book]["status"] = "READY"
+                save_queue(queue_data)
+                reasons_str = "\n  - ".join(split_reasons)
+                log_container.warning(
+                    f"⏸️ **{target_book}** paused before Step 3 (Marked `READY` for manual split in Test Mode).\n"
+                    f"**Chapters requiring split/review:**\n  - {reasons_str}"
+                )
+            else:
+                # --- AUTO STEP 3: Offline Batch Processing (No Splits Needed) ---
+                log_container.write("💾 Processing subpages locally...")
+                subpages_to_process = [sp for sp in state["subpages"] if sp not in state.get("completed_subpages", [])]
+                
+                for active_chapter in subpages_to_process:
+                    current_wikitext_for_year = state["wikitext_cache"].get(active_chapter, "")
+                    found_year = None
+                    cat_match = re.search(r'\[\[Category:\s*(\d{4})\s*\]\]', current_wikitext_for_year, re.IGNORECASE)
+                    if cat_match: found_year = cat_match.group(1)
+                    
+                    page_data = state["route_map"].get(active_chapter, {})
+                    pdf_targets = page_data.get("pdf_pages", [])
+                    pages_to_process_ch = [t["pdf_num"] for t in pdf_targets]
+                    all_extracted_text = {int(p): master_data[str(p)] for p in pages_to_process_ch if str(p) in master_data}
+                    
+                    # Inject current chapter text
+                    current_wikitext = state["wikitext_cache"].get(active_chapter, "")
+                    for target in pdf_targets:
+                        if all_extracted_text.get(target["pdf_num"]):
+                            current_wikitext, _ = inject_text_into_page(current_wikitext, target["label"], all_extracted_text[target["pdf_num"]], master_pdf_filename)
+                            
+                    final_wikitext = current_wikitext
+                    preserved_prefix = ""
+                    match = re.search(r'\{\{page\|', final_wikitext, flags=re.IGNORECASE)
+                    if match:
+                        leading_text = final_wikitext[:match.start()]
+                        safe_tags = []
+                        access_match = re.search(r'<accesscontrol>.*?</accesscontrol>', leading_text, flags=re.IGNORECASE | re.DOTALL)
+                        if access_match: safe_tags.append(access_match.group(0))
+                        header_match = re.search(r'\{\{header(?:[^{}]|\{\{[^}]*\}\})*\}\}', leading_text, flags=re.IGNORECASE | re.DOTALL)
+                        if header_match: safe_tags.append(header_match.group(0))
+                        preserved_prefix = "\n".join(safe_tags) + "\n" if safe_tags else ""
+                        final_wikitext = final_wikitext[match.start():]
+                    else:
+                        final_wikitext = ""
+                        
+                    final_wikitext = preserved_prefix + final_wikitext
+                    final_wikitext = apply_final_formatting(final_wikitext, active_chapter, found_year)
+                    
+                    safe_sp = active_chapter.replace("/", "_")
+                    with open(os.path.join(pdf_dir, f"{safe_sp}.txt"), "w", encoding="utf-8") as f:
+                        f.write(final_wikitext)
+                        
+                    state["completed_subpages"].append(active_chapter)
+                    save_book_state(safe_title, state)
+                    
+                # --- AUTO STEP 4: Wiki Upload ---
                 log_container.write("🌐 No split logic required. Auto-uploading to Wiki...")
                 spam_blocked_book = False
                 
@@ -898,11 +858,6 @@ if execution_mode == "All Books (Production)":
                         deleted_count += 1
                         
                 log_container.success(f"✅ {target_book} automatically uploaded, marked COMPLETED, and cleaned up ({deleted_count} local .txt files removed).")
-            else:
-                # Finalize Book as READY
-                queue_data[target_book]["status"] = "READY"
-                save_queue(queue_data)
-                log_container.success(f"✅ {target_book} is completely mapped and processed. Requires manual review (READY).")
                 
             overall_progress.progress((idx + 1) / len(target_pending_books))
             
@@ -1145,16 +1100,21 @@ if subpages_to_process:
     st.info(f"Ready to process {len(subpages_to_process)} remaining sections locally.")
 
     # --- Evaluate if LLM Split is needed ---
-    will_need_split = False
+    split_reasons = []
     for sp in subpages_to_process:
         route_info = state.get("route_map", {}).get(sp, {})
-        if not route_info.get("pdf_pages") or route_info.get("needs_split", False):
-            will_need_split = True
-            break
+        if not route_info.get("pdf_pages"):
+            split_reasons.append(f"- `{sp}` *(Unmapped / No {{page}} tags)*")
+        elif route_info.get("needs_split", False):
+            split_reasons.append(f"- `{sp}` *(Needs Split / Text before first {{page}} tag)*")
 
     split_prompt = ""
-    if will_need_split:
-        st.warning("⚠️ The map indicates that chapter splits are required. Review the LLM split instruction below before starting.")
+    if split_reasons:
+        reasons_md = "\n".join(split_reasons)
+        st.warning(
+            f"⚠️ **The map indicates that the following chapter(s) require splits:**\n{reasons_md}\n\n"
+            f"Review the LLM split instruction below before starting."
+        )
         split_prompt = st.text_area(
             "Custom Split Instruction", 
             value="Look for the start of a new obituary. The person's name is usually in all caps or a distinct heading.",
