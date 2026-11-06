@@ -493,6 +493,17 @@ if __name__ == '__main__':
                             
                         time.sleep(1)
 
+                    # Check if any batch worker crashed or returned False (Fatal Rate Limit)
+                    batch_failed = False
+                    for batch_id, future in enumerate(futures):
+                        exc = future.exception()
+                        if exc:
+                            st.error(f"🚨 Worker Batch {batch_id + 1} crashed with exception: {exc}")
+                            batch_failed = True
+                        elif future.result() is False:
+                            st.error(f"🚨 Worker Batch {batch_id + 1} halted early (check batch logs above for rate limit or fatal error).")
+                            batch_failed = True
+
                 # --- FORCE SHUTDOWN TO PREVENT THE UI HANG ---
                 executor.shutdown(wait=False, cancel_futures=True)
                 
@@ -505,6 +516,9 @@ if __name__ == '__main__':
                         except OSError:
                             pass
 
+                if batch_failed:
+                    st.stop()
+
             # 4d. Sequential Merge & Wiki Injection
             log_area.text(f"🔄 Merging parallel batches and injecting wikitext for {short_name}...")
             
@@ -516,7 +530,13 @@ if __name__ == '__main__':
                     with open(batch_file_path, "r", encoding="utf-8") as f:
                         batch_data = json.load(f)
                         for p_num_str, text in batch_data.items():
-                            all_extracted_text[int(p_num_str)] = text
+                            if text and text.strip():
+                                all_extracted_text[int(p_num_str)] = text
+
+            # SAFETY GUARD: Never touch the Wiki if no pages were extracted!
+            if not all_extracted_text:
+                st.error(f"CRITICAL SAFETY STOP: 0 pages were extracted for `{short_name}`. Aborting before modifying `{wiki_title}`.")
+                st.stop()
 
             # Sequentially inject each page into the live wikitext
             with open(wip_file_path, "r", encoding="utf-8") as f:
@@ -532,24 +552,16 @@ if __name__ == '__main__':
                     st.warning("Stopping requested... finishing current document.")
                     break
 
-                final_text = all_extracted_text.get(page_num, "")
-                is_last_page = (page_num == total_pages)
+                final_text = all_extracted_text.get(page_num, "").strip()
                 
                 # --- Calculate label and fix tags before injection ---
                 correct_label = calculate_page_label(page_num, anchor_pdf_page)
-                current_wikitext = find_and_fix_tag_by_page_num(current_wikitext, short_name, page_num, correct_label)
+                current_wikitext = find_and_fix_tag_by_page_num(current_wikitext, wiki_pdf_name, page_num, correct_label)
 
                 if not final_text:
                     log_area.text(f"⚠️ Page {page_num} was empty or failed. Skipping injection.")
-                    # We still need to trigger the final upload if this skipped page was the last page
-                    if is_last_page:
-                        pass # Let it fall through to the cleanup phase below
-                    else:
-                        save_state(idx, "merging", last_file_path=short_name)
-                        continue
-
-                if is_last_page and final_text:
-                    final_text += "\n__NOTOC__"
+                    save_state(idx, "merging", last_file_path=short_name)
+                    continue
 
                 # --- PAGE 1 SPECIAL HANDLING ---
                 if page_num == 1:
@@ -590,7 +602,7 @@ if __name__ == '__main__':
                     current_wikitext = update_header_ps_tag(current_wikitext)
                 
                 # Inject Content
-                final_wikitext, inject_error = inject_text_into_page(current_wikitext, correct_label, final_text, short_name)
+                final_wikitext, inject_error = inject_text_into_page(current_wikitext, correct_label, final_text, wiki_pdf_name)
                 
                 if inject_error:
                     st.error(f"CRITICAL ERROR injecting {short_name} Page {page_num}: {inject_error}")
@@ -602,30 +614,32 @@ if __name__ == '__main__':
                 with open(wip_file_path, "w", encoding="utf-8") as f:
                     f.write(current_wikitext)
 
-                # --- SAFE FINAL CLEANUP & UPLOAD ---
-                if is_last_page:
-                    log_area.text(f"🧹 Running final seam cleanup on {short_name}...")
-                    cleaned_text = cleanup_page_seams(current_wikitext)
-                    
-                    # Convert short youtu.be links to full youtube.com URLs to bypass spam filter
-                    cleaned_text = re.sub(r'https?://(?:www\.)?youtu\.be/([a-zA-Z0-9_-]+)', r'https://www.youtube.com/watch?v=\1', cleaned_text)
-                    
-                    log_area.text(f"🚀 Uploading completed issue to Bahai.works...")
-                    summary = f"Automated Proofread: {short_name} (Full Issue)"
-                    res = upload_to_bahaiworks(wiki_title, cleaned_text, summary, session=session)
-                    
-                    if res.get('edit', {}).get('result') != 'Success':
-                        st.error(f"UPLOAD FAILED: {res}")
-                        st.stop()
-                    
-                    if os.path.exists(wip_file_path):
-                        os.remove(wip_file_path)
-                    
-                    # Clean up temp batch files only after successful upload
-                    for batch_id in range(len(batches)):
-                        batch_file_path = os.path.join(project_root, f"temp_{short_name}_batch_{batch_id}.json")
-                        if os.path.exists(batch_file_path):
-                            os.remove(batch_file_path)
+            # --- SAFE FINAL CLEANUP & UPLOAD (Outside the page loop) ---
+            if "__NOTOC__" not in current_wikitext:
+                current_wikitext = current_wikitext.rstrip() + "\n__NOTOC__\n"
+
+            log_area.text(f"🧹 Running final seam cleanup on {short_name}...")
+            cleaned_text = cleanup_page_seams(current_wikitext)
+            
+            # Convert short youtu.be links to full youtube.com URLs to bypass spam filter
+            cleaned_text = re.sub(r'https?://(?:www\.)?youtu\.be/([a-zA-Z0-9_-]+)', r'https://www.youtube.com/watch?v=\1', cleaned_text)
+            
+            log_area.text(f"🚀 Uploading completed issue to Bahai.works...")
+            summary = f"Automated Proofread: {short_name} (Full Issue)"
+            res = upload_to_bahaiworks(wiki_title, cleaned_text, summary, session=session)
+            
+            if res.get('edit', {}).get('result') != 'Success':
+                st.error(f"UPLOAD FAILED: {res}")
+                st.stop()
+            
+            if os.path.exists(wip_file_path):
+                os.remove(wip_file_path)
+            
+            # Clean up temp batch files only after successful upload
+            for batch_id in range(len(batches)):
+                batch_file_path = os.path.join(project_root, f"temp_{short_name}_batch_{batch_id}.json")
+                if os.path.exists(batch_file_path):
+                    os.remove(batch_file_path)
 
             # Update State (Success for entire file)
             save_state(idx + 1, "running", last_file_path=short_name)
