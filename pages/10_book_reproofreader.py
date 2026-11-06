@@ -1015,10 +1015,6 @@ if master_json_path and (not master_json_exists and locals().get('regenerate_mas
                 st.stop()
                 
             executor.shutdown(wait=False, cancel_futures=True)
-                master_log.error("❌ FATAL: 429 Rate Limit or Quota Error detected. Halting execution to prevent raw text saving.")
-                st.stop()
-                
-            executor.shutdown(wait=False, cancel_futures=True)
 
         master_log.write("🔄 Assembling pages into Master JSON...")
         master_data = {}
