@@ -9,6 +9,7 @@ import fitz  # PyMuPDF
 import concurrent.futures
 import math
 import multiprocessing
+import unicodedata
 from urllib.parse import unquote
 
 # --- Force spawn to prevent gRPC crashes in background processes ---
@@ -358,6 +359,33 @@ def build_sequential_route_map(subpages, session, input_folder):
                     f.write(wikitext_cache.get(sp, ""))
 
     return route_map, master_pdf_filename, wikitext_cache, ordered_subpages
+
+def normalize_filename(name):
+    """Normalizes spaces/underscores, strips accents/apostrophes, and lowercases for fuzzy matching."""
+    nfkd = unicodedata.normalize('NFKD', name)
+    ascii_str = "".join([c for c in nfkd if not unicodedata.combining(c)])
+    ascii_str = re.sub(r"['’‘`]", "", ascii_str)
+    return ascii_str.lower().replace(" ", "_")
+
+def find_local_pdf(filename, root_folder):
+    if not filename or not root_folder or not os.path.exists(root_folder):
+        return None
+    target_norm = normalize_filename(filename)
+    for dirpath, _, filenames in os.walk(root_folder):
+        for f in filenames:
+            if f.lower() == filename.lower() or normalize_filename(f) == target_norm:
+                return os.path.join(dirpath, f)
+    return None
+
+def resolve_pdf_path(state, root_folder):
+    """Returns custom_pdf_path from state if valid, otherwise searches root_folder."""
+    custom_path = state.get("custom_pdf_path")
+    if custom_path and os.path.isfile(custom_path):
+        return custom_path
+    master_pdf = state.get("master_pdf")
+    if master_pdf:
+        return find_local_pdf(master_pdf, root_folder)
+    return None
 
 def find_local_pdf(filename, root_folder):
     for dirpath, _, filenames in os.walk(root_folder):
@@ -967,14 +995,46 @@ with st.expander(f"📖 Map: {target_book} ({len(state['subpages'])} subpages)",
 st.divider()
 st.subheader("Step 2: Generate Master JSON")
 
-local_pdf_path = find_local_pdf(state["master_pdf"], input_folder) if state.get("master_pdf") else None
+local_pdf_path = resolve_pdf_path(state, input_folder)
 pdf_dir = os.path.dirname(local_pdf_path) if local_pdf_path else ""
 master_json_path = os.path.join(pdf_dir, f"master_{state.get('master_pdf')}.json") if pdf_dir else ""
 master_json_exists = os.path.exists(master_json_path) if master_json_path else False
 
-if not master_json_path:
-    st.warning("Cannot determine Master JSON path. Please ensure Map is generated correctly.")
+if not local_pdf_path:
+    st.error(
+        f"❌ **Local PDF Not Found:** Could not locate `{state.get('master_pdf')}` "
+        f"inside `{input_folder}`."
+    )
+    col_p1, col_p2 = st.columns([4, 1])
+    with col_p1:
+        manual_pdf_input = st.text_input(
+            "Paste Direct Full Path to Local PDF:",
+            value=state.get("custom_pdf_path", ""),
+            placeholder="/media/sarah/4TB/Projects/.../Book.pdf"
+        )
+    with col_p2:
+        st.write("")
+        st.write("")
+        if st.button("💾 Save PDF Path", type="primary", width='stretch'):
+            clean_path = manual_pdf_input.strip().strip('"').strip("'")
+            if os.path.isfile(clean_path):
+                state["custom_pdf_path"] = clean_path
+                save_book_state(safe_title, state)
+                
+                # Also write out initial chapter .txt files if missing
+                new_pdf_dir = os.path.dirname(clean_path)
+                for sp in state.get("subpages", []):
+                    safe_sp = sp.replace("/", "_")
+                    ch_file_path = os.path.join(new_pdf_dir, f"{safe_sp}.txt")
+                    if not os.path.exists(ch_file_path):
+                        with open(ch_file_path, "w", encoding="utf-8") as f:
+                            f.write(state.get("wikitext_cache", {}).get(sp, ""))
+                st.rerun()
+            else:
+                st.error(f"File does not exist at: `{clean_path}`")
+    st.stop()
 elif master_json_exists:
+    st.caption(f"📁 Using PDF: `{local_pdf_path}`")
     st.success(f"✅ Master JSON already exists for {state['master_pdf']}!")
     with st.expander("Re-generate Master JSON"):
         st.warning("Only do this if you need to re-OCR the entire document. This will overwrite the existing file.")
