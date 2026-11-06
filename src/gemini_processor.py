@@ -25,10 +25,10 @@ def check_fatal_rate_limit(e):
         raise Exception(f"FATAL_RATE_LIMIT: {str(e)}")
 
 def is_network_error(e):
-    """Detects transient network, timeout, or 5xx server errors."""
+    """Detects actual connection drops or 502/503 server outages (NOT 504 page timeouts)."""
     error_msg = str(e).lower()
     net_keywords = [
-        "deadline", "timeout", "timed out", "503", "504", "500", "502",
+        "503", "500", "502",
         "unavailable", "connection", "reset by peer", "broken pipe",
         "transport", "socket", "eof", "dns", "name resolution"
     ]
