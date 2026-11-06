@@ -1162,7 +1162,7 @@ if subpages_to_process:
         )
         split_prompt = st.text_area(
             "Custom Split Instruction", 
-            value="Look for the start of a new obituary. The person's name is usually in all caps or a distinct heading.",
+            value="Look for the start of a new chapter. The chapter is usually in all caps or a distinct heading.",
             help="Context to help the LLM identify where a specific chapter begins."
         )
 
