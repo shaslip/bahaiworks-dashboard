@@ -985,6 +985,7 @@ if master_json_path and (not master_json_exists and locals().get('regenerate_mas
                 futures.append(future)
 
             fatal_error = False
+            fatal_error_msg = ""
             while True:
                 all_done = True
                 for batch_id, future in enumerate(futures):
@@ -992,10 +993,11 @@ if master_json_path and (not master_json_exists and locals().get('regenerate_mas
                     if current_logs and batch_id in batch_placeholders:
                         batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
                         
-                        # Check for 429 / Rate Limit
+                        # Check for 429 / Rate Limit / Fatal Error
                         for log_msg in current_logs:
                             if "FATAL_RATE_LIMIT" in log_msg:
                                 fatal_error = True
+                                fatal_error_msg = f"[Batch {batch_id + 1}] {log_msg}"
                                 break
                     if fatal_error:
                         break
@@ -1009,6 +1011,10 @@ if master_json_path and (not master_json_exists and locals().get('regenerate_mas
 
             if fatal_error:
                 executor.shutdown(wait=False, cancel_futures=True)
+                master_log.error(f"❌ FATAL: `{fatal_error_msg}`. Halting execution to prevent raw text saving.")
+                st.stop()
+                
+            executor.shutdown(wait=False, cancel_futures=True)
                 master_log.error("❌ FATAL: 429 Rate Limit or Quota Error detected. Halting execution to prevent raw text saving.")
                 st.stop()
                 
