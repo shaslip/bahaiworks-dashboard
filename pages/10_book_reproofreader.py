@@ -409,12 +409,77 @@ with col_add_btn:
             st.session_state["selected_book"] = clean_title
             st.rerun()
 
+def reset_book_cache(book_title, root_folder):
+    """Deletes the local state JSON and any generated chapter .txt files for a book."""
+    safe_t = book_title.replace("/", "_")
+    state_file = os.path.join(CACHE_DIR, f"{safe_t}_state.json")
+    state_to_delete = load_book_state(safe_t)
+    master_pdf = state_to_delete.get("master_pdf")
+    if master_pdf:
+        local_pdf_path = find_local_pdf(master_pdf, root_folder)
+        if local_pdf_path:
+            pdf_dir = os.path.dirname(local_pdf_path)
+            for sp in state_to_delete.get("subpages", []):
+                safe_sp = sp.replace("/", "_")
+                ch_file_path = os.path.join(pdf_dir, f"{safe_sp}.txt")
+                if os.path.exists(ch_file_path):
+                    os.remove(ch_file_path)
+    if os.path.exists(state_file):
+        os.remove(state_file)
+
 if queue_data:
-    with st.expander("📋 Processing Queue", expanded=False):
-        df = [
-            {"Exclude": False, "Book Title": title, "Status": data.get("status", "UNKNOWN")}
-            for title, data in queue_data.items()
-        ]
+    with st.expander("📋 Processing Queue & Triage", expanded=True):
+        # Categorize statuses so all "ERROR: ..." variations group cleanly
+        def get_status_category(status_str):
+            s = status_str.upper()
+            if s.startswith("ERROR"): return "ERROR"
+            if s in ["PENDING", "READY", "SKIPPED", "COMPLETED"]: return s
+            return "OTHER"
+
+        counts = {"ERROR": 0, "PENDING": 0, "READY": 0, "SKIPPED": 0, "COMPLETED": 0, "OTHER": 0}
+        for data in queue_data.values():
+            cat = get_status_category(data.get("status", "UNKNOWN"))
+            counts[cat] = counts.get(cat, 0) + 1
+
+        # Display live metrics
+        m_cols = st.columns(5)
+        m_cols[0].metric("🚨 Errors", counts["ERROR"])
+        m_cols[1].metric("⏳ Pending", counts["PENDING"])
+        m_cols[2].metric("👀 Ready (Review)", counts["READY"])
+        m_cols[3].metric("⏭️ Skipped", counts["SKIPPED"])
+        m_cols[4].metric("✅ Completed", counts["COMPLETED"])
+
+        # Filter & Bulk Select Controls
+        col_filter, col_select_all = st.columns([4, 1])
+        with col_filter:
+            all_categories = ["ERROR", "PENDING", "READY", "SKIPPED", "COMPLETED"]
+            if counts["OTHER"] > 0:
+                all_categories.append("OTHER")
+            default_filters = [c for c in ["ERROR", "PENDING", "READY", "SKIPPED"] if counts[c] > 0]
+            if not default_filters:
+                default_filters = all_categories
+
+            selected_categories = st.multiselect(
+                "Filter by Status Category",
+                options=all_categories,
+                default=default_filters
+            )
+        with col_select_all:
+            st.write("")
+            st.write("")
+            select_all_visible = st.checkbox("Select All Visible", value=False)
+
+        # Build filtered dataframe
+        df = []
+        for title, data in queue_data.items():
+            raw_status = data.get("status", "UNKNOWN")
+            if get_status_category(raw_status) in selected_categories:
+                df.append({
+                    "Select": select_all_visible,
+                    "Book Title": title,
+                    "Status": raw_status
+                })
+
         edited_df = st.data_editor(
             df,
             width='stretch',
@@ -422,21 +487,49 @@ if queue_data:
             hide_index=True,
             disabled=["Book Title", "Status"],
             column_config={
-                "Exclude": st.column_config.CheckboxColumn("Exclude", default=False),
+                "Select": st.column_config.CheckboxColumn("Select", default=False),
                 "Book Title": st.column_config.TextColumn("Book Title"),
                 "Status": st.column_config.TextColumn("Status"),
             },
             key="queue_table"
         )
-        if st.button("🚫 Exclude Checked Books", type="primary", width='stretch'):
-            excluded_any = False
-            for row in edited_df:
-                if row.get("Exclude") and row.get("Book Title") in queue_data:
-                    queue_data[row["Book Title"]]["status"] = "SKIPPED"
-                    excluded_any = True
-            if excluded_any:
-                save_queue(queue_data)
-                st.rerun()
+
+        # Multi-Action Toolbar
+        b_col1, b_col2, b_col3 = st.columns(3)
+        with b_col1:
+            if st.button("🔄 Mark Fixed & Reset to PENDING", type="primary", width='stretch', help="Sets status to PENDING and wipes cached state/.txt files so the pipeline can cleanly re-run."):
+                changed = False
+                for row in edited_df:
+                    if row.get("Select") and row.get("Book Title") in queue_data:
+                        title = row["Book Title"]
+                        reset_book_cache(title, input_folder)
+                        queue_data[title]["status"] = "PENDING"
+                        changed = True
+                if changed:
+                    save_queue(queue_data)
+                    st.rerun()
+
+        with b_col2:
+            if st.button("🚫 Mark SKIPPED", width='stretch'):
+                changed = False
+                for row in edited_df:
+                    if row.get("Select") and row.get("Book Title") in queue_data:
+                        queue_data[row["Book Title"]]["status"] = "SKIPPED"
+                        changed = True
+                if changed:
+                    save_queue(queue_data)
+                    st.rerun()
+
+        with b_col3:
+            if st.button("✅ Force COMPLETED", width='stretch'):
+                changed = False
+                for row in edited_df:
+                    if row.get("Select") and row.get("Book Title") in queue_data:
+                        queue_data[row["Book Title"]]["status"] = "COMPLETED"
+                        changed = True
+                if changed:
+                    save_queue(queue_data)
+                    st.rerun()
 
 all_books = list(queue_data.keys())
 if not all_books:
