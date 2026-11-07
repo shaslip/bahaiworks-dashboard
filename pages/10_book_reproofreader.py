@@ -18,7 +18,7 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 # --- Imports ---
-from src.batch_worker import process_pdf_batch
+from src.batch_worker import process_pdf_batch, process_single_page, _fitz_lock
 from src.mediawiki_uploader import (
     upload_to_bahaiworks, 
     API_URL, 
@@ -638,59 +638,61 @@ if execution_mode == "All Books (Production)":
                         all_mapped_pages.add(p["pdf_num"])
                 pages_to_process = sorted(list(all_mapped_pages))
                 
-                num_batches = 20
-                batch_size = math.ceil(len(pages_to_process) / num_batches) if len(pages_to_process) > 0 else 1
-                batches = [pages_to_process[j:j + batch_size] for j in range(0, len(pages_to_process), batch_size)]
-                
-                batch_placeholders = {}
-                for i in range(len(batches)):
-                    if not batches[i]: continue
-                    start_pg, end_pg = batches[i][0], batches[i][-1]
-                    page_label = f"pg {start_pg}" if start_pg == end_pg else f"pgs {start_pg}-{end_pg}"
-                    with log_container.expander(f"Batch {i+1} Status ({page_label})", expanded=True):
-                        batch_placeholders[i] = st.empty()
+                temp_master_path = os.path.join(pdf_dir, f"temp_master_{master_pdf_filename}.json")
+                shared_results = {}
+                if os.path.exists(temp_master_path):
+                    try:
+                        with open(temp_master_path, "r", encoding="utf-8") as f:
+                            loaded_temp = json.load(f)
+                            shared_results = {str(k): v for k, v in loaded_temp.items()}
+                    except json.JSONDecodeError:
+                        shared_results = {}
+
+                ocr_progress_bar = log_container.progress(0)
+                ocr_status_text = log_container.empty()
+                with log_container.expander("📜 Live OCR Activity Log", expanded=True):
+                    log_placeholder = st.empty()
                 
                 for attempt in range(2):
                     fatal_error = False
                     fatal_error_msg = ""
-                    shared_logs = {i: [] for i in range(len(batches))}
+                    shared_log_list = []
                     
-                    executor = concurrent.futures.ThreadPoolExecutor(max_workers=num_batches)
-                    futures = []
-                    for batch_id, batch_pages in enumerate(batches):
-                        if not batch_pages: continue
-                        future = executor.submit(
-                            process_pdf_batch, batch_id, batch_pages, local_pdf_path, ocr_strategy, 
-                            master_pdf_filename, pdf_dir, shared_logs[batch_id]
+                    pdf_doc = fitz.open(local_pdf_path)
+                    executor = concurrent.futures.ThreadPoolExecutor(max_workers=100)
+                    futures = [
+                        executor.submit(
+                            process_single_page, page_num, pdf_doc, ocr_strategy,
+                            temp_master_path, shared_results, shared_log_list
                         )
-                        futures.append(future)
-                        
-                    # Restored live visibility loop with 429 monitoring
+                        for page_num in pages_to_process
+                    ]
+                    
+                    total_pages = len(futures)
+                    # Live visibility loop with 429 monitoring
                     while True:
-                        all_done = True
-                        for batch_id, future in enumerate(futures):
-                            current_logs = list(shared_logs.get(batch_id, []))
-                            if current_logs and batch_id in batch_placeholders:
-                                batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
-                                
-                                # Check for 429 / Rate Limit / Fatal Error
-                                for log_msg in current_logs:
-                                    if "FATAL_RATE_LIMIT" in log_msg:
-                                        fatal_error = True
-                                        fatal_error_msg = f"[Batch {batch_id + 1}] {log_msg}"
-                                        break
-                                        
-                            if fatal_error:
-                                break
-                                
-                            if not future.done():
-                                all_done = False
-                                
-                        if fatal_error or all_done:
+                        completed_futures = sum(1 for f in futures if f.done())
+                        in_flight = total_pages - completed_futures
+                        ocr_progress_bar.progress(completed_futures / total_pages if total_pages > 0 else 1.0)
+                        ocr_status_text.markdown(f"Completed: {completed_futures} / {total_pages} pages (In-Flight: {in_flight})")
+                        
+                        current_logs = list(shared_log_list)
+                        if current_logs:
+                            log_placeholder.text("\n".join(current_logs[-25:]))
+                            for log_msg in current_logs:
+                                if "FATAL_RATE_LIMIT" in log_msg:
+                                    fatal_error = True
+                                    fatal_error_msg = log_msg
+                                    break
+                                    
+                        if fatal_error or completed_futures == total_pages:
                             break
                         time.sleep(1)
                         
                     executor.shutdown(wait=False, cancel_futures=True)
+                    with _fitz_lock:
+                        if not pdf_doc.is_closed:
+                            pdf_doc.close()
                         
                     if fatal_error:
                         if attempt == 0:
@@ -701,7 +703,7 @@ if execution_mode == "All Books (Production)":
                                 retry_countdown.code(f"Retrying OCR in: {mins:02d}:{secs:02d}")
                                 time.sleep(1)
                             retry_countdown.empty()
-                            log_container.info("🔄 Retrying OCR batch processing...")
+                            log_container.info("🔄 Retrying OCR page processing...")
                         else:
                             log_container.error(f"❌ FATAL (Failed twice): `{fatal_error_msg}`. Halting execution.")
                             queue_data[target_book]["status"] = f"ERROR: {fatal_error_msg[:80]}"
@@ -711,18 +713,14 @@ if execution_mode == "All Books (Production)":
                         break
                     
                 log_container.write("🔄 Assembling pages into Master JSON...")
-                master_data = {}
-                for batch_id in range(len(batches)):
-                    batch_file_path = os.path.join(pdf_dir, f"temp_{master_pdf_filename}_batch_{batch_id}.json")
-                    if os.path.exists(batch_file_path):
-                        with open(batch_file_path, "r", encoding="utf-8") as f:
-                            batch_data = json.load(f)
-                            for p_num_str, text in batch_data.items():
-                                master_data[p_num_str] = text
-                        os.remove(batch_file_path)
-                        
+                master_data = {
+                    str(k): shared_results[str(k)]
+                    for k in sorted((int(x) for x in shared_results.keys()))
+                }
                 with open(master_json_path, 'w', encoding='utf-8') as f:
                     json.dump(master_data, f, indent=4)
+                if os.path.exists(temp_master_path):
+                    os.remove(temp_master_path)
             else:
                 log_container.write(f"📄 Master JSON already exists for {master_pdf_filename}.")
                 with open(master_json_path, 'r', encoding='utf-8') as f:
@@ -1052,76 +1050,76 @@ if master_json_path and (not master_json_exists and locals().get('regenerate_mas
         master_log = st.container(border=True)
         master_log.write(f"⚙️ Initiating full OCR processing for {len(pages_to_process)} pages...")
         
-        num_batches = 20
-        batch_size = math.ceil(len(pages_to_process) / num_batches) if len(pages_to_process) > 0 else 1
-        batches = [pages_to_process[j:j + batch_size] for j in range(0, len(pages_to_process), batch_size)]
+        temp_master_path = os.path.join(pdf_dir, f"temp_master_{state['master_pdf']}.json")
+        shared_results = {}
+        if os.path.exists(temp_master_path):
+            try:
+                with open(temp_master_path, "r", encoding="utf-8") as f:
+                    loaded_temp = json.load(f)
+                    shared_results = {str(k): v for k, v in loaded_temp.items()}
+            except json.JSONDecodeError:
+                shared_results = {}
 
-        batch_placeholders = {}
-        for i in range(len(batches)):
-            if not batches[i]: continue
-            start_pg, end_pg = batches[i][0], batches[i][-1]
-            page_label = f"pg {start_pg}" if start_pg == end_pg else f"pgs {start_pg}-{end_pg}"
-            with master_log.expander(f"Batch {i+1} Status ({page_label})", expanded=True):
-                batch_placeholders[i] = st.empty()
+        ocr_progress_bar = master_log.progress(0)
+        ocr_status_text = master_log.empty()
+        with master_log.expander("📜 Live OCR Activity Log", expanded=True):
+            log_placeholder = st.empty()
 
-        shared_logs = {i: [] for i in range(len(batches))}
+        shared_log_list = []
 
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=num_batches)
-        futures = []
-        for batch_id, batch_pages in enumerate(batches):
-            if not batch_pages: continue
-            future = executor.submit(
-                process_pdf_batch,
-                batch_id, batch_pages, local_pdf_path, ocr_strategy, 
-                state["master_pdf"], pdf_dir, shared_logs[batch_id]
+        pdf_doc = fitz.open(local_pdf_path)
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=100)
+        futures = [
+            executor.submit(
+                process_single_page,
+                page_num, pdf_doc, ocr_strategy, 
+                temp_master_path, shared_results, shared_log_list
             )
-            futures.append(future)
+            for page_num in pages_to_process
+        ]
 
+        total_pages = len(futures)
         fatal_error = False
         fatal_error_msg = ""
         while True:
-            all_done = True
-            for batch_id, future in enumerate(futures):
-                current_logs = list(shared_logs.get(batch_id, []))
-                if current_logs and batch_id in batch_placeholders:
-                    batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
-                    
-                    # Check for 429 / Rate Limit / Fatal Error
-                    for log_msg in current_logs:
-                        if "FATAL_RATE_LIMIT" in log_msg:
-                            fatal_error = True
-                            fatal_error_msg = f"[Batch {batch_id + 1}] {log_msg}"
-                            break
-                if fatal_error:
-                    break
-                    
-                if not future.done():
-                    all_done = False
-                    
-            if fatal_error or all_done:
+            completed_futures = sum(1 for f in futures if f.done())
+            in_flight = total_pages - completed_futures
+            ocr_progress_bar.progress(completed_futures / total_pages if total_pages > 0 else 1.0)
+            ocr_status_text.markdown(f"Completed: {completed_futures} / {total_pages} pages (In-Flight: {in_flight})")
+
+            current_logs = list(shared_log_list)
+            if current_logs:
+                log_placeholder.text("\n".join(current_logs[-25:]))
+                
+                # Check for 429 / Rate Limit / Fatal Error
+                for log_msg in current_logs:
+                    if "FATAL_RATE_LIMIT" in log_msg:
+                        fatal_error = True
+                        fatal_error_msg = log_msg
+                        break
+            if fatal_error or completed_futures == total_pages:
                 break
             time.sleep(1)
 
+        executor.shutdown(wait=False, cancel_futures=True)
+        with _fitz_lock:
+            if not pdf_doc.is_closed:
+                pdf_doc.close()
+
         if fatal_error:
-            executor.shutdown(wait=False, cancel_futures=True)
             master_log.error(f"❌ FATAL: `{fatal_error_msg}`. Halting execution to prevent raw text saving.")
             st.stop()
-            
-        executor.shutdown(wait=False, cancel_futures=True)
 
         master_log.write("🔄 Assembling pages into Master JSON...")
-        master_data = {}
-        for batch_id in range(len(batches)):
-            batch_file_path = os.path.join(pdf_dir, f"temp_{state['master_pdf']}_batch_{batch_id}.json")
-            if os.path.exists(batch_file_path):
-                with open(batch_file_path, "r", encoding="utf-8") as f:
-                    batch_data = json.load(f)
-                    for p_num_str, text in batch_data.items():
-                        master_data[p_num_str] = text
-                os.remove(batch_file_path)
+        master_data = {
+            str(k): shared_results[str(k)]
+            for k in sorted((int(x) for x in shared_results.keys()))
+        }
         
         with open(master_json_path, 'w', encoding='utf-8') as f:
             json.dump(master_data, f, indent=4)
+        if os.path.exists(temp_master_path):
+            os.remove(temp_master_path)
         
         st.success("🎉 Master JSON successfully generated!")
         st.rerun()
