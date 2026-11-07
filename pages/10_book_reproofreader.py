@@ -485,8 +485,8 @@ def render_ocr_telemetry(pages_to_process, page_futures, shared_results, shared_
 
     return completed_count == total_pages
 
-def upload_subpages_parallel(subpages_to_upload, pdf_dir, safe_title, state, session, progress_bar, status_text, log_container, max_workers=6):
-    """Uploads chapters concurrently using a cached CSRF token while handling spam filters safely."""
+def upload_subpages_parallel(subpages_to_upload, pdf_dir, safe_title, state, session, progress_bar, status_text, log_container, max_workers=2):
+    """Uploads chapters with low concurrency using a cached CSRF token to avoid MediaWiki DB deadlocks."""
     state_lock = threading.Lock()
     if "uploaded_subpages" not in state:
         state["uploaded_subpages"] = []
@@ -509,7 +509,7 @@ def upload_subpages_parallel(subpages_to_upload, pdf_dir, safe_title, state, ses
         with open(ch_file_path, "r", encoding="utf-8") as f:
             final_wikitext = f.read()
 
-        for attempt in range(2):
+        for attempt in range(4):
             try:
                 res = upload_to_bahaiworks(sp, final_wikitext, "Bot: Parallel Batch Reproofread", session=session)
             except Exception as e:
@@ -537,8 +537,8 @@ def upload_subpages_parallel(subpages_to_upload, pdf_dir, safe_title, state, ses
                     spam_blocked = True
                     return ("SPAM_BLOCKED", sp, err_str)
 
-                if attempt == 0:
-                    time.sleep(2)
+                if attempt < 3:
+                    time.sleep(2 * (attempt + 1))
                     continue
                 return ("FAILED", sp, err_str)
 
