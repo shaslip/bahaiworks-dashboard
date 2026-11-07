@@ -194,12 +194,32 @@ def normalize_page_templates(wikitext, session):
 
     return wikitext
 
+NAMESPACE_MAP = {
+    "edition": 3150,
+    "author": 4000,
+    "audio": 4010,
+    "video": 4020,
+    "transcript": 4030,
+    "bahaiworks": 4,
+    "project": 4,
+}
+
 def get_all_subpages(root_title, session):
     pages = []
+    ns_id = 0
+    prefix_title = root_title
+
+    if ":" in root_title:
+        potential_ns, remainder = root_title.split(":", 1)
+        if potential_ns.strip().lower() in NAMESPACE_MAP:
+            ns_id = NAMESPACE_MAP[potential_ns.strip().lower()]
+            prefix_title = remainder.strip()
+
     params = {
         "action": "query",
         "list": "allpages",
-        "apprefix": f"{root_title}/",
+        "apnamespace": str(ns_id),
+        "apprefix": f"{prefix_title}/",
         "aplimit": "500",
         "format": "json"
     }
