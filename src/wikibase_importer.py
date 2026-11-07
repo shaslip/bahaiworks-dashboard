@@ -7,7 +7,7 @@ from wikibaseintegrator.wbi_config import config as wbi_config
 from wikibaseintegrator.wbi_enums import ActionIfExists
 
 # Load environment variables
-load_dotenv()
+load_dotenv(override=True)
 
 # --- Configuration ---
 # Credentials from .env
@@ -21,7 +21,10 @@ wbi_config['MEDIAWIKI_API_URL'] = 'https://bahaidata.org/api.php'
 wbi_config['USER_AGENT'] = f'MyWikibaseBot/1.0 (https://bahaidata.org/User:{WB_USER})'
 
 def get_wbi_instance():
-    login_instance = wbi_login.Clientlogin(user=WB_USER, password=WB_PASS)
+    load_dotenv(override=True)
+    user = os.getenv("DATA_WIKI_USERNAME")
+    pwd = os.getenv("DATA_WIKI_PASSWORD")
+    login_instance = wbi_login.Login(user=user, password=pwd)
     return WikibaseIntegrator(login=login_instance)
 
 def check_or_create_person(wbi, person_name, role):
