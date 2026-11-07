@@ -495,12 +495,17 @@ def upload_to_bahaiworks(title, content, summary="Bot upload", check_exists=Fals
 
             if 'error' in data:
                 err_code = data['error'].get('code', '')
+                err_info = data['error'].get('info', '')
                 if err_code == 'badtoken' and attempt < 3:
                     continue
-                if err_code in ('ratelimited', 'maxlag', 'readonly') and attempt < 3:
-                    time.sleep(3 * (attempt + 1))
+                if (
+                    err_code in ('ratelimited', 'maxlag', 'readonly')
+                    or 'DBQueryError' in err_code
+                    or 'DBQueryError' in err_info
+                ) and attempt < 3:
+                    time.sleep(2 * (attempt + 1))
                     continue
-                raise Exception(data['error']['info'])
+                raise Exception(err_info)
                 
             return data
 
