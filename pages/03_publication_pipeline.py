@@ -227,7 +227,7 @@ if st.session_state.pipeline_stage == "setup":
         
         # A. Send to Gemini
         with b_gemini:
-            if st.button("🚀 Send to Gemini", type="primary", use_container_width=True):
+            if st.button("🚀 Send to Gemini", type="primary", width='stretch'):
                 with st.spinner("🤖 Gemini is extracting..."):
                     
                     # 1. Extract Metadata (Copyright)
@@ -258,7 +258,7 @@ if st.session_state.pipeline_stage == "setup":
         # B. Import Existing TOC from Wiki (Jump straight to Splitter)
         with b_wiki:
             if pub_type == "Book":
-                if st.button("📥 Import Existing TOC from Wiki", use_container_width=True, help="Fetches subpage links from the existing Bahai.works page and jumps straight to the Splitter."):
+                if st.button("📥 Import Existing TOC from Wiki", width='stretch', help="Fetches subpage links from the existing Bahai.works page and jumps straight to the Splitter."):
                     with st.spinner(f"Fetching TOC from {st.session_state['target_page']}..."):
                         toc_items, has_restricted, err = parse_wiki_toc(st.session_state["target_page"])
                         if err:
@@ -274,7 +274,7 @@ if st.session_state.pipeline_stage == "setup":
 
         # C. Manual Entry (Bypass)
         with b_manual:
-            if st.button("✍️ Skip Extraction (Manual Entry)", use_container_width=True):
+            if st.button("✍️ Skip Extraction (Manual Entry)", width='stretch'):
                 # Initialize empty state
                 st.session_state["talk_text"] = ""
                 st.session_state["meta_json_str"] = "{\n    \"title\": \"\",\n    \"author\": [],\n    \"year\": \"\"\n}"
@@ -1067,7 +1067,7 @@ elif st.session_state.pipeline_stage == "split":
             c_yes, c_no = st.columns(2)
             
             with c_yes:
-                if st.button("✅ Yes (Review & Create Chapter Items)", type="primary", use_container_width=True):
+                if st.button("✅ Yes (Review & Create Chapter Items)", type="primary", width='stretch'):
                     chapter_payload = []
                     for item in full_toc:
                         if item.get("page_name") and str(item.get("page_name")).strip() != "":
@@ -1080,7 +1080,7 @@ elif st.session_state.pipeline_stage == "split":
                     st.switch_page("pages/05_chapter_items.py")
 
             with c_no:
-                if st.button("❌ No (Complete & Return to Dashboard)", use_container_width=True):
+                if st.button("❌ No (Complete & Return to Dashboard)", width='stretch'):
                     with Session(engine) as session:
                         rec = session.get(Document, doc_id)
                         if rec:
@@ -1100,7 +1100,7 @@ elif st.session_state.pipeline_stage == "split":
                     go_back()
         else:
             st.subheader("4. Completion")
-            if st.button("🏁 Complete Document & Return to Dashboard", type="primary", use_container_width=True):
+            if st.button("🏁 Complete Document & Return to Dashboard", type="primary", width='stretch'):
                 with Session(engine) as session:
                     rec = session.get(Document, doc_id)
                     if rec:
