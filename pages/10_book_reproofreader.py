@@ -7,6 +7,7 @@ import time
 import requests
 import fitz  # PyMuPDF
 import concurrent.futures
+import threading
 import math
 import unicodedata
 from urllib.parse import unquote
@@ -22,7 +23,8 @@ from src.batch_worker import process_pdf_batch, process_single_page, _fitz_lock
 from src.mediawiki_uploader import (
     upload_to_bahaiworks, 
     API_URL, 
-    fetch_wikitext, 
+    fetch_wikitext,
+    fetch_wikitext_batch,
     inject_text_into_page, 
     get_csrf_token,
     cleanup_page_seams,
@@ -241,10 +243,15 @@ def build_sequential_route_map(subpages, session, input_folder):
     master_pdf_filename = None
     wikitext_cache = {}
     
+    # Pre-fetch all subpages in batches of 50 per HTTP request
+    batched_texts = fetch_wikitext_batch(subpages, session=session)
+    
     for title in subpages:
-        text, err = fetch_wikitext(title, session=session)
-        if err or not text:
-            continue
+        text = batched_texts.get(title)
+        if not text:
+            text, err = fetch_wikitext(title, session=session)
+            if err or not text:
+                continue
             
         # --- Normalize Custom Templates (e.g. {{swpage}}, {{bwpage}}) ---
         text = normalize_page_templates(text, session)
@@ -476,6 +483,94 @@ def render_ocr_telemetry(pages_to_process, page_futures, shared_results, shared_
         ui_holders["warnings"].caption("🎉 No warnings, blocks, or DocAI fallbacks triggered so far.")
 
     return completed_count == total_pages
+
+def upload_subpages_parallel(subpages_to_upload, pdf_dir, safe_title, state, session, progress_bar, status_text, log_container, max_workers=6):
+    """Uploads chapters concurrently using a cached CSRF token while handling spam filters safely."""
+    state_lock = threading.Lock()
+    if "uploaded_subpages" not in state:
+        state["uploaded_subpages"] = []
+
+    # Warm up the cached CSRF token once before threads start
+    get_csrf_token(session)
+
+    total = len(subpages_to_upload)
+    results_log = []
+    spam_blocked = False
+    hard_failures = []
+
+    def _upload_one(sp):
+        nonlocal spam_blocked
+        safe_sp = sp.replace("/", "_")
+        ch_file_path = os.path.join(pdf_dir, f"{safe_sp}.txt")
+        if not os.path.exists(ch_file_path):
+            return ("MISSING", sp, "Local file missing")
+
+        with open(ch_file_path, "r", encoding="utf-8") as f:
+            final_wikitext = f.read()
+
+        for attempt in range(2):
+            try:
+                res = upload_to_bahaiworks(sp, final_wikitext, "Bot: Parallel Batch Reproofread", session=session)
+            except Exception as e:
+                res = {"error": str(e)}
+
+            if res.get('edit', {}).get('result') == 'Success':
+                with state_lock:
+                    if sp not in state["uploaded_subpages"]:
+                        state["uploaded_subpages"].append(sp)
+                    save_book_state(safe_title, state)
+                return ("SUCCESS", sp, None)
+            else:
+                err_str = str(res)
+                if "spam filter" in err_str.lower():
+                    if attempt == 0:
+                        trigger_match = re.search(r'triggered our spam filter:\s*([^\s\'"}]+)', err_str, re.IGNORECASE)
+                        if trigger_match:
+                            bad_domain = trigger_match.group(1).strip()
+                            url_pattern = re.compile(rf'(?<!<nowiki>)(?:https?://|www\.)?[^\s<>\[\]"\'|]*{re.escape(bad_domain)}[^\s<>\[\]"\'|]*', re.IGNORECASE)
+                            final_wikitext = url_pattern.sub(lambda m: f"<nowiki>{m.group(0)}</nowiki>", final_wikitext)
+                            with open(ch_file_path, "w", encoding="utf-8") as f:
+                                f.write(final_wikitext)
+                            results_log.append(f"⚠️ Wrapped spam trigger `{bad_domain}` in `<nowiki>` on `{sp}` and retrying...")
+                            continue
+                    spam_blocked = True
+                    return ("SPAM_BLOCKED", sp, err_str)
+
+                if attempt == 0:
+                    time.sleep(2)
+                    continue
+                return ("FAILED", sp, err_str)
+
+        return ("FAILED", sp, "Unknown upload error")
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+    futures = {executor.submit(_upload_one, sp): sp for sp in subpages_to_upload}
+
+    while True:
+        done_count = sum(1 for f in futures if f.done())
+        progress_bar.progress(done_count / total if total > 0 else 1.0)
+        status_text.markdown(f"**Uploading Concurrently ({max_workers} workers):** `{done_count} / {total}` chapters finished")
+        if done_count == total:
+            break
+        time.sleep(0.3)
+
+    executor.shutdown(wait=True)
+
+    for f, sp in futures.items():
+        status, _, detail = f.result()
+        if status == "MISSING":
+            log_container.error(f"❌ Local file missing for {sp}")
+            hard_failures.append((sp, detail))
+        elif status == "SPAM_BLOCKED":
+            log_container.error(f"❌ Spam filter blocked {sp}: {detail}")
+        elif status == "FAILED":
+            log_container.error(f"❌ Upload failed for {sp}: {detail}")
+            hard_failures.append((sp, detail))
+
+    for msg in results_log:
+        log_container.warning(msg)
+
+    return spam_blocked, hard_failures
 
 # ==============================================================================
 # 3. UI & MAIN LOGIC
@@ -894,65 +989,33 @@ if execution_mode == "All Books (Production)":
                     save_book_state(safe_title, state)
                     
                 # --- AUTO STEP 4: Wiki Upload ---
-                log_container.write("🌐 No split logic required. Auto-uploading to Wiki...")
-                spam_blocked_book = False
-                
-                for sp in state["subpages"]:
-                    if sp in state.get("uploaded_subpages", []):
-                        continue
-                        
-                    safe_sp = sp.replace("/", "_")
-                    ch_file_path = os.path.join(pdf_dir, f"{safe_sp}.txt")
-                    if os.path.exists(ch_file_path):
-                        with open(ch_file_path, "r", encoding="utf-8") as f:
-                            final_wikitext = f.read()
-                        
-                        for attempt in range(2):
-                            try:
-                                get_csrf_token(session)
-                                res = upload_to_bahaiworks(sp, final_wikitext, "Bot: Parallel Batch Reproofread", session=session)
-                            except Exception as e:
-                                res = {"error": str(e)}
-                                
-                            if res.get('edit', {}).get('result') == 'Success':
-                                if "uploaded_subpages" not in state: state["uploaded_subpages"] = []
-                                if sp not in state["uploaded_subpages"]:
-                                    state["uploaded_subpages"].append(sp)
-                                save_book_state(safe_title, state)
-                                break
-                            else:
-                                err_str = str(res)
-                                if "spam filter" in err_str.lower():
-                                    if attempt == 0:
-                                        trigger_match = re.search(r'triggered our spam filter:\s*([^\s\'"}]+)', err_str, re.IGNORECASE)
-                                        if trigger_match:
-                                            bad_domain = trigger_match.group(1).strip()
-                                            log_container.warning(f"⚠️ Spam filter triggered by '{bad_domain}' on {sp}. Wrapping in <nowiki> and retrying immediately...")
-                                            url_pattern = re.compile(rf'(?<!<nowiki>)(?:https?://|www\.)?[^\s<>\[\]"\'|]*{re.escape(bad_domain)}[^\s<>\[\]"\'|]*', re.IGNORECASE)
-                                            final_wikitext = url_pattern.sub(lambda m: f"<nowiki>{m.group(0)}</nowiki>", final_wikitext)
-                                            with open(ch_file_path, "w", encoding="utf-8") as f:
-                                                f.write(final_wikitext)
-                                            continue
-                                    log_container.error(f"❌ Spam filter blocked {sp} again. Keeping local .txt files and moving to next book.")
-                                    spam_blocked_book = True
-                                    break
-                                    
-                                if attempt == 0:
-                                    log_container.warning(f"⚠️ Upload failed for {sp}: {res}. Sleeping for 15 minutes before retrying once...")
-                                    retry_countdown = log_container.empty()
-                                    for remaining in range(900, 0, -1):
-                                        mins, secs = divmod(remaining, 60)
-                                        retry_countdown.code(f"Retrying upload in: {mins:02d}:{secs:02d}")
-                                        time.sleep(1)
-                                    retry_countdown.empty()
-                                else:
-                                    log_container.error(f"❌ Upload failed a second time for {sp}: {res}. Halting pipeline.")
-                                    queue_data[target_book]["status"] = "ERROR: Upload Failed"
-                                    save_queue(queue_data)
-                                    st.stop()
-                                    
-                        if spam_blocked_book:
-                            break
+                log_container.write("🌐 No split logic required. Auto-uploading to Wiki in parallel...")
+                remaining_uploads = [sp for sp in state["subpages"] if sp not in state.get("uploaded_subpages", [])]
+                up_prog = log_container.progress(0)
+                up_status = log_container.empty()
+
+                spam_blocked_book, hard_failures = upload_subpages_parallel(
+                    remaining_uploads, pdf_dir, safe_title, state, session, up_prog, up_status, log_container, max_workers=6
+                )
+
+                if hard_failures and not spam_blocked_book:
+                    log_container.warning(f"⚠️ {len(hard_failures)} chapter(s) failed upload. Sleeping 15 minutes before retrying remaining chapters...")
+                    retry_countdown = log_container.empty()
+                    for remaining in range(900, 0, -1):
+                        mins, secs = divmod(remaining, 60)
+                        retry_countdown.code(f"Retrying upload in: {mins:02d}:{secs:02d}")
+                        time.sleep(1)
+                    retry_countdown.empty()
+
+                    remaining_uploads = [sp for sp in state["subpages"] if sp not in state.get("uploaded_subpages", [])]
+                    spam_blocked_book, hard_failures = upload_subpages_parallel(
+                        remaining_uploads, pdf_dir, safe_title, state, session, up_prog, up_status, log_container, max_workers=4
+                    )
+                    if hard_failures and not spam_blocked_book:
+                        log_container.error("❌ Upload failed a second time. Halting pipeline.")
+                        queue_data[target_book]["status"] = "ERROR: Upload Failed"
+                        save_queue(queue_data)
+                        st.stop()
                 
                 if spam_blocked_book:
                     save_book_state(safe_title, state)
@@ -1512,48 +1575,12 @@ if subpages_to_upload:
         local_pdf_path = resolve_pdf_path(state, input_folder)
         pdf_dir = os.path.dirname(local_pdf_path) if local_pdf_path else ""
         
-        if "uploaded_subpages" not in state:
-            state["uploaded_subpages"] = []
-            
-        for idx, active_chapter in enumerate(subpages_to_upload):
-            status_text.markdown(f"**Uploading {idx+1}/{len(subpages_to_upload)}:** `{active_chapter}`")
-            progress_bar.progress(idx / len(subpages_to_upload))
-            
-            safe_sp = active_chapter.replace("/", "_")
-            ch_file_path = os.path.join(pdf_dir, f"{safe_sp}.txt")
-            
-            if not os.path.exists(ch_file_path):
-                log_container.error(f"❌ Local file missing for {active_chapter}")
-                continue
-                
-            with open(ch_file_path, "r", encoding="utf-8") as f:
-                final_wikitext = f.read()
-                
-            for attempt in range(2):
-                try:
-                    res = upload_to_bahaiworks(active_chapter, final_wikitext, "Bot: Parallel Batch Reproofread", session=session)
-                except Exception as e:
-                    res = {"error": str(e)}
-                
-                if res.get('edit', {}).get('result') == 'Success':
-                    state["uploaded_subpages"].append(active_chapter)
-                    save_book_state(safe_title, state)
-                    log_container.write(f"✅ Success: {active_chapter}")
-                    break
-                else:
-                    err_str = str(res)
-                    if "spam filter" in err_str.lower() and attempt == 0:
-                        trigger_match = re.search(r'triggered our spam filter:\s*([^\s\'"}]+)', err_str, re.IGNORECASE)
-                        if trigger_match:
-                            bad_domain = trigger_match.group(1).strip()
-                            log_container.warning(f"⚠️ Spam filter triggered by '{bad_domain}' on {active_chapter}. Wrapping in <nowiki> and retrying...")
-                            url_pattern = re.compile(rf'(?<!<nowiki>)(?:https?://|www\.)?[^\s<>\[\]"\'|]*{re.escape(bad_domain)}[^\s<>\[\]"\'|]*', re.IGNORECASE)
-                            final_wikitext = url_pattern.sub(lambda m: f"<nowiki>{m.group(0)}</nowiki>", final_wikitext)
-                            with open(ch_file_path, "w", encoding="utf-8") as f:
-                                f.write(final_wikitext)
-                            continue
-                    log_container.error(f"❌ Upload failed for {active_chapter}: {res}")
-                    st.stop()
+        spam_blocked, hard_failures = upload_subpages_parallel(
+            subpages_to_upload, pdf_dir, safe_title, state, session, progress_bar, status_text, log_container, max_workers=6
+        )
+
+        if spam_blocked or hard_failures:
+            st.stop()
                 
         progress_bar.progress(1.0)
         queue_data[target_book]["status"] = "COMPLETED"
