@@ -591,8 +591,15 @@ def render_exec_tab():
                 badge = " 🎨 (Has Illustrations)" if ranges_match else ""
                 st.write(f"• {d.filename}{badge}")
 
+    use_text_layer = st.checkbox(
+        "⚡ Extract embedded PDF text layer directly (Skip Tesseract OCR)",
+        value=False,
+        help="Use this for digital/publisher PDFs that already have a clean text layer."
+    )
+
     # 2. Batch Execution
-    if st.button(f"🚀 Start Batch OCR ({len(ready_docs)})", type="primary"):
+    btn_text = f"⚡ Extract Text Layer ({len(ready_docs)})" if use_text_layer else f"🚀 Start Batch OCR ({len(ready_docs)})"
+    if st.button(btn_text, type="primary"):
         progress_bar = st.progress(0, text="Initializing...")
         
         # Import here to avoid circular dependencies if any
@@ -644,22 +651,26 @@ def render_exec_tab():
                 
                 engine_instance = OcrEngine(doc.file_path)
                 
-                # --- C. Run OCR ---
-                # Generate images first
-                engine_instance.generate_images()
-                
-                # Run extraction
-                output_path = engine_instance.run_ocr(config)
-                
-                # Cleanup
-                engine_instance.cleanup(config)
+                # --- C. Run OCR or Extract Text Layer ---
+                if use_text_layer:
+                    output_path = engine_instance.extract_text_layer(config)
+                else:
+                    # Generate images first
+                    engine_instance.generate_images()
+                    
+                    # Run extraction
+                    output_path = engine_instance.run_ocr(config)
+                    
+                    # Cleanup
+                    engine_instance.cleanup(config)
                 
                 # --- D. Update Database ---
                 with Session(engine) as session:
                     # Re-fetch fresh object to avoid detachment issues
                     d = session.get(Document, doc.id)
                     d.status = "DIGITIZED"
-                    d.ai_justification = (d.ai_justification or "") + "\n[OCR: Completed]"
+                    mode_tag = "[TEXT_LAYER: Extracted]" if use_text_layer else "[OCR: Completed]"
+                    d.ai_justification = (d.ai_justification or "") + f"\n{mode_tag}"
                     session.commit()
                     
             except Exception as e:
