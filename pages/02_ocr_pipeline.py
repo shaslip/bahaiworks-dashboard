@@ -5,6 +5,7 @@ import re
 import subprocess
 import platform
 import time
+import hashlib
 import fitz
 import concurrent.futures
 from sqlalchemy.orm import Session
@@ -311,6 +312,61 @@ def render_prep_tab(docs):
     # Initialize staging state
     if 'prep_staged_ids' not in st.session_state:
         st.session_state.prep_staged_ids = set()
+
+    # --- AD-HOC FILE ADDITION ---
+    with st.expander("➕ Add Ad-Hoc PDF to Pipeline", expanded=False):
+        adhoc_col1, adhoc_col2, adhoc_col3 = st.columns([3, 1, 1])
+        with adhoc_col1:
+            adhoc_path = st.text_input("Full PDF File Path", placeholder="/path/to/document.pdf", key="adhoc_pdf_path")
+        with adhoc_col2:
+            adhoc_lang = st.selectbox("Language", ["English", "German", "French", "Persian", "Arabic"], key="adhoc_pdf_lang")
+        with adhoc_col3:
+            st.write("")
+            st.write("")
+            if st.button("Load & Stage", type="primary", width="stretch"):
+                clean_path = adhoc_path.strip().strip('"').strip("'")
+                if not clean_path or not os.path.exists(clean_path) or not clean_path.lower().endswith(".pdf"):
+                    st.error("Please provide a valid path to an existing .pdf file.")
+                else:
+                    # Compute SHA-256 hash required by Document.file_hash
+                    sha256 = hashlib.sha256()
+                    with open(clean_path, "rb") as f:
+                        for chunk in iter(lambda: f.read(65536), b""):
+                            sha256.update(chunk)
+                    f_hash = sha256.hexdigest()
+
+                    with Session(engine) as session:
+                        existing = session.scalars(
+                            select(Document).where(
+                                or_(Document.file_hash == f_hash, Document.file_path == clean_path)
+                            )
+                        ).first()
+
+                        if existing:
+                            if existing.status in ["DIGITIZED", "COMPLETED", "READY_FOR_OCR"]:
+                                existing.status = "PENDING"
+                            existing.language = adhoc_lang
+                            session.commit()
+                            doc_id = existing.id
+                            st.toast(f"Loaded existing record (ID: {doc_id}) and added to batch.")
+                        else:
+                            new_doc = Document(
+                                file_hash=f_hash,
+                                file_path=clean_path,
+                                filename=os.path.basename(clean_path),
+                                language=adhoc_lang,
+                                priority_score=10,
+                                status="PENDING",
+                                ai_justification="Ad-hoc manual addition"
+                            )
+                            session.add(new_doc)
+                            session.commit()
+                            doc_id = new_doc.id
+                            st.toast(f"Registered new document (ID: {doc_id}) and added to batch.")
+
+                        st.session_state.prep_staged_ids.add(doc_id)
+                        time.sleep(0.5)
+                        st.rerun()
 
     # --- SEARCH FILTER ---
     search_term = st.text_input("🔍 Search Documents", placeholder="Type filename to filter...", key="prep_search").lower()
