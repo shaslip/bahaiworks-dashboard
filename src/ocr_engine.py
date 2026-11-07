@@ -221,6 +221,65 @@ class OcrEngine:
         print(f"Success! Saved to {self.output_txt_path}")
         return self.output_txt_path
 
+    def extract_text_layer(self, config: OcrConfig, progress_callback: Optional[Callable[[int, int], None]] = None):
+        """
+        Extracts embedded digital text directly from the PDF via PyMuPDF (fitz),
+        skipping image rendering and Tesseract OCR.
+        """
+        illus_counter = 1
+        real_page_counter = 1
+        full_text_content = []
+
+        print(f"Extracting embedded text layer for {self.book_name}...")
+
+        with fitz.open(self.file_path) as pdf:
+            total_pages = len(pdf)
+
+            for page_idx in range(total_pages):
+                physical_page = page_idx + 1  # 1-based physical page number
+
+                if progress_callback:
+                    progress_callback(physical_page, total_pages)
+
+                # Skip cover image if configured
+                if config.has_cover_image and physical_page == 1:
+                    print(f"Skipping cover page {physical_page}")
+                    continue
+
+                # A. Calculate Page Label
+                label, illus_counter, real_page_counter = self._get_page_label(
+                    physical_page, config, illus_counter, real_page_counter
+                )
+
+                # B. Extract Text Layer directly
+                page = pdf[page_idx]
+                text = page.get_text("text")
+
+                # Clean generic garbage (form feed characters) and hyphenation
+                text = text.replace('\f', '')
+                text = self._clean_hyphenation(text)
+
+                # C. Format Template
+                template = f"{{{{page|{label}|file={self.filename}|page={physical_page}}}}}"
+                page_content = f"{template}\n{text}\n"
+                full_text_content.append(page_content)
+
+                # D. If this page is in illustration_ranges, save a rendered PNG of it
+                if config.illustration_ranges:
+                    for start, end in config.illustration_ranges:
+                        if start <= page_idx <= end:
+                            dest_root = os.path.join(self.work_dir, "images", self.book_name, "raw")
+                            os.makedirs(dest_root, exist_ok=True)
+                            pix = page.get_pixmap(dpi=300)
+                            pix.save(os.path.join(dest_root, f"illus_p{physical_page}.png"))
+                            break
+
+        with open(self.output_txt_path, "w", encoding="utf-8") as f:
+            f.writelines(full_text_content)
+
+        print(f"Success! Saved text layer to {self.output_txt_path}")
+        return self.output_txt_path
+    
     def cleanup(self, config: OcrConfig):
         """
         Moves illustration images to permanent storage, then nukes the temp folder.
