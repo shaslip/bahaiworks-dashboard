@@ -223,10 +223,6 @@ if st.session_state.pipeline_stage == "setup":
 
         st.markdown("---")
 
-        b_gemini, b_manual = st.columns([1, 1])
-        
-        st.markdown("---")
-
         b_gemini, b_wiki, b_manual = st.columns([1, 1, 1])
         
         # A. Send to Gemini
@@ -1030,6 +1026,13 @@ elif st.session_state.pipeline_stage == "split":
                     
                     with open(queue_file, "w") as qf:
                         json.dump(queue_data, qf, indent=4)
+                    
+                    # Clear any stale state cache from Page 10 so it re-scans the newly uploaded subpages
+                    safe_title = target_base.replace("/", "_")
+                    cache_state_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "book_cache", f"{safe_title}_state.json")
+                    if os.path.exists(cache_state_file):
+                        os.remove(cache_state_file)
+
                     status_box.write("✅ Added to Re-proofreader Queue!")
                 except Exception as e:
                     st.error(f"Failed to add to Re-proofreader queue: {e}")
