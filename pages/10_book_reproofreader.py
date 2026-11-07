@@ -383,6 +383,100 @@ def resolve_pdf_path(state, root_folder):
         return find_local_pdf(master_pdf, root_folder)
     return None
 
+def render_ocr_telemetry(pages_to_process, page_futures, shared_results, shared_log_list, ui_holders):
+    """Updates the live metric cards, straggler radar, color-coded page grid, and filtered warning log."""
+    total_pages = len(pages_to_process)
+    docai_pages = set()
+    error_pages = set()
+    skipped_cached_pages = set()
+    warning_logs = []
+
+    for msg in shared_log_list:
+        if any(w in msg for w in ["⚠️", "❌", "🚨", "🤖"]):
+            warning_logs.append(msg)
+        m = re.search(r'Page\s+(\d+)', msg)
+        if m:
+            p = int(m.group(1))
+            if "Falling back to DocAI" in msg or "DocAI Only Mode" in msg:
+                docai_pages.add(p)
+            if "❌ SKIPPING" in msg or "🚨" in msg:
+                error_pages.add(p)
+            if "⏩ Skipping" in msg:
+                skipped_cached_pages.add(p)
+
+    completed_count = 0
+    in_flight_pages = []
+    badges_html = []
+
+    for p in pages_to_process:
+        f = page_futures[p]
+        is_done = f.done()
+        val = shared_results.get(str(p))
+
+        if is_done:
+            completed_count += 1
+            if p in error_pages or (val == "" and str(p) in shared_results):
+                bg, fg, border, title = "#ffebee", "#c62828", "#ef9a9a", "Error / Failed"
+            elif p in docai_pages:
+                bg, fg, border, title = "#fff8e1", "#f57f17", "#ffe082", "DocAI Fallback"
+            elif p in skipped_cached_pages:
+                bg, fg, border, title = "#e0f2f1", "#00695c", "#80cbc4", "Resumed from Cache"
+            else:
+                bg, fg, border, title = "#e8f5e9", "#2e7d32", "#a5d6a7", "Gemini Success"
+        else:
+            in_flight_pages.append(p)
+            bg, fg, border, title = "#e3f2fd", "#1565c0", "#90caf9", "In-Flight / Processing"
+
+        badges_html.append(
+            f'<span title="Page {p}: {title}" style="display:inline-block; width:38px; text-align:center; '
+            f'margin:2px; padding:3px 0; border-radius:4px; font-size:11px; font-weight:600; font-family:monospace; '
+            f'background:{bg}; color:{fg}; border:1px solid {border};">{p}</span>'
+        )
+
+    in_flight_count = len(in_flight_pages)
+    ui_holders["progress"].progress(completed_count / total_pages if total_pages > 0 else 1.0)
+
+    # 1. Metric Cards
+    ui_holders["m_done"].metric("✅ Completed", f"{completed_count} / {total_pages}")
+    ui_holders["m_flight"].metric("⚡ In-Flight", in_flight_count)
+    ui_holders["m_docai"].metric("🤖 DocAI Fallbacks", len(docai_pages))
+    ui_holders["m_err"].metric("❌ Errors", len(error_pages))
+
+    # 2. Straggler Radar
+    if 0 < in_flight_count <= 25:
+        straggler_str = ", ".join(str(p) for p in in_flight_pages)
+        ui_holders["stragglers"].info(f"⏳ **Pages currently in-flight ({in_flight_count} remaining):** `{straggler_str}`")
+    elif in_flight_count > 25:
+        sample_str = ", ".join(str(p) for p in in_flight_pages[:20]) + " ..."
+        ui_holders["stragglers"].caption(f"⚡ **Active across {in_flight_count} pages** (e.g., {sample_str})")
+    else:
+        ui_holders["stragglers"].empty()
+
+    # 3. Color-Coded Page Heatmap
+    legend = (
+        '<div style="margin-bottom:6px; font-size:12px;">'
+        '<b>Legend:</b> '
+        '<span style="background:#e8f5e9;color:#2e7d32;padding:2px 6px;border-radius:4px;border:1px solid #a5d6a7;">🟩 Gemini</span> '
+        '<span style="background:#e0f2f1;color:#00695c;padding:2px 6px;border-radius:4px;border:1px solid #80cbc4;">🧼 Resumed (Cached)</span> '
+        '<span style="background:#fff8e1;color:#f57f17;padding:2px 6px;border-radius:4px;border:1px solid #ffe082;">🟨 DocAI Fallback</span> '
+        '<span style="background:#e3f2fd;color:#1565c0;padding:2px 6px;border-radius:4px;border:1px solid #90caf9;">🟦 In-Flight</span> '
+        '<span style="background:#ffebee;color:#c62828;padding:2px 6px;border-radius:4px;border:1px solid #ef9a9a;">🟥 Error</span>'
+        '</div>'
+    )
+    grid_box = (
+        f'{legend}<div style="line-height:1.4; max-height:240px; overflow-y:auto; padding:8px; '
+        f'border:1px solid rgba(128,128,128,0.25); border-radius:6px;">{"".join(badges_html)}</div>'
+    )
+    ui_holders["grid"].markdown(grid_box, unsafe_allow_html=True)
+
+    # 4. Filtered Warnings & Fallbacks Log
+    if warning_logs:
+        ui_holders["warnings"].code("\n".join(warning_logs[-100:]), language="text")
+    else:
+        ui_holders["warnings"].caption("🎉 No warnings, blocks, or DocAI fallbacks triggered so far.")
+
+    return completed_count == total_pages
+
 # ==============================================================================
 # 3. UI & MAIN LOGIC
 # ==============================================================================
@@ -644,14 +738,29 @@ if execution_mode == "All Books (Production)":
                     try:
                         with open(temp_master_path, "r", encoding="utf-8") as f:
                             loaded_temp = json.load(f)
-                            shared_results = {str(k): v for k, v in loaded_temp.items()}
+                            shared_results = {str(k): v for k, v in loaded_temp.items() if v}
+                        if shared_results:
+                            log_container.info(f"🔄 Resuming from checkpoint: **{len(shared_results)} / {len(pages_to_process)}** pages already saved.")
                     except json.JSONDecodeError:
                         shared_results = {}
 
                 ocr_progress_bar = log_container.progress(0)
-                ocr_status_text = log_container.empty()
-                with log_container.expander("📜 Live OCR Activity Log", expanded=True):
-                    log_placeholder = st.empty()
+                m_cols = log_container.columns(4)
+                straggler_holder = log_container.empty()
+                grid_holder = log_container.empty()
+                with log_container.expander("⚠️ Warnings & DocAI Fallbacks Log", expanded=False):
+                    warnings_holder = st.empty()
+
+                ui_holders = {
+                    "progress": ocr_progress_bar,
+                    "m_done": m_cols[0].empty(),
+                    "m_flight": m_cols[1].empty(),
+                    "m_docai": m_cols[2].empty(),
+                    "m_err": m_cols[3].empty(),
+                    "stragglers": straggler_holder,
+                    "grid": grid_holder,
+                    "warnings": warnings_holder,
+                }
                 
                 for attempt in range(2):
                     fatal_error = False
@@ -660,32 +769,26 @@ if execution_mode == "All Books (Production)":
                     
                     pdf_doc = fitz.open(local_pdf_path)
                     executor = concurrent.futures.ThreadPoolExecutor(max_workers=100)
-                    futures = [
-                        executor.submit(
+                    page_futures = {
+                        page_num: executor.submit(
                             process_single_page, page_num, pdf_doc, ocr_strategy,
                             temp_master_path, shared_results, shared_log_list
                         )
                         for page_num in pages_to_process
-                    ]
+                    }
                     
-                    total_pages = len(futures)
                     # Live visibility loop with 429 monitoring
                     while True:
-                        completed_futures = sum(1 for f in futures if f.done())
-                        in_flight = total_pages - completed_futures
-                        ocr_progress_bar.progress(completed_futures / total_pages if total_pages > 0 else 1.0)
-                        ocr_status_text.markdown(f"Completed: {completed_futures} / {total_pages} pages (In-Flight: {in_flight})")
-                        
-                        current_logs = list(shared_log_list)
-                        if current_logs:
-                            log_placeholder.text("\n".join(current_logs[-25:]))
-                            for log_msg in current_logs:
-                                if "FATAL_RATE_LIMIT" in log_msg:
-                                    fatal_error = True
-                                    fatal_error_msg = log_msg
-                                    break
+                        all_done = render_ocr_telemetry(
+                            pages_to_process, page_futures, shared_results, shared_log_list, ui_holders
+                        )
+                        for log_msg in list(shared_log_list):
+                            if "FATAL_RATE_LIMIT" in log_msg:
+                                fatal_error = True
+                                fatal_error_msg = log_msg
+                                break
                                     
-                        if fatal_error or completed_futures == total_pages:
+                        if fatal_error or all_done:
                             break
                         time.sleep(1)
                         
@@ -1056,48 +1159,55 @@ if master_json_path and (not master_json_exists and locals().get('regenerate_mas
             try:
                 with open(temp_master_path, "r", encoding="utf-8") as f:
                     loaded_temp = json.load(f)
-                    shared_results = {str(k): v for k, v in loaded_temp.items()}
+                    shared_results = {str(k): v for k, v in loaded_temp.items() if v}
+                if shared_results:
+                    master_log.info(f"🔄 Resuming from checkpoint: **{len(shared_results)} / {len(pages_to_process)}** pages already saved.")
             except json.JSONDecodeError:
                 shared_results = {}
 
         ocr_progress_bar = master_log.progress(0)
-        ocr_status_text = master_log.empty()
-        with master_log.expander("📜 Live OCR Activity Log", expanded=True):
-            log_placeholder = st.empty()
+        m_cols = master_log.columns(4)
+        straggler_holder = master_log.empty()
+        grid_holder = master_log.empty()
+        with master_log.expander("⚠️ Warnings & DocAI Fallbacks Log", expanded=False):
+            warnings_holder = st.empty()
+
+        ui_holders = {
+            "progress": ocr_progress_bar,
+            "m_done": m_cols[0].empty(),
+            "m_flight": m_cols[1].empty(),
+            "m_docai": m_cols[2].empty(),
+            "m_err": m_cols[3].empty(),
+            "stragglers": straggler_holder,
+            "grid": grid_holder,
+            "warnings": warnings_holder,
+        }
 
         shared_log_list = []
 
         pdf_doc = fitz.open(local_pdf_path)
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=100)
-        futures = [
-            executor.submit(
+        page_futures = {
+            page_num: executor.submit(
                 process_single_page,
                 page_num, pdf_doc, ocr_strategy, 
                 temp_master_path, shared_results, shared_log_list
             )
             for page_num in pages_to_process
-        ]
+        }
 
-        total_pages = len(futures)
         fatal_error = False
         fatal_error_msg = ""
         while True:
-            completed_futures = sum(1 for f in futures if f.done())
-            in_flight = total_pages - completed_futures
-            ocr_progress_bar.progress(completed_futures / total_pages if total_pages > 0 else 1.0)
-            ocr_status_text.markdown(f"Completed: {completed_futures} / {total_pages} pages (In-Flight: {in_flight})")
-
-            current_logs = list(shared_log_list)
-            if current_logs:
-                log_placeholder.text("\n".join(current_logs[-25:]))
-                
-                # Check for 429 / Rate Limit / Fatal Error
-                for log_msg in current_logs:
-                    if "FATAL_RATE_LIMIT" in log_msg:
-                        fatal_error = True
-                        fatal_error_msg = log_msg
-                        break
-            if fatal_error or completed_futures == total_pages:
+            all_done = render_ocr_telemetry(
+                pages_to_process, page_futures, shared_results, shared_log_list, ui_holders
+            )
+            for log_msg in list(shared_log_list):
+                if "FATAL_RATE_LIMIT" in log_msg:
+                    fatal_error = True
+                    fatal_error_msg = log_msg
+                    break
+            if fatal_error or all_done:
                 break
             time.sleep(1)
 
