@@ -845,40 +845,48 @@ elif st.session_state.pipeline_stage == "split":
     
     if "splitter_indices" not in st.session_state:
         indices = {}
+        last_valid_idx = 0
         for i, item in enumerate(toc_list):
             title = item['title']
-            raw_range = item.get('page_range', "")
+            raw_range = str(item.get('page_range', "")).strip()
             
-            # Default Guess
-            guess = "1"
-            if "-" in str(raw_range): 
-                guess = str(raw_range).split("-")[0].strip()
+            guess = None
+            if "-" in raw_range: 
+                guess = raw_range.split("-")[0].strip()
             elif raw_range: 
-                guess = str(raw_range).strip()
+                guess = raw_range
             
-            # Heuristic: Check Front Matter (or all pages if no page_range was provided)
-            if not guess.isdigit() or title.lower() in ["preface", "contents", "introduction", "foreword"]:
-                found = find_best_match_for_title(title, page_map, page_order)
-                if found: guess = found
-            elif not raw_range:
-                found = find_best_match_for_title(title, page_map, page_order, search_all=True)
-                if found: guess = found
+            # Heuristic: Check Front Matter if explicitly front matter
+            if title.lower() in ["preface", "contents", "introduction", "foreword"] and not guess:
+                guess = find_best_match_for_title(title, page_map, page_order, search_all=False)
+            elif not guess:
+                # Search only at or after the previous chapter's page index
+                guess = find_best_match_for_title(title, page_map, page_order, search_all=True, min_index=last_valid_idx)
             
-            # Convert Label -> Index
-            try:
+            # Convert Label -> Index, falling back to last_valid_idx so it never jumps backward
+            if guess and guess in page_order:
                 idx = page_order.index(guess)
-            except ValueError:
-                idx = 0
+                if idx < last_valid_idx and not raw_range:
+                    idx = last_valid_idx
+            else:
+                idx = last_valid_idx
             
             indices[i] = idx
+            last_valid_idx = idx
         st.session_state["splitter_indices"] = indices
 
-    # 3. Helper to adjust index
+    # 3. Helpers to adjust index
     def adjust_index(i, direction):
         curr = st.session_state["splitter_indices"][i]
         new = curr + direction
         if 0 <= new < len(page_order):
             st.session_state["splitter_indices"][i] = new
+            st.session_state[f"lbl_in_{i}"] = page_order[new]
+
+    def set_label_directly(i):
+         typed_lbl = st.session_state.get(f"lbl_in_{i}", "").strip()
+         if typed_lbl in page_order:
+             st.session_state["splitter_indices"][i] = page_order.index(typed_lbl)
 
     # 4. Render Grid
     for i, item in enumerate(toc_list):
@@ -892,7 +900,14 @@ elif st.session_state.pipeline_stage == "split":
             st.caption(f"TOC Range: {item.get('page_range', 'N/A')}")
         
         with c_nav:
-            st.write(f"**Tag: `{{{{page|{current_label}}}}}`**")
+            st.text_input(
+                "Page Tag",
+                value=current_label,
+                key=f"lbl_in_{i}",
+                on_change=set_label_directly,
+                args=(i,),
+                help="Type a page number/roman numeral (e.g. 157 or xii) and press Enter."
+            )
             
             c_minus, c_plus = st.columns(2)
             with c_minus:
