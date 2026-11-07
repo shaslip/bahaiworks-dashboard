@@ -93,8 +93,10 @@ def process_single_page(page_num, pdf_path, ocr_strategy, temp_file_path, shared
             shared_results[str(page_num)] = final_text
             shared_log_list.append(f"✅ Saved Page {page_num} locally")
 
-        with open(temp_file_path, "w", encoding="utf-8") as f:
+        atomic_tmp = f"{temp_file_path}.tmp"
+        with open(atomic_tmp, "w", encoding="utf-8") as f:
             json.dump(shared_results, f)
+        os.replace(atomic_tmp, temp_file_path)
 
     return True
 
