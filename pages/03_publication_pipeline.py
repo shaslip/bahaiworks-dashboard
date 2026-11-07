@@ -884,14 +884,16 @@ elif st.session_state.pipeline_stage == "split":
             st.session_state[f"lbl_in_{i}"] = page_order[new]
 
     def set_label_directly(i):
-         typed_lbl = st.session_state.get(f"lbl_in_{i}", "").strip()
-         if typed_lbl in page_order:
-             st.session_state["splitter_indices"][i] = page_order.index(typed_lbl)
+        typed_lbl = st.session_state.get(f"lbl_in_{i}", "").strip()
+        if typed_lbl in page_order:
+            st.session_state["splitter_indices"][i] = page_order.index(typed_lbl)
 
     # 4. Render Grid
     for i, item in enumerate(toc_list):
         current_idx = st.session_state["splitter_indices"][i]
         current_label = page_order[current_idx]
+        if f"lbl_in_{i}" not in st.session_state:
+            st.session_state[f"lbl_in_{i}"] = current_label
         
         c_title, c_nav, c_preview = st.columns([2, 1, 4])
         
@@ -902,7 +904,6 @@ elif st.session_state.pipeline_stage == "split":
         with c_nav:
             st.text_input(
                 "Page Tag",
-                value=current_label,
                 key=f"lbl_in_{i}",
                 on_change=set_label_directly,
                 args=(i,),
@@ -911,13 +912,9 @@ elif st.session_state.pipeline_stage == "split":
             
             c_minus, c_plus = st.columns(2)
             with c_minus:
-                if st.button("◀", key=f"prev_{i}", width='stretch'): 
-                    adjust_index(i, -1)
-                    st.rerun()
+                st.button("◀", key=f"prev_{i}", width='stretch', on_click=adjust_index, args=(i, -1))
             with c_plus:
-                if st.button("▶", key=f"next_{i}", width='stretch'):
-                    adjust_index(i, 1)
-                    st.rerun()
+                st.button("▶", key=f"next_{i}", width='stretch', on_click=adjust_index, args=(i, 1))
 
         with c_preview:
             # Preview
