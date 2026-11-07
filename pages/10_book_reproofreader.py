@@ -844,7 +844,7 @@ if execution_mode == "All Books (Production)":
                 m_cols = log_container.columns(4)
                 straggler_holder = log_container.empty()
                 grid_holder = log_container.empty()
-                with log_container.expander("⚠️ Warnings & DocAI Fallbacks Log", expanded=False):
+                with log_container.expander("⚠️ Warnings & DocAI Fallbacks Log", expanded=True):
                     warnings_holder = st.empty()
 
                 ui_holders = {
@@ -1233,7 +1233,7 @@ if master_json_path and (not master_json_exists and locals().get('regenerate_mas
         m_cols = master_log.columns(4)
         straggler_holder = master_log.empty()
         grid_holder = master_log.empty()
-        with master_log.expander("⚠️ Warnings & DocAI Fallbacks Log", expanded=False):
+        with master_log.expander("⚠️ Warnings & DocAI Fallbacks Log", expanded=True):
             warnings_holder = st.empty()
 
         ui_holders = {
