@@ -1016,7 +1016,7 @@ if execution_mode == "All Books (Production)":
                 up_status = log_container.empty()
 
                 spam_blocked_book, hard_failures = upload_subpages_parallel(
-                    remaining_uploads, pdf_dir, safe_title, state, session, up_prog, up_status, log_container, max_workers=6
+                    remaining_uploads, pdf_dir, safe_title, state, session, up_prog, up_status, log_container
                 )
 
                 if hard_failures and not spam_blocked_book:
@@ -1030,7 +1030,7 @@ if execution_mode == "All Books (Production)":
 
                     remaining_uploads = [sp for sp in state["subpages"] if sp not in state.get("uploaded_subpages", [])]
                     spam_blocked_book, hard_failures = upload_subpages_parallel(
-                        remaining_uploads, pdf_dir, safe_title, state, session, up_prog, up_status, log_container, max_workers=4
+                        remaining_uploads, pdf_dir, safe_title, state, session, up_prog, up_status, log_container
                     )
                     if hard_failures and not spam_blocked_book:
                         log_container.error("❌ Upload failed a second time. Halting pipeline.")
@@ -1597,7 +1597,7 @@ if subpages_to_upload:
         pdf_dir = os.path.dirname(local_pdf_path) if local_pdf_path else ""
         
         spam_blocked, hard_failures = upload_subpages_parallel(
-            subpages_to_upload, pdf_dir, safe_title, state, session, progress_bar, status_text, log_container, max_workers=6
+            subpages_to_upload, pdf_dir, safe_title, state, session, progress_bar, status_text, log_container
         )
 
         if spam_blocked or hard_failures:
