@@ -43,18 +43,21 @@ def parse_text_file(file_path):
         
     return page_map, tag_order
 
-def find_best_match_for_title(title, page_map, tag_order):
+def find_best_match_for_title(title, page_map, tag_order, search_all=False):
     """
-    Simple heuristic to find Front Matter pages.
+    Simple heuristic to find Front Matter pages (or any page if search_all=True).
     Looks for the Title word in the first 100 chars of pages BEFORE '1'.
     """
     # 1. Identify where Page 1 is
-    try:
-        index_of_one = tag_order.index("1")
-        front_matter_pages = tag_order[:index_of_one]
-    except ValueError:
-        # If no page '1' found, search everything
+    if search_all:
         front_matter_pages = tag_order
+    else:
+        try:
+            index_of_one = tag_order.index("1")
+            front_matter_pages = tag_order[:index_of_one]
+        except ValueError:
+            # If no page '1' found, search everything
+            front_matter_pages = tag_order
 
     # 2. Search for the title (case-insensitive)
     clean_title = title.lower().strip()
