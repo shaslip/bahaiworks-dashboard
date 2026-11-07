@@ -9,12 +9,54 @@ from sqlalchemy.orm import Session
 from src.database import engine, Document
 from src.gemini_processor import extract_metadata_from_pdf, extract_toc_from_pdf
 from src.wikibase_importer import import_book_to_wikibase
-from src.mediawiki_uploader import upload_to_bahaiworks
+from src.mediawiki_uploader import upload_to_bahaiworks, fetch_wikitext
 from src.sitelink_manager import set_sitelink
 from src.text_processing import parse_text_file, find_best_match_for_title
 from src.evaluator import translate_summary
 
 st.set_page_config(layout="wide", page_title="Publication Pipeline")
+
+def parse_wiki_toc(target_page):
+    """Fetches the existing main book page from Bahai.works and extracts subpage links."""
+    wikitext, err = fetch_wikitext(target_page)
+    if err or not wikitext:
+        return None, False, err or "Empty page content."
+
+    has_restricted = bool(re.search(r'\{\{\s*restricted\s+use', wikitext, re.IGNORECASE))
+
+    # Extract contents section if present, otherwise scan body after templates
+    contents_match = re.search(r'==+\s*Contents\s*==+(.*)', wikitext, re.IGNORECASE | re.DOTALL)
+    toc_block = contents_match.group(1) if contents_match else wikitext
+
+    toc_items = []
+    # Match relative subpage links: [[/Path/To/Subpage|Display Title]] or [[/Subpage]]
+    link_pattern = re.compile(r'\[\[/([^\]|]+)(?:\|([^\]]+))?\]\]')
+    for match in link_pattern.finditer(toc_block):
+        subpage_path = match.group(1).strip().replace("_", " ")
+        display_title = (match.group(2) or subpage_path.split("/")[-1]).strip()
+
+        # Check if the existing wiki subpage already has a bare {{page|157}} tag we can use as a hint
+        page_guess = ""
+        sub_text, sub_err = fetch_wikitext(f"{target_page}/{match.group(1).strip()}")
+        if not sub_err and sub_text:
+            p_match = re.search(r'\{\{page\|\s*([^|}\s]+)', sub_text, re.IGNORECASE)
+            if p_match:
+                page_guess = p_match.group(1).strip()
+
+        toc_items.append({
+            "title": display_title,
+            "page_name": match.group(1).strip(),
+            "display_title": display_title,
+            "prefix": "",
+            "level": 1,
+            "page_range": page_guess,
+            "author": []
+        })
+
+    if not toc_items:
+        return None, has_restricted, f"No [[/Subpage]] links found on '{target_page}'."
+
+    return toc_items, has_restricted, None
 
 # --- Helper: Header Generator ---
 def generate_header(title, author, year, language, is_copyright, filename):
@@ -147,6 +189,8 @@ with g3:
     pub_type = st.selectbox("Type", type_options, index=0, key="cfg_type")
 with g4:
     st.write("Permissions")
+    if "force_cfg_copy" in st.session_state:
+        st.session_state["cfg_copy"] = st.session_state.pop("force_cfg_copy")
     is_copyright = st.checkbox("Copyright Protected?", value=False, key="cfg_copy")
 
 if not has_txt:
@@ -181,6 +225,10 @@ if st.session_state.pipeline_stage == "setup":
 
         b_gemini, b_manual = st.columns([1, 1])
         
+        st.markdown("---")
+
+        b_gemini, b_wiki, b_manual = st.columns([1, 1, 1])
+        
         # A. Send to Gemini
         with b_gemini:
             if st.button("🚀 Send to Gemini", type="primary", use_container_width=True):
@@ -210,8 +258,25 @@ if st.session_state.pipeline_stage == "setup":
                         # Unstructured proceeds immediately after metadata
                         st.session_state.pipeline_stage = "proof"
                         st.rerun()
-        
-        # B. Manual Entry (Bypass)
+
+        # B. Import Existing TOC from Wiki (Jump straight to Splitter)
+        with b_wiki:
+            if pub_type == "Book":
+                if st.button("📥 Import Existing TOC from Wiki", use_container_width=True, help="Fetches subpage links from the existing Bahai.works page and jumps straight to the Splitter."):
+                    with st.spinner(f"Fetching TOC from {st.session_state['target_page']}..."):
+                        toc_items, has_restricted, err = parse_wiki_toc(st.session_state["target_page"])
+                        if err:
+                            st.error(f"Wiki TOC Import Failed: {err}")
+                        else:
+                            st.session_state["force_cfg_copy"] = has_restricted
+                            st.session_state["toc_json_list"] = toc_items
+                            st.session_state["toc_map"] = toc_items
+                            for k in ["chapter_df", "page_map", "page_order", "splitter_indices", "split_completed"]:
+                                st.session_state.pop(k, None)
+                            st.session_state.pipeline_stage = "split"
+                            st.rerun()
+
+        # C. Manual Entry (Bypass)
         with b_manual:
             if st.button("✍️ Skip Extraction (Manual Entry)", use_container_width=True):
                 # Initialize empty state
@@ -795,9 +860,12 @@ elif st.session_state.pipeline_stage == "split":
             elif raw_range: 
                 guess = str(raw_range).strip()
             
-            # Heuristic: Check Front Matter if guess isn't a digit
+            # Heuristic: Check Front Matter (or all pages if no page_range was provided)
             if not guess.isdigit() or title.lower() in ["preface", "contents", "introduction", "foreword"]:
                 found = find_best_match_for_title(title, page_map, page_order)
+                if found: guess = found
+            elif not raw_range:
+                found = find_best_match_for_title(title, page_map, page_order, search_all=True)
                 if found: guess = found
             
             # Convert Label -> Index
