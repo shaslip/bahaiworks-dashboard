@@ -2,6 +2,8 @@ import os
 import re
 import time
 import requests
+import threading
+from requests.adapters import HTTPAdapter
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -13,63 +15,82 @@ WORKS_PASS = os.getenv("WORKS_WIKI_PASSWORD")
 MEDIA_USER = os.getenv("MEDIA_WIKI_USERNAME")
 MEDIA_PASS = os.getenv("MEDIA_WIKI_PASSWORD")
 
-def get_csrf_token(session, api_url=API_URL):
+_auth_lock = threading.Lock()
+
+def get_csrf_token(session, api_url=API_URL, force_refresh=False):
     """
     Authenticates with MediaWiki and retrieves a CSRF token.
-    Smartly skips login if the session is already authenticated.
+    Caches the token on the session object to avoid redundant network round-trips.
     """
-    # Dynamically select the correct credentials based on the target API
-    if "bahai.media" in api_url:
-        user = MEDIA_USER
-        pwd = MEDIA_PASS
-    else:
-        user = WORKS_USER
-        pwd = WORKS_PASS
+    with _auth_lock:
+        # Ensure the session connection pool can handle parallel threads cleanly
+        if not getattr(session, "_pool_expanded", False):
+            adapter = HTTPAdapter(pool_connections=20, pool_maxsize=20)
+            session.mount("https://", adapter)
+            session.mount("http://", adapter)
+            session._pool_expanded = True
 
-    if not user or not pwd:
-        raise ValueError(f"Missing credentials for {api_url} in .env")
+        if not hasattr(session, "_cached_csrf_tokens"):
+            session._cached_csrf_tokens = {}
 
-    # 1. Check if we already have a valid logged-in token
-    csrf_token_response = session.get(api_url, params={
-        'action': 'query',
-        'meta': 'tokens',
-        'format': 'json'
-    })
-    csrf_token = csrf_token_response.json()['query']['tokens']['csrftoken']
-    
-    # MediaWiki returns '+\\' for anonymous users. If it's anything else, we are logged in!
-    if csrf_token != '+\\':
+        if not force_refresh and api_url in session._cached_csrf_tokens:
+            return session._cached_csrf_tokens[api_url]
+
+        # Dynamically select the correct credentials based on the target API
+        if "bahai.media" in api_url:
+            user = MEDIA_USER
+            pwd = MEDIA_PASS
+        else:
+            user = WORKS_USER
+            pwd = WORKS_PASS
+
+        if not user or not pwd:
+            raise ValueError(f"Missing credentials for {api_url} in .env")
+
+        # 1. Check if we already have a valid logged-in token
+        csrf_token_response = session.get(api_url, params={
+            'action': 'query',
+            'meta': 'tokens',
+            'format': 'json'
+        })
+        csrf_token = csrf_token_response.json()['query']['tokens']['csrftoken']
+        
+        # MediaWiki returns '+\\' for anonymous users. If it's anything else, we are logged in!
+        if csrf_token != '+\\':
+            session._cached_csrf_tokens[api_url] = csrf_token
+            return csrf_token
+
+        # 2. Not logged in. Get Login Token
+        login_token_response = session.get(api_url, params={
+            'action': 'query',
+            'meta': 'tokens',
+            'type': 'login',
+            'format': 'json'
+        })
+        login_token = login_token_response.json()['query']['tokens']['logintoken']
+
+        # 3. Perform Login
+        login_response = session.post(api_url, data={
+            'action': 'login',
+            'lgname': user,
+            'lgpassword': pwd,
+            'lgtoken': login_token,
+            'format': 'json'
+        })
+        
+        login_data = login_response.json()
+        if login_data.get('login', {}).get('result') != "Success":
+            raise PermissionError(f"Login failed: {login_data}")
+
+        # 4. Fetch the real CSRF token now that we are logged in
+        csrf_token_response = session.get(api_url, params={
+            'action': 'query',
+            'meta': 'tokens',
+            'format': 'json'
+        })
+        csrf_token = csrf_token_response.json()['query']['tokens']['csrftoken']
+        session._cached_csrf_tokens[api_url] = csrf_token
         return csrf_token
-
-    # 2. Not logged in. Get Login Token
-    login_token_response = session.get(api_url, params={
-        'action': 'query',
-        'meta': 'tokens',
-        'type': 'login',
-        'format': 'json'
-    })
-    login_token = login_token_response.json()['query']['tokens']['logintoken']
-
-    # 3. Perform Login
-    login_response = session.post(api_url, data={
-        'action': 'login',
-        'lgname': user,
-        'lgpassword': pwd,
-        'lgtoken': login_token,
-        'format': 'json'
-    })
-    
-    login_data = login_response.json()
-    if login_data.get('login', {}).get('result') != "Success":
-        raise PermissionError(f"Login failed: {login_data}")
-
-    # 4. Fetch the real CSRF token now that we are logged in
-    csrf_token_response = session.get(api_url, params={
-        'action': 'query',
-        'meta': 'tokens',
-        'format': 'json'
-    })
-    return csrf_token_response.json()['query']['tokens']['csrftoken']
 
 def page_exists(session, title):
     """
@@ -132,6 +153,54 @@ def fetch_wikitext(title, session=None, api_url=API_URL):
         return None, str(e)
     
     return None, "Unknown Error"
+
+def fetch_wikitext_batch(titles, session=None, api_url=API_URL):
+    """
+    Fetches the latest wikitext for up to 50 titles per MediaWiki API request.
+    Returns a dict: {title: wikitext}
+    """
+    results = {}
+    if not titles:
+        return results
+
+    requester = session if session else requests
+    headers = {"User-Agent": "BahaiWorksBot/1.0"}
+    chunk_size = 50
+
+    for i in range(0, len(titles), chunk_size):
+        batch = titles[i:i + chunk_size]
+        params = {
+            "action": "query",
+            "prop": "revisions",
+            "titles": "|".join(batch),
+            "rvprop": "content",
+            "format": "json",
+            "rvslots": "main"
+        }
+        try:
+            response = requester.get(api_url, params=params, headers=headers, timeout=20)
+            data = response.json()
+            query_data = data.get("query", {})
+
+            # Map any normalized titles back to requested titles
+            norm_to_orig = {item["to"]: item["from"] for item in query_data.get("normalized", [])}
+
+            pages = query_data.get("pages", {})
+            for pid, pdata in pages.items():
+                if int(pid) < 0:
+                    continue
+                api_title = pdata.get("title", "")
+                orig_title = norm_to_orig.get(api_title, api_title)
+                try:
+                    content = pdata["revisions"][0]["slots"]["main"]["*"]
+                    results[api_title] = content
+                    results[orig_title] = content
+                except (KeyError, IndexError):
+                    pass
+        except Exception as e:
+            print(f"Batch fetch error: {e}")
+
+    return results
 
 def get_image_url(title, session=None, api_url=API_URL):
     """
@@ -401,32 +470,41 @@ def upload_to_bahaiworks(title, content, summary="Bot upload", check_exists=Fals
         local_session = True
     
     try:
-        # Authenticate if we are using a local/new session
-        # OR if the passed session doesn't have a token yet? 
-        # Actually, get_csrf_token handles the login flow if needed.
-        csrf_token = get_csrf_token(session)
-        
         # Safety Check: Page Existence
         if check_exists:
             if page_exists(session, title):
                 raise FileExistsError(f"Page '{title}' already exists on bahai.works. Operation aborted.")
         
-        # Post Edit
-        create_params = {
-            'action': 'edit',
-            'title': title,
-            'text': content,
-            'summary': summary,
-            'token': csrf_token,
-            'format': 'json'
-        }
-        response = session.post(API_URL, data=create_params)
-        data = response.json()
-        
-        if 'error' in data:
-            raise Exception(data['error']['info'])
-            
-        return data
+        for attempt in range(4):
+            csrf_token = get_csrf_token(session, force_refresh=(attempt > 0))
+            create_params = {
+                'action': 'edit',
+                'title': title,
+                'text': content,
+                'summary': summary,
+                'token': csrf_token,
+                'bot': '1',
+                'format': 'json'
+            }
+            response = session.post(API_URL, data=create_params, timeout=30)
+            if response.status_code == 429:
+                time.sleep(3 * (attempt + 1))
+                continue
+
+            data = response.json()
+
+            if 'error' in data:
+                err_code = data['error'].get('code', '')
+                if err_code == 'badtoken' and attempt < 3:
+                    continue
+                if err_code in ('ratelimited', 'maxlag', 'readonly') and attempt < 3:
+                    time.sleep(3 * (attempt + 1))
+                    continue
+                raise Exception(data['error']['info'])
+                
+            return data
+
+        raise Exception("Exceeded maximum retries for upload.")
         
     except Exception as e:
         raise e
