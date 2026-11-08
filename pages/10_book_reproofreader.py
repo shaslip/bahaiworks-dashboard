@@ -657,28 +657,6 @@ except Exception as e:
 # --- Master Queue Display ---
 queue_data = load_queue()
 
-col_input, col_add_btn = st.columns([4, 1])
-with col_input:
-    new_book_input = st.text_input(
-        "Load Book (Paste Bahai.works URL or Wiki Title)", 
-        placeholder="e.g., https://bahai.works/The_B%C3%A1b_(Balyuzi) or The Báb (Balyuzi)",
-        label_visibility="collapsed"
-    )
-with col_add_btn:
-    if st.button("🎯 Load Book", width='stretch'):
-        if new_book_input.strip():
-            raw_val = new_book_input.strip()
-            if "bahai.works/" in raw_val:
-                raw_val = raw_val.split("bahai.works/")[-1].split("?")[0].split("#")[0]
-            clean_title = unquote(raw_val).replace("_", " ").strip("/")
-            
-            if clean_title not in queue_data:
-                queue_data[clean_title] = {"status": "PENDING"}
-                save_queue(queue_data)
-                
-            st.session_state["selected_book"] = clean_title
-            st.rerun()
-
 def reset_book_cache(book_title, root_folder):
     """Deletes the local state JSON and any generated chapter .txt files for a book."""
     safe_t = book_title.replace("/", "_")
@@ -697,16 +675,9 @@ def reset_book_cache(book_title, root_folder):
     if os.path.exists(state_file):
         os.remove(state_file)
 
-# --- VIEW SELECTOR (No indentation changes to existing code below) ---
-active_view = st.radio(
-    "View",
-    ["📚 Re-Proofreader Pipeline", "🛠️ Fix 'No Map' Books"],
-    horizontal=True,
-    label_visibility="collapsed"
-)
-st.divider()
+tab_main, tab_nomap = st.tabs(["📚 Re-Proofreader Pipeline", "🛠️ Fix 'No Map' Books"])
 
-if active_view == "🛠️ Fix 'No Map' Books":
+with tab_nomap:
     st.subheader("🛠️ One-Stop 'No Map' Recovery (Page 02 + Page 03 Consolidated)")
     st.caption("Automatically calibrates offsets, generates fallback OCR `.txt` with live progress, imports the existing Wiki TOC, and splits/uploads `{{page}}` tags.")
 
@@ -832,6 +803,7 @@ if active_view == "🛠️ Fix 'No Map' Books":
                     if split_pdf_doubles(active_pdf_path, split_path, s_start, s_end):
                         active_pdf_path = split_path
                         st.session_state["nm_pdf_path"] = active_pdf_path
+                        st.session_state["nm_pdf_input_box"] = active_pdf_path
                         with fitz.open(active_pdf_path) as pdf:
                             recalc_start, _ = calculate_start_offset(active_pdf_path, len(pdf))
                             final_offset = recalc_start if recalc_start else 0
@@ -1023,8 +995,12 @@ if active_view == "🛠️ Fix 'No Map' Books":
                         with open(toc_path, "w", encoding="utf-8") as f:
                             json.dump(st.session_state["nm_toc_list"], f, indent=2, ensure_ascii=False)
 
-                        # Clear cached state and mark book PENDING in queue
+                        # Clear cached state, save custom_pdf_path, and mark book PENDING in queue
                         reset_book_cache(target_base, input_folder)
+                        new_state = load_book_state(target_base.replace("/", "_"))
+                        new_state["custom_pdf_path"] = st.session_state["nm_pdf_path"]
+                        save_book_state(target_base.replace("/", "_"), new_state)
+
                         queue_data[target_base] = {"status": "PENDING", "last_updated": time.time()}
                         save_queue(queue_data)
                         st.session_state["selected_book"] = target_base
@@ -1032,998 +1008,1019 @@ if active_view == "🛠️ Fix 'No Map' Books":
                         for k in ["nm_page_map", "nm_page_order", "nm_splitter_indices", "nm_calibrated"]:
                             st.session_state.pop(k, None)
 
-                        up_status.success(f"🎉 Uploaded all chapters for **{target_base}** and reset queue status to `PENDING`! Switch back to '📚 Re-Proofreader Pipeline' above to run it.")
+                        up_status.success(f"🎉 Uploaded all chapters for **{target_base}** and reset queue status to `PENDING`! Switch to Tab 1 ('📚 Re-Proofreader Pipeline') to run it.")
                         time.sleep(1.5)
                         st.rerun()
                     except Exception as e:
                         st.error(f"Upload failed: {e}")
 
-    st.stop()
-
-if queue_data:
-    with st.expander("📋 Processing Queue & Triage", expanded=True):
-        # Categorize statuses so all "ERROR: ..." variations group cleanly
-        def get_status_category(status_str):
-            s = status_str.upper()
-            if s.startswith("ERROR"): return "ERROR"
-            if s in ["PENDING", "READY", "SKIPPED", "COMPLETED"]: return s
-            return "OTHER"
-
-        counts = {"ERROR": 0, "PENDING": 0, "READY": 0, "SKIPPED": 0, "COMPLETED": 0, "OTHER": 0}
-        for data in queue_data.values():
-            cat = get_status_category(data.get("status", "UNKNOWN"))
-            counts[cat] = counts.get(cat, 0) + 1
-
-        # Display live metrics
-        m_cols = st.columns(5)
-        m_cols[0].metric("🚨 Errors", counts["ERROR"])
-        m_cols[1].metric("⏳ Pending", counts["PENDING"])
-        m_cols[2].metric("👀 Ready (Review)", counts["READY"])
-        m_cols[3].metric("⏭️ Skipped", counts["SKIPPED"])
-        m_cols[4].metric("✅ Completed", counts["COMPLETED"])
-
-        # Filter & Bulk Select Controls
-        col_filter, col_select_all = st.columns([4, 1])
-        with col_filter:
-            all_categories = ["ERROR", "PENDING", "READY", "SKIPPED", "COMPLETED"]
-            if counts["OTHER"] > 0:
-                all_categories.append("OTHER")
-            default_filters = [c for c in ["ERROR", "PENDING", "READY", "SKIPPED"] if counts[c] > 0]
-            if not default_filters:
-                default_filters = all_categories
-
-            selected_categories = st.multiselect(
-                "Filter by Status Category",
-                options=all_categories,
-                default=default_filters
-            )
-        with col_select_all:
-            st.write("")
-            st.write("")
-            select_all_visible = st.checkbox("Select All Visible", value=False)
-
-        # Build filtered dataframe
-        df = []
-        for title, data in queue_data.items():
-            raw_status = data.get("status", "UNKNOWN")
-            if get_status_category(raw_status) in selected_categories:
-                df.append({
-                    "Select": select_all_visible,
-                    "Book Title": title,
-                    "Status": raw_status
-                })
-
-        edited_df = st.data_editor(
-            df,
-            width='stretch',
-            height=350,
-            hide_index=True,
-            disabled=["Book Title", "Status"],
-            column_config={
-                "Select": st.column_config.CheckboxColumn("Select", default=False),
-                "Book Title": st.column_config.TextColumn("Book Title"),
-                "Status": st.column_config.TextColumn("Status"),
-            },
-            key="queue_table"
+with tab_main:
+    col_input, col_add_btn = st.columns([4, 1])
+    with col_input:
+        new_book_input = st.text_input(
+            "Load Book (Paste Bahai.works URL or Wiki Title)", 
+            placeholder="e.g., https://bahai.works/The_B%C3%A1b_(Balyuzi) or The Báb (Balyuzi)",
+            label_visibility="collapsed"
         )
-
-        # Multi-Action Toolbar
-        b_col1, b_col2, b_col3 = st.columns(3)
-        with b_col1:
-            if st.button("🔄 Mark Fixed & Reset to PENDING", type="primary", width='stretch', help="Sets status to PENDING and wipes cached state/.txt files so the pipeline can cleanly re-run."):
-                changed = False
-                for row in edited_df:
-                    if row.get("Select") and row.get("Book Title") in queue_data:
-                        title = row["Book Title"]
-                        reset_book_cache(title, input_folder)
-                        queue_data[title]["status"] = "PENDING"
-                        changed = True
-                if changed:
+    with col_add_btn:
+        if st.button("🎯 Load Book", width='stretch'):
+            if new_book_input.strip():
+                raw_val = new_book_input.strip()
+                if "bahai.works/" in raw_val:
+                    raw_val = raw_val.split("bahai.works/")[-1].split("?")[0].split("#")[0]
+                clean_title = unquote(raw_val).replace("_", " ").strip("/")
+                
+                if clean_title not in queue_data:
+                    queue_data[clean_title] = {"status": "PENDING"}
                     save_queue(queue_data)
-                    st.rerun()
+                    
+                st.session_state["selected_book"] = clean_title
+                st.rerun()
 
-        with b_col2:
-            if st.button("🚫 Mark SKIPPED", width='stretch'):
-                changed = False
-                for row in edited_df:
-                    if row.get("Select") and row.get("Book Title") in queue_data:
-                        queue_data[row["Book Title"]]["status"] = "SKIPPED"
-                        changed = True
-                if changed:
-                    save_queue(queue_data)
-                    st.rerun()
+    if queue_data:
+        with st.expander("📋 Processing Queue & Triage", expanded=True):
+            # Categorize statuses so all "ERROR: ..." variations group cleanly
+            def get_status_category(status_str):
+                s = status_str.upper()
+                if s.startswith("ERROR"): return "ERROR"
+                if s in ["PENDING", "READY", "SKIPPED", "COMPLETED"]: return s
+                return "OTHER"
 
-        with b_col3:
-            if st.button("✅ Force COMPLETED", width='stretch'):
-                changed = False
-                for row in edited_df:
-                    if row.get("Select") and row.get("Book Title") in queue_data:
-                        queue_data[row["Book Title"]]["status"] = "COMPLETED"
-                        changed = True
-                if changed:
-                    save_queue(queue_data)
-                    st.rerun()
+            counts = {"ERROR": 0, "PENDING": 0, "READY": 0, "SKIPPED": 0, "COMPLETED": 0, "OTHER": 0}
+            for data in queue_data.values():
+                cat = get_status_category(data.get("status", "UNKNOWN"))
+                counts[cat] = counts.get(cat, 0) + 1
 
-all_books = list(queue_data.keys())
-if not all_books:
-    st.warning("Queue is empty. Check your queue JSON file.")
-    st.stop()
+            # Display live metrics
+            m_cols = st.columns(5)
+            m_cols[0].metric("🚨 Errors", counts["ERROR"])
+            m_cols[1].metric("⏳ Pending", counts["PENDING"])
+            m_cols[2].metric("👀 Ready (Review)", counts["READY"])
+            m_cols[3].metric("⏭️ Skipped", counts["SKIPPED"])
+            m_cols[4].metric("✅ Completed", counts["COMPLETED"])
 
-# ==============================================================================
-# AUTOMATED PRODUCTION MODE (ALL BOOKS)
-# ==============================================================================
-if execution_mode == "All Books (Production)":
-    st.divider()
-    st.header("🤖 Automated Production Mode")
-    
-    pending_books = [b for b, d in queue_data.items() if d.get("status", "").upper() == "PENDING"]
-    
-    if not pending_books:
-        st.session_state["auto_running"] = False
-        st.success("No 'PENDING' books found in the queue.")
+            # Filter & Bulk Select Controls
+            col_filter, col_select_all = st.columns([4, 1])
+            with col_filter:
+                all_categories = ["ERROR", "PENDING", "READY", "SKIPPED", "COMPLETED"]
+                if counts["OTHER"] > 0:
+                    all_categories.append("OTHER")
+                default_filters = [c for c in ["ERROR", "PENDING", "READY", "SKIPPED"] if counts[c] > 0]
+                if not default_filters:
+                    default_filters = all_categories
+
+                selected_categories = st.multiselect(
+                    "Filter by Status Category",
+                    options=all_categories,
+                    default=default_filters
+                )
+            with col_select_all:
+                st.write("")
+                st.write("")
+                select_all_visible = st.checkbox("Select All Visible", value=False)
+
+            # Build filtered dataframe
+            df = []
+            for title, data in queue_data.items():
+                raw_status = data.get("status", "UNKNOWN")
+                if get_status_category(raw_status) in selected_categories:
+                    df.append({
+                        "Select": select_all_visible,
+                        "Book Title": title,
+                        "Status": raw_status
+                    })
+
+            edited_df = st.data_editor(
+                df,
+                width='stretch',
+                height=350,
+                hide_index=True,
+                disabled=["Book Title", "Status"],
+                column_config={
+                    "Select": st.column_config.CheckboxColumn("Select", default=False),
+                    "Book Title": st.column_config.TextColumn("Book Title"),
+                    "Status": st.column_config.TextColumn("Status"),
+                },
+                key="queue_table"
+            )
+
+            # Multi-Action Toolbar
+            b_col1, b_col2, b_col3 = st.columns(3)
+            with b_col1:
+                if st.button("🔄 Mark Fixed & Reset to PENDING", type="primary", width='stretch', help="Sets status to PENDING and wipes cached state/.txt files so the pipeline can cleanly re-run."):
+                    changed = False
+                    for row in edited_df:
+                        if row.get("Select") and row.get("Book Title") in queue_data:
+                            title = row["Book Title"]
+                            reset_book_cache(title, input_folder)
+                            queue_data[title]["status"] = "PENDING"
+                            changed = True
+                    if changed:
+                        save_queue(queue_data)
+                        st.rerun()
+
+            with b_col2:
+                if st.button("🚫 Mark SKIPPED", width='stretch'):
+                    changed = False
+                    for row in edited_df:
+                        if row.get("Select") and row.get("Book Title") in queue_data:
+                            queue_data[row["Book Title"]]["status"] = "SKIPPED"
+                            changed = True
+                    if changed:
+                        save_queue(queue_data)
+                        st.rerun()
+
+            with b_col3:
+                if st.button("✅ Force COMPLETED", width='stretch'):
+                    changed = False
+                    for row in edited_df:
+                        if row.get("Select") and row.get("Book Title") in queue_data:
+                            queue_data[row["Book Title"]]["status"] = "COMPLETED"
+                            changed = True
+                    if changed:
+                        save_queue(queue_data)
+                        st.rerun()
+
+    all_books = list(queue_data.keys())
+    if not all_books:
+        st.warning("Queue is empty. Check your queue JSON file.")
         st.stop()
+
+    # ==============================================================================
+    # AUTOMATED PRODUCTION MODE (ALL BOOKS)
+    # ==============================================================================
+    if execution_mode == "All Books (Production)":
+        st.divider()
+        st.header("🤖 Automated Production Mode")
         
-    # Sort alphabetically and allow selection of starting point
-    pending_books.sort()
-    starting_book = st.selectbox("Start Production From:", pending_books)
-    start_idx = pending_books.index(starting_book)
-    target_pending_books = pending_books[start_idx:]
+        pending_books = [b for b, d in queue_data.items() if d.get("status", "").upper() == "PENDING"]
         
-    st.info(f"Found {len(target_pending_books)} book(s) to process starting from `{starting_book}`. The script will process Steps 1-3, auto-upload if no splits are needed, and sleep for 5 minutes between books.")
-    
-    col_start, col_stop = st.columns([1, 1])
-    with col_start:
-        if st.button("▶️ Start Automation Loop", type="primary", width='stretch'):
-            st.session_state["auto_running"] = True
-    with col_stop:
-        if st.button("🛑 Stop Execution", width='stretch'):
+        if not pending_books:
             st.session_state["auto_running"] = False
-            st.warning("Automation stopped.")
+            st.success("No 'PENDING' books found in the queue.")
             st.stop()
             
-    if st.session_state.get("auto_running", False):
-        overall_progress = st.progress(0)
-        overall_status = st.empty()
-        
-        for idx, target_book in enumerate(target_pending_books):
-            overall_status.markdown(f"### Processing Book {idx+1}/{len(target_pending_books)}: `{target_book}`")
-            log_container = st.container(border=True)
-            safe_title = target_book.replace("/", "_")
-            state = load_book_state(safe_title)
+        # Sort alphabetically and allow selection of starting point
+        pending_books.sort()
+        starting_book = st.selectbox("Start Production From:", pending_books)
+        start_idx = pending_books.index(starting_book)
+        target_pending_books = pending_books[start_idx:]
             
-            # --- AUTO STEP 1: Generate Map ---
-            if not state.get("subpages") or not state.get("route_map") or not state.get("master_pdf"):
-                log_container.write(f"🔍 Generating Chapter Map for {target_book}...")
+        st.info(f"Found {len(target_pending_books)} book(s) to process starting from `{starting_book}`. The script will process Steps 1-3, auto-upload if no splits are needed, and sleep for 5 minutes between books.")
+        
+        col_start, col_stop = st.columns([1, 1])
+        with col_start:
+            if st.button("▶️ Start Automation Loop", type="primary", width='stretch'):
+                st.session_state["auto_running"] = True
+        with col_stop:
+            if st.button("🛑 Stop Execution", width='stretch'):
+                st.session_state["auto_running"] = False
+                st.warning("Automation stopped.")
+                st.stop()
+                
+        if st.session_state.get("auto_running", False):
+            overall_progress = st.progress(0)
+            overall_status = st.empty()
+            
+            for idx, target_book in enumerate(target_pending_books):
+                overall_status.markdown(f"### Processing Book {idx+1}/{len(target_pending_books)}: `{target_book}`")
+                log_container = st.container(border=True)
+                safe_title = target_book.replace("/", "_")
+                state = load_book_state(safe_title)
+                
+                # --- AUTO STEP 1: Generate Map ---
+                if not state.get("subpages") or not state.get("route_map") or not state.get("master_pdf"):
+                    log_container.write(f"🔍 Generating Chapter Map for {target_book}...")
+                    subpages = get_all_subpages(target_book, session)
+                    route_map, master_pdf_filename, wikitext_cache, ordered_subpages = build_sequential_route_map(subpages, session, input_folder)
+                    
+                    if not route_map or not master_pdf_filename:
+                        log_container.error(f"❌ Could not find PDF references for {target_book}. Marking ERROR and skipping.")
+                        queue_data[target_book]["status"] = "ERROR: No Map"
+                        save_queue(queue_data)
+                        continue
+                        
+                    state["subpages"] = ordered_subpages
+                    state["route_map"] = route_map
+                    state["master_pdf"] = master_pdf_filename
+                    state["wikitext_cache"] = wikitext_cache
+                    save_book_state(safe_title, state)
+                else:
+                    log_container.write(f"🗺️ Loaded existing Chapter Map for {target_book} from cache.")
+                    ordered_subpages = state["subpages"]
+                    route_map = state["route_map"]
+                    master_pdf_filename = state["master_pdf"]
+                    wikitext_cache = state.get("wikitext_cache", {})
+                
+                # --- AUTO STEP 2: Generate Master JSON ---
+                local_pdf_path = resolve_pdf_path(state, input_folder)
+                if not local_pdf_path:
+                    log_container.error(f"❌ Local PDF not found for '{master_pdf_filename}'. Marking ERROR and skipping.")
+                    queue_data[target_book]["status"] = "ERROR: Missing PDF"
+                    save_queue(queue_data)
+                    continue
+                    
+                pdf_dir = os.path.dirname(local_pdf_path)
+                master_json_path = os.path.join(pdf_dir, f"master_{master_pdf_filename}.json")
+                
+                if not os.path.exists(master_json_path):
+                    log_container.write(f"⚙️ Generating Master JSON for {master_pdf_filename}...")
+                    all_mapped_pages = set()
+                    for ch, data in route_map.items():
+                        for p in data.get("pdf_pages", []):
+                            all_mapped_pages.add(p["pdf_num"])
+                    pages_to_process = sorted(list(all_mapped_pages))
+                    
+                    temp_master_path = os.path.join(pdf_dir, f"temp_master_{master_pdf_filename}.json")
+                    shared_results = {}
+                    if os.path.exists(temp_master_path):
+                        try:
+                            with open(temp_master_path, "r", encoding="utf-8") as f:
+                                loaded_temp = json.load(f)
+                                shared_results = {str(k): v for k, v in loaded_temp.items() if v}
+                            if shared_results:
+                                log_container.info(f"🔄 Resuming from checkpoint: **{len(shared_results)} / {len(pages_to_process)}** pages already saved.")
+                        except json.JSONDecodeError:
+                            shared_results = {}
+
+                    ocr_progress_bar = log_container.progress(0)
+                    m_cols = log_container.columns(4)
+                    straggler_holder = log_container.empty()
+                    grid_holder = log_container.empty()
+                    with log_container.expander("⚠️ Warnings & DocAI Fallbacks Log", expanded=True):
+                        warnings_holder = st.empty()
+
+                    ui_holders = {
+                        "progress": ocr_progress_bar,
+                        "m_done": m_cols[0].empty(),
+                        "m_flight": m_cols[1].empty(),
+                        "m_docai": m_cols[2].empty(),
+                        "m_err": m_cols[3].empty(),
+                        "stragglers": straggler_holder,
+                        "grid": grid_holder,
+                        "warnings": warnings_holder,
+                    }
+                    
+                    for attempt in range(2):
+                        fatal_error = False
+                        fatal_error_msg = ""
+                        shared_log_list = []
+                        
+                        pdf_doc = fitz.open(local_pdf_path)
+                        executor = concurrent.futures.ThreadPoolExecutor(max_workers=100)
+                        page_futures = {
+                            page_num: executor.submit(
+                                process_single_page, page_num, pdf_doc, ocr_strategy,
+                                temp_master_path, shared_results, shared_log_list
+                            )
+                            for page_num in pages_to_process
+                        }
+                        
+                        # Live visibility loop with 429 monitoring
+                        while True:
+                            all_done = render_ocr_telemetry(
+                                pages_to_process, page_futures, shared_results, shared_log_list, ui_holders
+                            )
+                            for log_msg in list(shared_log_list):
+                                if "FATAL_RATE_LIMIT" in log_msg:
+                                    fatal_error = True
+                                    fatal_error_msg = log_msg
+                                    break
+                                        
+                            if fatal_error or all_done:
+                                break
+                            time.sleep(1)
+                            
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        with _fitz_lock:
+                            if not pdf_doc.is_closed:
+                                pdf_doc.close()
+                            
+                        if fatal_error:
+                            if attempt == 0:
+                                log_container.warning(f"⚠️ Fatal API/Network error detected: `{fatal_error_msg}`. Sleeping for 15 minutes before retrying once...")
+                                retry_countdown = log_container.empty()
+                                for remaining in range(900, 0, -1):
+                                    mins, secs = divmod(remaining, 60)
+                                    retry_countdown.code(f"Retrying OCR in: {mins:02d}:{secs:02d}")
+                                    time.sleep(1)
+                                retry_countdown.empty()
+                                log_container.info("🔄 Retrying OCR page processing...")
+                            else:
+                                log_container.error(f"❌ FATAL (Failed twice): `{fatal_error_msg}`. Halting execution.")
+                                queue_data[target_book]["status"] = f"ERROR: {fatal_error_msg[:80]}"
+                                save_queue(queue_data)
+                                st.stop()
+                        else:
+                            break
+                        
+                    log_container.write("🔄 Assembling pages into Master JSON...")
+                    master_data = {
+                        str(k): shared_results[str(k)]
+                        for k in sorted((int(x) for x in shared_results.keys()))
+                    }
+                    with open(master_json_path, 'w', encoding='utf-8') as f:
+                        json.dump(master_data, f, indent=4)
+                    if os.path.exists(temp_master_path):
+                        os.remove(temp_master_path)
+                else:
+                    log_container.write(f"📄 Master JSON already exists for {master_pdf_filename}.")
+                    with open(master_json_path, 'r', encoding='utf-8') as f:
+                        master_data = json.load(f)
+
+                # --- CHECK IF SPLIT / MANUAL REVIEW IS NEEDED BEFORE STEP 3 ---
+                split_reasons = []
+                for sp in state["subpages"]:
+                    route_info = state.get("route_map", {}).get(sp, {})
+                    if not route_info.get("pdf_pages"):
+                        split_reasons.append(f"`{sp}` (Unmapped / No {{page}} tags)")
+                    elif route_info.get("needs_split", False):
+                        split_reasons.append(f"`{sp}` (Needs Split / Text before first {{page}} tag)")
+
+                if split_reasons:
+                    queue_data[target_book]["status"] = "READY"
+                    save_queue(queue_data)
+                    reasons_str = "\n  - ".join(split_reasons)
+                    log_container.warning(
+                        f"⏸️ **{target_book}** paused before Step 3 (Marked `READY` for manual split in Test Mode).\n"
+                        f"**Chapters requiring split/review:**\n  - {reasons_str}"
+                    )
+                else:
+                    # --- AUTO STEP 3: Offline Batch Processing (No Splits Needed) ---
+                    log_container.write("💾 Processing subpages locally...")
+                    subpages_to_process = [sp for sp in state["subpages"] if sp not in state.get("completed_subpages", [])]
+                    
+                    for active_chapter in subpages_to_process:
+                        current_wikitext_for_year = state["wikitext_cache"].get(active_chapter, "")
+                        found_year = None
+                        cat_match = re.search(r'\[\[Category:\s*(\d{4})\s*\]\]', current_wikitext_for_year, re.IGNORECASE)
+                        if cat_match: found_year = cat_match.group(1)
+                        
+                        page_data = state["route_map"].get(active_chapter, {})
+                        pdf_targets = page_data.get("pdf_pages", [])
+                        pages_to_process_ch = [t["pdf_num"] for t in pdf_targets]
+                        all_extracted_text = {int(p): master_data[str(p)] for p in pages_to_process_ch if str(p) in master_data}
+                        
+                        # Inject current chapter text
+                        current_wikitext = state["wikitext_cache"].get(active_chapter, "")
+                        for target in pdf_targets:
+                            if all_extracted_text.get(target["pdf_num"]):
+                                current_wikitext, _ = inject_text_into_page(current_wikitext, target["label"], all_extracted_text[target["pdf_num"]], master_pdf_filename)
+                                
+                        final_wikitext = current_wikitext
+                        preserved_prefix = ""
+                        match = re.search(r'\{\{page\|', final_wikitext, flags=re.IGNORECASE)
+                        if match:
+                            leading_text = final_wikitext[:match.start()]
+                            safe_tags = []
+                            access_match = re.search(r'<accesscontrol>.*?</accesscontrol>', leading_text, flags=re.IGNORECASE | re.DOTALL)
+                            if access_match: safe_tags.append(access_match.group(0))
+                            header_match = re.search(r'\{\{header(?:[^{}]|\{\{[^}]*\}\})*\}\}', leading_text, flags=re.IGNORECASE | re.DOTALL)
+                            if header_match: safe_tags.append(header_match.group(0))
+                            preserved_prefix = "\n".join(safe_tags) + "\n" if safe_tags else ""
+                            final_wikitext = final_wikitext[match.start():]
+                        else:
+                            final_wikitext = ""
+                            
+                        final_wikitext = preserved_prefix + final_wikitext
+                        final_wikitext = apply_final_formatting(final_wikitext, active_chapter, found_year)
+                        
+                        safe_sp = active_chapter.replace("/", "_")
+                        with open(os.path.join(pdf_dir, f"{safe_sp}.txt"), "w", encoding="utf-8") as f:
+                            f.write(final_wikitext)
+                            
+                        state["completed_subpages"].append(active_chapter)
+                        save_book_state(safe_title, state)
+                        
+                    # --- AUTO STEP 4: Wiki Upload ---
+                    log_container.write("🌐 No split logic required. Auto-uploading to Wiki in parallel...")
+                    remaining_uploads = [sp for sp in state["subpages"] if sp not in state.get("uploaded_subpages", [])]
+                    up_prog = log_container.progress(0)
+                    up_status = log_container.empty()
+
+                    spam_blocked_book, hard_failures = upload_subpages_parallel(
+                        remaining_uploads, pdf_dir, safe_title, state, session, up_prog, up_status, log_container
+                    )
+
+                    if hard_failures and not spam_blocked_book:
+                        log_container.warning(f"⚠️ {len(hard_failures)} chapter(s) failed upload. Sleeping 15 minutes before retrying remaining chapters...")
+                        retry_countdown = log_container.empty()
+                        for remaining in range(900, 0, -1):
+                            mins, secs = divmod(remaining, 60)
+                            retry_countdown.code(f"Retrying upload in: {mins:02d}:{secs:02d}")
+                            time.sleep(1)
+                        retry_countdown.empty()
+
+                        remaining_uploads = [sp for sp in state["subpages"] if sp not in state.get("uploaded_subpages", [])]
+                        spam_blocked_book, hard_failures = upload_subpages_parallel(
+                            remaining_uploads, pdf_dir, safe_title, state, session, up_prog, up_status, log_container
+                        )
+                        if hard_failures and not spam_blocked_book:
+                            log_container.error("❌ Upload failed a second time. Halting pipeline.")
+                            queue_data[target_book]["status"] = "ERROR: Upload Failed"
+                            save_queue(queue_data)
+                            st.stop()
+                    
+                    if spam_blocked_book:
+                        save_book_state(safe_title, state)
+                        queue_data[target_book]["status"] = "ERROR: Spam Filter"
+                        save_queue(queue_data)
+                        continue
+                    
+                    save_book_state(safe_title, state)
+                    queue_data[target_book]["status"] = "COMPLETED"
+                    save_queue(queue_data)
+                    
+                    # Cleanup local chapter .txt files
+                    deleted_count = 0
+                    for sp in state["subpages"]:
+                        safe_sp = sp.replace("/", "_")
+                        ch_file_path = os.path.join(pdf_dir, f"{safe_sp}.txt")
+                        if os.path.exists(ch_file_path):
+                            os.remove(ch_file_path)
+                            deleted_count += 1
+                            
+                    log_container.success(f"✅ {target_book} automatically uploaded, marked COMPLETED, and cleaned up ({deleted_count} local .txt files removed).")
+                    
+                overall_progress.progress((idx + 1) / len(target_pending_books))
+                
+                # Sleep logic between books
+                if idx < len(target_pending_books) - 1:
+                    log_container.info("⏳ Sleeping for 5 minutes before processing the next book...")
+                    col_timer, col_skip = log_container.columns([3, 1])
+                    countdown = col_timer.empty()
+                    if col_skip.button("⏭️ Skip Wait", key=f"skip_wait_{idx}", width='stretch'):
+                        st.rerun()
+                    for remaining in range(300, 0, -1):
+                        mins, secs = divmod(remaining, 60)
+                        hours, mins = divmod(mins, 60)
+                        countdown.code(f"Next book starts in: {hours:02d}:{mins:02d}:{secs:02d}")
+                        time.sleep(1)
+                    countdown.empty()
+                    
+            st.session_state["auto_running"] = False
+            st.success("🎉 Automated queue complete! Switch back to '1 Book (Test)' to manually upload books marked as READY.")
+            
+        st.stop()
+
+    # ==============================================================================
+    # MANUAL MODE UI HERE
+    # ==============================================================================
+    st.divider()
+
+    # --- Select Any Book & Reset State ---
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        if "selected_book" not in st.session_state or st.session_state["selected_book"] not in all_books:
+            st.session_state["selected_book"] = all_books[0]
+        target_book = st.selectbox("Select Target Book (All Statuses Available)", all_books, key="selected_book")
+    with col2:
+        st.write("")
+        st.write("")
+        if st.button("🗑️ Reset Book State", width='stretch', help="Deletes the local map cache so you can re-process a completed book."):
+            safe_title = target_book.replace("/", "_")
+            state_file = os.path.join(CACHE_DIR, f"{safe_title}_state.json")
+            
+            # --- Clean up chapter .txt files ---
+            state_to_delete = load_book_state(safe_title)
+            master_pdf = state_to_delete.get("master_pdf")
+            if master_pdf:
+                local_pdf_path = resolve_pdf_path(state_to_delete, input_folder)
+                if local_pdf_path:
+                    pdf_dir = os.path.dirname(local_pdf_path)
+                    for sp in state_to_delete.get("subpages", []):
+                        safe_sp = sp.replace("/", "_")
+                        ch_file_path = os.path.join(pdf_dir, f"{safe_sp}.txt")
+                        if os.path.exists(ch_file_path):
+                            os.remove(ch_file_path)
+                            
+            if os.path.exists(state_file):
+                os.remove(state_file)
+            queue_data[target_book]["status"] = "PENDING"
+            save_queue(queue_data)
+            st.rerun()
+
+    safe_title = target_book.replace("/", "_")
+    state = load_book_state(safe_title)
+
+    # --- STEP 1: EXPLICIT AUTHORIZATION FOR ROUTE MAPPING ---
+    st.divider()
+    st.subheader("Step 1: Generate Chapter Map")
+
+    if not state.get("subpages"):
+        st.info(f"Route map is missing or has been reset for **{target_book}**.")
+        if st.button("🛠️ Generate Chapter Map", type="primary"):
+            with st.spinner("🔍 Scanning wiki subpages and building route map..."):
                 subpages = get_all_subpages(target_book, session)
                 route_map, master_pdf_filename, wikitext_cache, ordered_subpages = build_sequential_route_map(subpages, session, input_folder)
                 
                 if not route_map or not master_pdf_filename:
-                    log_container.error(f"❌ Could not find PDF references for {target_book}. Marking ERROR and skipping.")
-                    queue_data[target_book]["status"] = "ERROR: No Map"
-                    save_queue(queue_data)
-                    continue
+                    st.error(f"Could not find any {{page}} tags or PDF references for {target_book}.")
+                    st.stop()
                     
                 state["subpages"] = ordered_subpages
                 state["route_map"] = route_map
                 state["master_pdf"] = master_pdf_filename
                 state["wikitext_cache"] = wikitext_cache
                 save_book_state(safe_title, state)
-            else:
-                log_container.write(f"🗺️ Loaded existing Chapter Map for {target_book} from cache.")
-                ordered_subpages = state["subpages"]
-                route_map = state["route_map"]
-                master_pdf_filename = state["master_pdf"]
-                wikitext_cache = state.get("wikitext_cache", {})
+                st.rerun()
+        st.stop() # Halts all execution until authorized
+
+    # Display Map
+    with st.expander(f"📖 Map: {target_book} ({len(state['subpages'])} subpages)", expanded=False):
+        map_display = []
+        for sp in state["subpages"]:
+            pdf_pages = state["route_map"].get(sp, {}).get("pdf_pages", [])
+            page_labels = [str(p["pdf_num"]) for p in pdf_pages]
+            needs_split = state["route_map"].get(sp, {}).get("needs_split", False)
             
-            # --- AUTO STEP 2: Generate Master JSON ---
-            local_pdf_path = find_local_pdf(master_pdf_filename, input_folder)
+            map_display.append({
+                "Wiki Subpage": sp,
+                "Mapped PDF Pages": ", ".join(page_labels) if page_labels else "None",
+                "Needs Split Logic": "Yes" if needs_split else "No"
+            })
+        st.dataframe(map_display, width='stretch', height=250, hide_index=True)
+
+    # ==============================================================================
+    # STEP 2: MASTER JSON GENERATION
+    # ==============================================================================
+    st.divider()
+    st.subheader("Step 2: Generate Master JSON")
+
+    local_pdf_path = resolve_pdf_path(state, input_folder)
+    pdf_dir = os.path.dirname(local_pdf_path) if local_pdf_path else ""
+    master_json_path = os.path.join(pdf_dir, f"master_{state.get('master_pdf')}.json") if pdf_dir else ""
+    master_json_exists = os.path.exists(master_json_path) if master_json_path else False
+
+    if not local_pdf_path:
+        st.error(
+            f"❌ **Local PDF Not Found:** Could not locate `{state.get('master_pdf')}` "
+            f"inside `{input_folder}`."
+        )
+        col_p1, col_p2 = st.columns([4, 1])
+        with col_p1:
+            manual_pdf_input = st.text_input(
+                "Paste Direct Full Path to Local PDF:",
+                value=state.get("custom_pdf_path", ""),
+                placeholder="/media/sarah/4TB/Projects/.../Book.pdf"
+            )
+        with col_p2:
+            st.write("")
+            st.write("")
+            if st.button("💾 Save PDF Path", type="primary", width='stretch'):
+                clean_path = manual_pdf_input.strip().strip('"').strip("'")
+                if os.path.isfile(clean_path):
+                    state["custom_pdf_path"] = clean_path
+                    save_book_state(safe_title, state)
+                    
+                    # Also write out initial chapter .txt files if missing
+                    new_pdf_dir = os.path.dirname(clean_path)
+                    for sp in state.get("subpages", []):
+                        safe_sp = sp.replace("/", "_")
+                        ch_file_path = os.path.join(new_pdf_dir, f"{safe_sp}.txt")
+                        if not os.path.exists(ch_file_path):
+                            with open(ch_file_path, "w", encoding="utf-8") as f:
+                                f.write(state.get("wikitext_cache", {}).get(sp, ""))
+                    st.rerun()
+                else:
+                    st.error(f"File does not exist at: `{clean_path}`")
+        st.stop()
+    elif master_json_exists:
+        st.caption(f"📁 Using PDF: `{local_pdf_path}`")
+        st.success(f"✅ Master JSON already exists for {state['master_pdf']}!")
+        with st.expander("Re-generate Master JSON"):
+            st.warning("Only do this if you need to re-OCR the entire document. This will overwrite the existing file.")
+            col_gen, col_stop = st.columns([1, 1])
+            with col_gen:
+                regenerate_master = st.button("🔄 Re-generate Master JSON", width='stretch')
+            with col_stop:
+                if st.button("🛑 Stop Generation", key="stop_regen", width='stretch'):
+                    st.warning("Execution stopped.")
+                    st.stop()
+    else:
+        st.info(f"Master JSON not found for {state['master_pdf']}. This step will OCR all mapped pages.")
+        col_gen, col_stop = st.columns([1, 1])
+        with col_gen:
+            regenerate_master = st.button("🚀 Generate Master JSON", type="primary", width='stretch')
+        with col_stop:
+            if st.button("🛑 Stop Generation", key="stop_gen", width='stretch'):
+                st.warning("Execution stopped.")
+                st.stop()
+
+    if master_json_path and (not master_json_exists and locals().get('regenerate_master', False) or locals().get('regenerate_master', False)):
+        all_mapped_pages = set()
+        for ch, data in state["route_map"].items():
+            for p in data.get("pdf_pages", []):
+                all_mapped_pages.add(p["pdf_num"])
+        pages_to_process = sorted(list(all_mapped_pages))
+
+        if not pages_to_process:
+            st.warning("No PDF pages found in the route map to process.")
+        else:
+            master_log = st.container(border=True)
+            master_log.write(f"⚙️ Initiating full OCR processing for {len(pages_to_process)} pages...")
+            
+            temp_master_path = os.path.join(pdf_dir, f"temp_master_{state['master_pdf']}.json")
+            shared_results = {}
+            if os.path.exists(temp_master_path):
+                try:
+                    with open(temp_master_path, "r", encoding="utf-8") as f:
+                        loaded_temp = json.load(f)
+                        shared_results = {str(k): v for k, v in loaded_temp.items() if v}
+                    if shared_results:
+                        master_log.info(f"🔄 Resuming from checkpoint: **{len(shared_results)} / {len(pages_to_process)}** pages already saved.")
+                except json.JSONDecodeError:
+                    shared_results = {}
+
+            ocr_progress_bar = master_log.progress(0)
+            m_cols = master_log.columns(4)
+            straggler_holder = master_log.empty()
+            grid_holder = master_log.empty()
+            with master_log.expander("⚠️ Warnings & DocAI Fallbacks Log", expanded=True):
+                warnings_holder = st.empty()
+
+            ui_holders = {
+                "progress": ocr_progress_bar,
+                "m_done": m_cols[0].empty(),
+                "m_flight": m_cols[1].empty(),
+                "m_docai": m_cols[2].empty(),
+                "m_err": m_cols[3].empty(),
+                "stragglers": straggler_holder,
+                "grid": grid_holder,
+                "warnings": warnings_holder,
+            }
+
+            shared_log_list = []
+
+            pdf_doc = fitz.open(local_pdf_path)
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=100)
+            page_futures = {
+                page_num: executor.submit(
+                    process_single_page,
+                    page_num, pdf_doc, ocr_strategy, 
+                    temp_master_path, shared_results, shared_log_list
+                )
+                for page_num in pages_to_process
+            }
+
+            fatal_error = False
+            fatal_error_msg = ""
+            while True:
+                all_done = render_ocr_telemetry(
+                    pages_to_process, page_futures, shared_results, shared_log_list, ui_holders
+                )
+                for log_msg in list(shared_log_list):
+                    if "FATAL_RATE_LIMIT" in log_msg:
+                        fatal_error = True
+                        fatal_error_msg = log_msg
+                        break
+                if fatal_error or all_done:
+                    break
+                time.sleep(1)
+
+            executor.shutdown(wait=False, cancel_futures=True)
+            with _fitz_lock:
+                if not pdf_doc.is_closed:
+                    pdf_doc.close()
+
+            if fatal_error:
+                master_log.error(f"❌ FATAL: `{fatal_error_msg}`. Halting execution to prevent raw text saving.")
+                st.stop()
+
+            master_log.write("🔄 Assembling pages into Master JSON...")
+            master_data = {
+                str(k): shared_results[str(k)]
+                for k in sorted((int(x) for x in shared_results.keys()))
+            }
+            
+            with open(master_json_path, 'w', encoding='utf-8') as f:
+                json.dump(master_data, f, indent=4)
+            if os.path.exists(temp_master_path):
+                os.remove(temp_master_path)
+            
+            st.success("🎉 Master JSON successfully generated!")
+            st.rerun()
+
+    # Halt execution if Master JSON is not complete
+    if not master_json_exists:
+        st.stop()
+
+
+    # --- STEP 3 & 4: AUTOMATED BATCH PROCESSING & WIKI UPLOAD ---
+    subpages_to_process = [sp for sp in state["subpages"] if sp not in state.get("completed_subpages", [])]
+    subpages_to_upload = [sp for sp in state["subpages"] if sp not in state.get("uploaded_subpages", [])]
+
+
+    # ==============================================================================
+    # STEP 3: OFFLINE BATCH PROCESSING
+    # ==============================================================================
+    if subpages_to_process:
+        st.divider()
+        st.subheader("Step 3: Offline Batch Processing")
+        st.info(f"Ready to process {len(subpages_to_process)} remaining sections locally.")
+
+        # --- Evaluate if LLM Split is needed ---
+        split_reasons = []
+        for sp in subpages_to_process:
+            route_info = state.get("route_map", {}).get(sp, {})
+            if not route_info.get("pdf_pages"):
+                split_reasons.append(f"- `{sp}` *(Unmapped / No {{page}} tags)*")
+            elif route_info.get("needs_split", False):
+                split_reasons.append(f"- `{sp}` *(Needs Split / Text before first {{page}} tag)*")
+
+        split_prompt = ""
+        if split_reasons:
+            reasons_md = "\n".join(split_reasons)
+            st.warning(
+                f"⚠️ **The map indicates that the following chapter(s) require splits:**\n{reasons_md}\n\n"
+                f"Review the LLM split instruction below before starting."
+            )
+            split_prompt = st.text_area(
+                "Custom Split Instruction", 
+                value="Look for the start of a new chapter. The chapter is usually in all caps or a distinct heading.",
+                help="Context to help the LLM identify where a specific chapter begins."
+            )
+
+        col_start, col_stop = st.columns([1, 1])
+        with col_start:
+            start_batch = st.button("🚀 Start Processing All Chapters", type="primary", width='stretch')
+        with col_stop:
+            if st.button("🛑 Stop Execution", width='stretch'):
+                st.warning("Execution stopped.")
+                st.stop()
+
+        if start_batch:
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            log_container = st.container(border=True)
+            
+            # Initialize safe overflow cache
+            if "overflow_cache" not in state:
+                state["overflow_cache"] = {}
+            
+            local_pdf_path = resolve_pdf_path(state, input_folder)
             if not local_pdf_path:
-                log_container.error(f"❌ Local PDF not found for '{master_pdf_filename}'. Marking ERROR and skipping.")
-                queue_data[target_book]["status"] = "ERROR: Missing PDF"
-                save_queue(queue_data)
-                continue
+                st.error(f"Local PDF not found for '{state['master_pdf']}'")
+                st.stop()
                 
             pdf_dir = os.path.dirname(local_pdf_path)
-            master_json_path = os.path.join(pdf_dir, f"master_{master_pdf_filename}.json")
+
+            # --- MASTER JSON CHECK & LOAD (MOVED OUTSIDE LOOP) ---
+            master_json_path = os.path.join(pdf_dir, f"master_{state['master_pdf']}.json")
+            master_data = {}
             
-            if not os.path.exists(master_json_path):
-                log_container.write(f"⚙️ Generating Master JSON for {master_pdf_filename}...")
-                all_mapped_pages = set()
-                for ch, data in route_map.items():
-                    for p in data.get("pdf_pages", []):
-                        all_mapped_pages.add(p["pdf_num"])
-                pages_to_process = sorted(list(all_mapped_pages))
-                
-                temp_master_path = os.path.join(pdf_dir, f"temp_master_{master_pdf_filename}.json")
-                shared_results = {}
-                if os.path.exists(temp_master_path):
-                    try:
-                        with open(temp_master_path, "r", encoding="utf-8") as f:
-                            loaded_temp = json.load(f)
-                            shared_results = {str(k): v for k, v in loaded_temp.items() if v}
-                        if shared_results:
-                            log_container.info(f"🔄 Resuming from checkpoint: **{len(shared_results)} / {len(pages_to_process)}** pages already saved.")
-                    except json.JSONDecodeError:
-                        shared_results = {}
-
-                ocr_progress_bar = log_container.progress(0)
-                m_cols = log_container.columns(4)
-                straggler_holder = log_container.empty()
-                grid_holder = log_container.empty()
-                with log_container.expander("⚠️ Warnings & DocAI Fallbacks Log", expanded=True):
-                    warnings_holder = st.empty()
-
-                ui_holders = {
-                    "progress": ocr_progress_bar,
-                    "m_done": m_cols[0].empty(),
-                    "m_flight": m_cols[1].empty(),
-                    "m_docai": m_cols[2].empty(),
-                    "m_err": m_cols[3].empty(),
-                    "stragglers": straggler_holder,
-                    "grid": grid_holder,
-                    "warnings": warnings_holder,
-                }
-                
-                for attempt in range(2):
-                    fatal_error = False
-                    fatal_error_msg = ""
-                    shared_log_list = []
-                    
-                    pdf_doc = fitz.open(local_pdf_path)
-                    executor = concurrent.futures.ThreadPoolExecutor(max_workers=100)
-                    page_futures = {
-                        page_num: executor.submit(
-                            process_single_page, page_num, pdf_doc, ocr_strategy,
-                            temp_master_path, shared_results, shared_log_list
-                        )
-                        for page_num in pages_to_process
-                    }
-                    
-                    # Live visibility loop with 429 monitoring
-                    while True:
-                        all_done = render_ocr_telemetry(
-                            pages_to_process, page_futures, shared_results, shared_log_list, ui_holders
-                        )
-                        for log_msg in list(shared_log_list):
-                            if "FATAL_RATE_LIMIT" in log_msg:
-                                fatal_error = True
-                                fatal_error_msg = log_msg
-                                break
-                                    
-                        if fatal_error or all_done:
-                            break
-                        time.sleep(1)
-                        
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    with _fitz_lock:
-                        if not pdf_doc.is_closed:
-                            pdf_doc.close()
-                        
-                    if fatal_error:
-                        if attempt == 0:
-                            log_container.warning(f"⚠️ Fatal API/Network error detected: `{fatal_error_msg}`. Sleeping for 15 minutes before retrying once...")
-                            retry_countdown = log_container.empty()
-                            for remaining in range(900, 0, -1):
-                                mins, secs = divmod(remaining, 60)
-                                retry_countdown.code(f"Retrying OCR in: {mins:02d}:{secs:02d}")
-                                time.sleep(1)
-                            retry_countdown.empty()
-                            log_container.info("🔄 Retrying OCR page processing...")
-                        else:
-                            log_container.error(f"❌ FATAL (Failed twice): `{fatal_error_msg}`. Halting execution.")
-                            queue_data[target_book]["status"] = f"ERROR: {fatal_error_msg[:80]}"
-                            save_queue(queue_data)
-                            st.stop()
-                    else:
-                        break
-                    
-                log_container.write("🔄 Assembling pages into Master JSON...")
-                master_data = {
-                    str(k): shared_results[str(k)]
-                    for k in sorted((int(x) for x in shared_results.keys()))
-                }
-                with open(master_json_path, 'w', encoding='utf-8') as f:
-                    json.dump(master_data, f, indent=4)
-                if os.path.exists(temp_master_path):
-                    os.remove(temp_master_path)
-            else:
-                log_container.write(f"📄 Master JSON already exists for {master_pdf_filename}.")
+            if os.path.exists(master_json_path):
+                log_container.write(f"📄 Master JSON found. Loading text into memory...")
                 with open(master_json_path, 'r', encoding='utf-8') as f:
                     master_data = json.load(f)
-
-            # --- CHECK IF SPLIT / MANUAL REVIEW IS NEEDED BEFORE STEP 3 ---
-            split_reasons = []
-            for sp in state["subpages"]:
-                route_info = state.get("route_map", {}).get(sp, {})
-                if not route_info.get("pdf_pages"):
-                    split_reasons.append(f"`{sp}` (Unmapped / No {{page}} tags)")
-                elif route_info.get("needs_split", False):
-                    split_reasons.append(f"`{sp}` (Needs Split / Text before first {{page}} tag)")
-
-            if split_reasons:
-                queue_data[target_book]["status"] = "READY"
-                save_queue(queue_data)
-                reasons_str = "\n  - ".join(split_reasons)
-                log_container.warning(
-                    f"⏸️ **{target_book}** paused before Step 3 (Marked `READY` for manual split in Test Mode).\n"
-                    f"**Chapters requiring split/review:**\n  - {reasons_str}"
-                )
             else:
-                # --- AUTO STEP 3: Offline Batch Processing (No Splits Needed) ---
-                log_container.write("💾 Processing subpages locally...")
-                subpages_to_process = [sp for sp in state["subpages"] if sp not in state.get("completed_subpages", [])]
+                log_container.error(f"❌ Master JSON not found! Please complete Step 2 (Generate Master JSON) first.")
+                st.stop()
+
+            for idx, active_chapter in enumerate(subpages_to_process):
+                active_chapter_idx = state["subpages"].index(active_chapter)
+                next_chapter = state["subpages"][active_chapter_idx + 1] if active_chapter_idx + 1 < len(state["subpages"]) else None
+
+                status_text.markdown(f"**Processing {idx+1}/{len(subpages_to_process)}:** `{active_chapter}`")
+                progress_bar.progress(idx / len(subpages_to_process))
                 
-                for active_chapter in subpages_to_process:
-                    current_wikitext_for_year = state["wikitext_cache"].get(active_chapter, "")
-                    found_year = None
-                    cat_match = re.search(r'\[\[Category:\s*(\d{4})\s*\]\]', current_wikitext_for_year, re.IGNORECASE)
-                    if cat_match: found_year = cat_match.group(1)
-                    
-                    page_data = state["route_map"].get(active_chapter, {})
-                    pdf_targets = page_data.get("pdf_pages", [])
-                    pages_to_process_ch = [t["pdf_num"] for t in pdf_targets]
-                    all_extracted_text = {int(p): master_data[str(p)] for p in pages_to_process_ch if str(p) in master_data}
-                    
-                    # Inject current chapter text
+                log_container.write(f"--- Starting {active_chapter} ---")
+                
+                # --- Capture Year ---
+                current_wikitext_for_year = state["wikitext_cache"].get(active_chapter, "")
+                found_year = None
+                cat_match = re.search(r'\[\[Category:\s*(\d{4})\s*\]\]', current_wikitext_for_year, re.IGNORECASE)
+                if cat_match:
+                    found_year = cat_match.group(1)
+                
+                page_data = state["route_map"].get(active_chapter, {})
+                pdf_targets = page_data.get("pdf_pages", [])
+                
+                # --- UNMAPPED CHAPTER HANDLING ---
+                if not pdf_targets:
                     current_wikitext = state["wikitext_cache"].get(active_chapter, "")
-                    for target in pdf_targets:
-                        if all_extracted_text.get(target["pdf_num"]):
-                            current_wikitext, _ = inject_text_into_page(current_wikitext, target["label"], all_extracted_text[target["pdf_num"]], master_pdf_filename)
+                    overflow = state.get("overflow_cache", {}).get(active_chapter, "")
+                    
+                    # Preserve accesscontrol and header tags before overwriting with overflow
+                    safe_tags = []
+                    access_match = re.search(r'<accesscontrol>.*?</accesscontrol>', current_wikitext, flags=re.IGNORECASE | re.DOTALL)
+                    if access_match:
+                        safe_tags.append(access_match.group(0))
+                    header_match = re.search(r'\{\{header(?:[^{}]|\{\{[^}]*\}\})*\}\}', current_wikitext, flags=re.IGNORECASE | re.DOTALL)
+                    if header_match:
+                        safe_tags.append(header_match.group(0))
+                        
+                    preserved_prefix = "\n".join(safe_tags) + "\n" if safe_tags else ""
+                    
+                    # If overflow exists from the previous split, it replaces the legacy text entirely
+                    if overflow:
+                        combined_text = preserved_prefix + overflow.strip()
+                    else:
+                        combined_text = current_wikitext.strip()
+                    
+                    if combined_text:
+                        log_container.write("💾 Saving unmapped middle section locally...")
+                        
+                        # --- Apply cleanup, header formatting, and NOTOC ---
+                        combined_text = apply_final_formatting(combined_text, active_chapter, found_year)
+                        
+                        safe_sp = active_chapter.replace("/", "_")
+                        ch_file_path = os.path.join(pdf_dir, f"{safe_sp}.txt")
+                        with open(ch_file_path, "w", encoding="utf-8") as f:
+                            f.write(combined_text)
+                        
+                        state["completed_subpages"].append(active_chapter)
+                        save_book_state(safe_title, state)
+                        continue
+                    else:
+                        log_container.write("No PDF pages mapped and no cached text. Skipping section.")
+                        state["completed_subpages"].append(active_chapter)
+                        save_book_state(safe_title, state)
+                        continue
+
+                pages_to_process = [t["pdf_num"] for t in pdf_targets]
+                
+                # --- TEXT EXTRACTION FROM PRE-LOADED JSON ---
+                all_extracted_text = {}
+                for p_num in pages_to_process:
+                    if str(p_num) in master_data:
+                        all_extracted_text[int(p_num)] = master_data[str(p_num)]
+                    else:
+                        log_container.warning(f"⚠️ Page {p_num} missing from master JSON.")
+
+                # --- TARGETED LLM SPLIT LOGIC ---
+                # 1. Identify all "ghost chapters" (no mapped pages)
+                all_ghost_chapters = [ch for ch in state["subpages"] if not state["route_map"].get(ch, {}).get("pdf_pages")]
+                
+                # 2. Filter out ghosts that are already completed OR already found and cached
+                pending_ghosts = [
+                    ch for ch in all_ghost_chapters 
+                    if ch not in state.get("completed_subpages", []) 
+                    and ch not in state.get("overflow_cache", {}) 
+                    and ch != active_chapter
+                ]
+                
+                # 3. Check if the NEXT chapter explicitly needs a split
+                next_chapter_needs_split = False
+                if next_chapter:
+                    next_chapter_needs_split = state["route_map"].get(next_chapter, {}).get("needs_split", False)
+
+                # Trigger LLM if we are still hunting for unfound ghost chapters, OR if the next chapter needs a split
+                if pages_to_process and (pending_ghosts or next_chapter_needs_split):
+                    last_page_num = pages_to_process[-1]
+                    last_page_text = all_extracted_text.get(last_page_num, "")
+                    
+                    if last_page_text:
+                        if next_chapter_needs_split:
+                            log_container.write(f"🧠 Asking LLM to split page {last_page_num} (Next chapter requires split)...")
+                        else:
+                            log_container.write(f"🧠 Asking LLM to scan page {last_page_num} (Because {len(pending_ghosts)} unmapped ghost chapter(s) exist)...")
+                        
+                        # Pass the next chapter AND the remaining unfound ghost chapters
+                        unmapped_to_pass = [ch for ch in pending_ghosts if ch != next_chapter]
+                        
+                        split_results = apply_chunked_split(last_page_text, next_chapter, unmapped_to_pass, split_prompt)
+                        
+                        if "_previous_" in split_results:
+                            all_extracted_text[last_page_num] = split_results["_previous_"]
                             
-                    final_wikitext = current_wikitext
-                    preserved_prefix = ""
+                        for found_chap, text_content in split_results.items():
+                            if found_chap == "_previous_" or not text_content.strip(): 
+                                continue
+                            
+                            # Store remainder safely in overflow cache
+                            existing_overflow = state["overflow_cache"].get(found_chap, "")
+                            
+                            # Prevent duplicates and append
+                            if text_content.strip() not in existing_overflow:
+                                state["overflow_cache"][found_chap] = f"{existing_overflow}\n\n{text_content}".strip()
+
+                # Inject Current Chapter
+                current_wikitext = state["wikitext_cache"].get(active_chapter, "")
+                for target in pdf_targets:
+                    pdf_num = target["pdf_num"]
+                    label = target["label"]
+                    chunk_to_inject = all_extracted_text.get(pdf_num, "")
+                    
+                    if chunk_to_inject:
+                        current_wikitext, err = inject_text_into_page(current_wikitext, label, chunk_to_inject, state["master_pdf"])
+
+                # Final Cleanup & Local Save (NO WIKI UPLOAD)
+                final_wikitext = current_wikitext
+                preserved_prefix = ""
+                
+                # Clear legacy unproofread text before the first {{page| template
+                if pdf_targets:
                     match = re.search(r'\{\{page\|', final_wikitext, flags=re.IGNORECASE)
                     if match:
                         leading_text = final_wikitext[:match.start()]
+
+                        # Explicitly preserve accesscontrol tags and the header
                         safe_tags = []
                         access_match = re.search(r'<accesscontrol>.*?</accesscontrol>', leading_text, flags=re.IGNORECASE | re.DOTALL)
-                        if access_match: safe_tags.append(access_match.group(0))
+                        if access_match:
+                            safe_tags.append(access_match.group(0))
+                            
                         header_match = re.search(r'\{\{header(?:[^{}]|\{\{[^}]*\}\})*\}\}', leading_text, flags=re.IGNORECASE | re.DOTALL)
-                        if header_match: safe_tags.append(header_match.group(0))
+                        if header_match:
+                            safe_tags.append(header_match.group(0))
+
                         preserved_prefix = "\n".join(safe_tags) + "\n" if safe_tags else ""
+
                         final_wikitext = final_wikitext[match.start():]
                     else:
+                        # If no page template is found, delete the legacy content entirely
                         final_wikitext = ""
-                        
-                    final_wikitext = preserved_prefix + final_wikitext
-                    final_wikitext = apply_final_formatting(final_wikitext, active_chapter, found_year)
-                    
-                    safe_sp = active_chapter.replace("/", "_")
-                    with open(os.path.join(pdf_dir, f"{safe_sp}.txt"), "w", encoding="utf-8") as f:
-                        f.write(final_wikitext)
-                        
-                    state["completed_subpages"].append(active_chapter)
-                    save_book_state(safe_title, state)
-                    
-                # --- AUTO STEP 4: Wiki Upload ---
-                log_container.write("🌐 No split logic required. Auto-uploading to Wiki in parallel...")
-                remaining_uploads = [sp for sp in state["subpages"] if sp not in state.get("uploaded_subpages", [])]
-                up_prog = log_container.progress(0)
-                up_status = log_container.empty()
-
-                spam_blocked_book, hard_failures = upload_subpages_parallel(
-                    remaining_uploads, pdf_dir, safe_title, state, session, up_prog, up_status, log_container
-                )
-
-                if hard_failures and not spam_blocked_book:
-                    log_container.warning(f"⚠️ {len(hard_failures)} chapter(s) failed upload. Sleeping 15 minutes before retrying remaining chapters...")
-                    retry_countdown = log_container.empty()
-                    for remaining in range(900, 0, -1):
-                        mins, secs = divmod(remaining, 60)
-                        retry_countdown.code(f"Retrying upload in: {mins:02d}:{secs:02d}")
-                        time.sleep(1)
-                    retry_countdown.empty()
-
-                    remaining_uploads = [sp for sp in state["subpages"] if sp not in state.get("uploaded_subpages", [])]
-                    spam_blocked_book, hard_failures = upload_subpages_parallel(
-                        remaining_uploads, pdf_dir, safe_title, state, session, up_prog, up_status, log_container
-                    )
-                    if hard_failures and not spam_blocked_book:
-                        log_container.error("❌ Upload failed a second time. Halting pipeline.")
-                        queue_data[target_book]["status"] = "ERROR: Upload Failed"
-                        save_queue(queue_data)
-                        st.stop()
                 
-                if spam_blocked_book:
-                    save_book_state(safe_title, state)
-                    queue_data[target_book]["status"] = "ERROR: Spam Filter"
-                    save_queue(queue_data)
-                    continue
+                # Pull any overflow belonging to this chapter and prepend it
+                overflow = state.get("overflow_cache", {}).get(active_chapter, "")
+                if overflow:
+                    final_wikitext = f"{overflow}\n\n{final_wikitext}".strip()
+                    
+                # Reattach the preserved prefix at the very top so apply_final_formatting can see it
+                final_wikitext = preserved_prefix + final_wikitext
+                    
+                # --- Apply Header, Seam Cleanup, NOTOC, & OCR Cleanup ---
+                final_wikitext = apply_final_formatting(final_wikitext, active_chapter, found_year)
+                    
+                log_container.write(f"💾 Saving {active_chapter} to local txt file...")
                 
+                safe_sp = active_chapter.replace("/", "_")
+                ch_file_path = os.path.join(pdf_dir, f"{safe_sp}.txt")
+                with open(ch_file_path, "w", encoding="utf-8") as f:
+                    f.write(final_wikitext)
+                    
+                state["completed_subpages"].append(active_chapter)
                 save_book_state(safe_title, state)
-                queue_data[target_book]["status"] = "COMPLETED"
-                save_queue(queue_data)
-                
-                # Cleanup local chapter .txt files
+
+            # After loop finishes
+            progress_bar.progress(1.0)
+            st.success("✅ All chapters processed and saved locally!")
+            st.rerun()
+
+        st.stop() # Halts execution here so the wiki upload UI below is hidden until offline is complete
+
+
+    # ==============================================================================
+    # STEP 4: WIKI UPLOAD PHASE (Runs when Offline is complete)
+    # ==============================================================================
+    st.success(f"✅ Offline processing complete for {target_book}! Local txt files are ready for review.")
+
+    if subpages_to_upload:
+        st.divider()
+        st.subheader("Step 4: Wiki Upload Phase")
+        st.info(f"Ready to upload {len(subpages_to_upload)} sections to the wiki.")
+
+        if st.button("🌐 Upload All Chapters to Wiki", type="primary", width='stretch'):
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            log_container = st.container(border=True)
+            
+            local_pdf_path = resolve_pdf_path(state, input_folder)
+            pdf_dir = os.path.dirname(local_pdf_path) if local_pdf_path else ""
+            
+            spam_blocked, hard_failures = upload_subpages_parallel(
+                subpages_to_upload, pdf_dir, safe_title, state, session, progress_bar, status_text, log_container
+            )
+
+            if spam_blocked or hard_failures:
+                st.stop()
+                    
+            progress_bar.progress(1.0)
+            queue_data[target_book]["status"] = "COMPLETED"
+            save_queue(queue_data)
+            status_text.success("🎉 All chapters successfully uploaded to the wiki!")
+            time.sleep(1)
+            st.rerun()
+
+    # ==============================================================================
+    # STEP 5: CLEANUP PHASE
+    # ==============================================================================
+    else:
+        st.divider()
+        st.subheader("Step 5: Cleanup Phase")
+        st.success(f"🎉 All sections for {target_book} have been uploaded to the wiki!")
+        
+        if st.button("🧹 Finalize & Cleanup Local Text Files", type="primary", width='stretch'):
+            
+            # Ensure the queue status is explicitly marked as COMPLETED
+            queue_data[target_book]["status"] = "COMPLETED"
+            save_queue(queue_data)
+            
+            # Locate the directory and delete the .txt files
+            local_pdf_path = resolve_pdf_path(state, input_folder)
+            if local_pdf_path:
+                pdf_dir = os.path.dirname(local_pdf_path)
                 deleted_count = 0
-                for sp in state["subpages"]:
+                
+                for sp in state.get("subpages", []):
                     safe_sp = sp.replace("/", "_")
                     ch_file_path = os.path.join(pdf_dir, f"{safe_sp}.txt")
+                    
                     if os.path.exists(ch_file_path):
                         os.remove(ch_file_path)
                         deleted_count += 1
-                        
-                log_container.success(f"✅ {target_book} automatically uploaded, marked COMPLETED, and cleaned up ({deleted_count} local .txt files removed).")
                 
-            overall_progress.progress((idx + 1) / len(target_pending_books))
-            
-            # Sleep logic between books
-            if idx < len(target_pending_books) - 1:
-                log_container.info("⏳ Sleeping for 5 minutes before processing the next book...")
-                col_timer, col_skip = log_container.columns([3, 1])
-                countdown = col_timer.empty()
-                if col_skip.button("⏭️ Skip Wait", key=f"skip_wait_{idx}", width='stretch'):
-                    st.rerun()
-                for remaining in range(300, 0, -1):
-                    mins, secs = divmod(remaining, 60)
-                    hours, mins = divmod(mins, 60)
-                    countdown.code(f"Next book starts in: {hours:02d}:{mins:02d}:{secs:02d}")
-                    time.sleep(1)
-                countdown.empty()
-                
-        st.session_state["auto_running"] = False
-        st.success("🎉 Automated queue complete! Switch back to '1 Book (Test)' to manually upload books marked as READY.")
-        
-    st.stop()
-
-# ==============================================================================
-# MANUAL MODE UI HERE
-# ==============================================================================
-st.divider()
-
-# --- Select Any Book & Reset State ---
-col1, col2 = st.columns([3, 1])
-with col1:
-    if "selected_book" not in st.session_state or st.session_state["selected_book"] not in all_books:
-        st.session_state["selected_book"] = all_books[0]
-    target_book = st.selectbox("Select Target Book (All Statuses Available)", all_books, key="selected_book")
-with col2:
-    st.write("")
-    st.write("")
-    if st.button("🗑️ Reset Book State", width='stretch', help="Deletes the local map cache so you can re-process a completed book."):
-        safe_title = target_book.replace("/", "_")
-        state_file = os.path.join(CACHE_DIR, f"{safe_title}_state.json")
-        
-        # --- Clean up chapter .txt files ---
-        state_to_delete = load_book_state(safe_title)
-        master_pdf = state_to_delete.get("master_pdf")
-        if master_pdf:
-            local_pdf_path = find_local_pdf(master_pdf, input_folder)
-            if local_pdf_path:
-                pdf_dir = os.path.dirname(local_pdf_path)
-                for sp in state_to_delete.get("subpages", []):
-                    safe_sp = sp.replace("/", "_")
-                    ch_file_path = os.path.join(pdf_dir, f"{safe_sp}.txt")
-                    if os.path.exists(ch_file_path):
-                        os.remove(ch_file_path)
-                        
-        if os.path.exists(state_file):
-            os.remove(state_file)
-        queue_data[target_book]["status"] = "PENDING"
-        save_queue(queue_data)
-        st.rerun()
-
-safe_title = target_book.replace("/", "_")
-state = load_book_state(safe_title)
-
-# --- STEP 1: EXPLICIT AUTHORIZATION FOR ROUTE MAPPING ---
-st.divider()
-st.subheader("Step 1: Generate Chapter Map")
-
-if not state.get("subpages"):
-    st.info(f"Route map is missing or has been reset for **{target_book}**.")
-    if st.button("🛠️ Generate Chapter Map", type="primary"):
-        with st.spinner("🔍 Scanning wiki subpages and building route map..."):
-            subpages = get_all_subpages(target_book, session)
-            route_map, master_pdf_filename, wikitext_cache, ordered_subpages = build_sequential_route_map(subpages, session, input_folder)
-            
-            if not route_map or not master_pdf_filename:
-                st.error(f"Could not find any {{page}} tags or PDF references for {target_book}.")
-                st.stop()
-                
-            state["subpages"] = ordered_subpages
-            state["route_map"] = route_map
-            state["master_pdf"] = master_pdf_filename
-            state["wikitext_cache"] = wikitext_cache
-            save_book_state(safe_title, state)
-            st.rerun()
-    st.stop() # Halts all execution until authorized
-
-# Display Map
-with st.expander(f"📖 Map: {target_book} ({len(state['subpages'])} subpages)", expanded=False):
-    map_display = []
-    for sp in state["subpages"]:
-        pdf_pages = state["route_map"].get(sp, {}).get("pdf_pages", [])
-        page_labels = [str(p["pdf_num"]) for p in pdf_pages]
-        needs_split = state["route_map"].get(sp, {}).get("needs_split", False)
-        
-        map_display.append({
-            "Wiki Subpage": sp,
-            "Mapped PDF Pages": ", ".join(page_labels) if page_labels else "None",
-            "Needs Split Logic": "Yes" if needs_split else "No"
-        })
-    st.dataframe(map_display, width='stretch', height=250, hide_index=True)
-
-# ==============================================================================
-# STEP 2: MASTER JSON GENERATION
-# ==============================================================================
-st.divider()
-st.subheader("Step 2: Generate Master JSON")
-
-local_pdf_path = resolve_pdf_path(state, input_folder)
-pdf_dir = os.path.dirname(local_pdf_path) if local_pdf_path else ""
-master_json_path = os.path.join(pdf_dir, f"master_{state.get('master_pdf')}.json") if pdf_dir else ""
-master_json_exists = os.path.exists(master_json_path) if master_json_path else False
-
-if not local_pdf_path:
-    st.error(
-        f"❌ **Local PDF Not Found:** Could not locate `{state.get('master_pdf')}` "
-        f"inside `{input_folder}`."
-    )
-    col_p1, col_p2 = st.columns([4, 1])
-    with col_p1:
-        manual_pdf_input = st.text_input(
-            "Paste Direct Full Path to Local PDF:",
-            value=state.get("custom_pdf_path", ""),
-            placeholder="/media/sarah/4TB/Projects/.../Book.pdf"
-        )
-    with col_p2:
-        st.write("")
-        st.write("")
-        if st.button("💾 Save PDF Path", type="primary", width='stretch'):
-            clean_path = manual_pdf_input.strip().strip('"').strip("'")
-            if os.path.isfile(clean_path):
-                state["custom_pdf_path"] = clean_path
-                save_book_state(safe_title, state)
-                
-                # Also write out initial chapter .txt files if missing
-                new_pdf_dir = os.path.dirname(clean_path)
-                for sp in state.get("subpages", []):
-                    safe_sp = sp.replace("/", "_")
-                    ch_file_path = os.path.join(new_pdf_dir, f"{safe_sp}.txt")
-                    if not os.path.exists(ch_file_path):
-                        with open(ch_file_path, "w", encoding="utf-8") as f:
-                            f.write(state.get("wikitext_cache", {}).get(sp, ""))
-                st.rerun()
+                st.success(f"✅ Cleanup complete! {deleted_count} local `.txt` files were removed. The Master JSON remains intact.")
             else:
-                st.error(f"File does not exist at: `{clean_path}`")
-    st.stop()
-elif master_json_exists:
-    st.caption(f"📁 Using PDF: `{local_pdf_path}`")
-    st.success(f"✅ Master JSON already exists for {state['master_pdf']}!")
-    with st.expander("Re-generate Master JSON"):
-        st.warning("Only do this if you need to re-OCR the entire document. This will overwrite the existing file.")
-        col_gen, col_stop = st.columns([1, 1])
-        with col_gen:
-            regenerate_master = st.button("🔄 Re-generate Master JSON", width='stretch')
-        with col_stop:
-            if st.button("🛑 Stop Generation", key="stop_regen", width='stretch'):
-                st.warning("Execution stopped.")
-                st.stop()
-else:
-    st.info(f"Master JSON not found for {state['master_pdf']}. This step will OCR all mapped pages.")
-    col_gen, col_stop = st.columns([1, 1])
-    with col_gen:
-        regenerate_master = st.button("🚀 Generate Master JSON", type="primary", width='stretch')
-    with col_stop:
-        if st.button("🛑 Stop Generation", key="stop_gen", width='stretch'):
-            st.warning("Execution stopped.")
-            st.stop()
-
-if master_json_path and (not master_json_exists and locals().get('regenerate_master', False) or locals().get('regenerate_master', False)):
-    all_mapped_pages = set()
-    for ch, data in state["route_map"].items():
-        for p in data.get("pdf_pages", []):
-            all_mapped_pages.add(p["pdf_num"])
-    pages_to_process = sorted(list(all_mapped_pages))
-
-    if not pages_to_process:
-        st.warning("No PDF pages found in the route map to process.")
-    else:
-        master_log = st.container(border=True)
-        master_log.write(f"⚙️ Initiating full OCR processing for {len(pages_to_process)} pages...")
-        
-        temp_master_path = os.path.join(pdf_dir, f"temp_master_{state['master_pdf']}.json")
-        shared_results = {}
-        if os.path.exists(temp_master_path):
-            try:
-                with open(temp_master_path, "r", encoding="utf-8") as f:
-                    loaded_temp = json.load(f)
-                    shared_results = {str(k): v for k, v in loaded_temp.items() if v}
-                if shared_results:
-                    master_log.info(f"🔄 Resuming from checkpoint: **{len(shared_results)} / {len(pages_to_process)}** pages already saved.")
-            except json.JSONDecodeError:
-                shared_results = {}
-
-        ocr_progress_bar = master_log.progress(0)
-        m_cols = master_log.columns(4)
-        straggler_holder = master_log.empty()
-        grid_holder = master_log.empty()
-        with master_log.expander("⚠️ Warnings & DocAI Fallbacks Log", expanded=True):
-            warnings_holder = st.empty()
-
-        ui_holders = {
-            "progress": ocr_progress_bar,
-            "m_done": m_cols[0].empty(),
-            "m_flight": m_cols[1].empty(),
-            "m_docai": m_cols[2].empty(),
-            "m_err": m_cols[3].empty(),
-            "stragglers": straggler_holder,
-            "grid": grid_holder,
-            "warnings": warnings_holder,
-        }
-
-        shared_log_list = []
-
-        pdf_doc = fitz.open(local_pdf_path)
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=100)
-        page_futures = {
-            page_num: executor.submit(
-                process_single_page,
-                page_num, pdf_doc, ocr_strategy, 
-                temp_master_path, shared_results, shared_log_list
-            )
-            for page_num in pages_to_process
-        }
-
-        fatal_error = False
-        fatal_error_msg = ""
-        while True:
-            all_done = render_ocr_telemetry(
-                pages_to_process, page_futures, shared_results, shared_log_list, ui_holders
-            )
-            for log_msg in list(shared_log_list):
-                if "FATAL_RATE_LIMIT" in log_msg:
-                    fatal_error = True
-                    fatal_error_msg = log_msg
-                    break
-            if fatal_error or all_done:
-                break
-            time.sleep(1)
-
-        executor.shutdown(wait=False, cancel_futures=True)
-        with _fitz_lock:
-            if not pdf_doc.is_closed:
-                pdf_doc.close()
-
-        if fatal_error:
-            master_log.error(f"❌ FATAL: `{fatal_error_msg}`. Halting execution to prevent raw text saving.")
-            st.stop()
-
-        master_log.write("🔄 Assembling pages into Master JSON...")
-        master_data = {
-            str(k): shared_results[str(k)]
-            for k in sorted((int(x) for x in shared_results.keys()))
-        }
-        
-        with open(master_json_path, 'w', encoding='utf-8') as f:
-            json.dump(master_data, f, indent=4)
-        if os.path.exists(temp_master_path):
-            os.remove(temp_master_path)
-        
-        st.success("🎉 Master JSON successfully generated!")
-        st.rerun()
-
-# Halt execution if Master JSON is not complete
-if not master_json_exists:
-    st.stop()
-
-
-# --- STEP 3 & 4: AUTOMATED BATCH PROCESSING & WIKI UPLOAD ---
-subpages_to_process = [sp for sp in state["subpages"] if sp not in state.get("completed_subpages", [])]
-subpages_to_upload = [sp for sp in state["subpages"] if sp not in state.get("uploaded_subpages", [])]
-
-
-# ==============================================================================
-# STEP 3: OFFLINE BATCH PROCESSING
-# ==============================================================================
-if subpages_to_process:
-    st.divider()
-    st.subheader("Step 3: Offline Batch Processing")
-    st.info(f"Ready to process {len(subpages_to_process)} remaining sections locally.")
-
-    # --- Evaluate if LLM Split is needed ---
-    split_reasons = []
-    for sp in subpages_to_process:
-        route_info = state.get("route_map", {}).get(sp, {})
-        if not route_info.get("pdf_pages"):
-            split_reasons.append(f"- `{sp}` *(Unmapped / No {{page}} tags)*")
-        elif route_info.get("needs_split", False):
-            split_reasons.append(f"- `{sp}` *(Needs Split / Text before first {{page}} tag)*")
-
-    split_prompt = ""
-    if split_reasons:
-        reasons_md = "\n".join(split_reasons)
-        st.warning(
-            f"⚠️ **The map indicates that the following chapter(s) require splits:**\n{reasons_md}\n\n"
-            f"Review the LLM split instruction below before starting."
-        )
-        split_prompt = st.text_area(
-            "Custom Split Instruction", 
-            value="Look for the start of a new chapter. The chapter is usually in all caps or a distinct heading.",
-            help="Context to help the LLM identify where a specific chapter begins."
-        )
-
-    col_start, col_stop = st.columns([1, 1])
-    with col_start:
-        start_batch = st.button("🚀 Start Processing All Chapters", type="primary", width='stretch')
-    with col_stop:
-        if st.button("🛑 Stop Execution", width='stretch'):
-            st.warning("Execution stopped.")
-            st.stop()
-
-    if start_batch:
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        log_container = st.container(border=True)
-        
-        # Initialize safe overflow cache
-        if "overflow_cache" not in state:
-            state["overflow_cache"] = {}
-        
-        local_pdf_path = resolve_pdf_path(state, input_folder)
-        if not local_pdf_path:
-            st.error(f"Local PDF not found for '{state['master_pdf']}'")
-            st.stop()
-            
-        pdf_dir = os.path.dirname(local_pdf_path)
-
-        # --- MASTER JSON CHECK & LOAD (MOVED OUTSIDE LOOP) ---
-        master_json_path = os.path.join(pdf_dir, f"master_{state['master_pdf']}.json")
-        master_data = {}
-        
-        if os.path.exists(master_json_path):
-            log_container.write(f"📄 Master JSON found. Loading text into memory...")
-            with open(master_json_path, 'r', encoding='utf-8') as f:
-                master_data = json.load(f)
-        else:
-            log_container.error(f"❌ Master JSON not found! Please complete Step 2 (Generate Master JSON) first.")
-            st.stop()
-
-        for idx, active_chapter in enumerate(subpages_to_process):
-            active_chapter_idx = state["subpages"].index(active_chapter)
-            next_chapter = state["subpages"][active_chapter_idx + 1] if active_chapter_idx + 1 < len(state["subpages"]) else None
-
-            status_text.markdown(f"**Processing {idx+1}/{len(subpages_to_process)}:** `{active_chapter}`")
-            progress_bar.progress(idx / len(subpages_to_process))
-            
-            log_container.write(f"--- Starting {active_chapter} ---")
-            
-            # --- Capture Year ---
-            current_wikitext_for_year = state["wikitext_cache"].get(active_chapter, "")
-            found_year = None
-            cat_match = re.search(r'\[\[Category:\s*(\d{4})\s*\]\]', current_wikitext_for_year, re.IGNORECASE)
-            if cat_match:
-                found_year = cat_match.group(1)
-            
-            page_data = state["route_map"].get(active_chapter, {})
-            pdf_targets = page_data.get("pdf_pages", [])
-            
-            # --- UNMAPPED CHAPTER HANDLING ---
-            if not pdf_targets:
-                current_wikitext = state["wikitext_cache"].get(active_chapter, "")
-                overflow = state.get("overflow_cache", {}).get(active_chapter, "")
-                
-                # Preserve accesscontrol and header tags before overwriting with overflow
-                safe_tags = []
-                access_match = re.search(r'<accesscontrol>.*?</accesscontrol>', current_wikitext, flags=re.IGNORECASE | re.DOTALL)
-                if access_match:
-                    safe_tags.append(access_match.group(0))
-                header_match = re.search(r'\{\{header(?:[^{}]|\{\{[^}]*\}\})*\}\}', current_wikitext, flags=re.IGNORECASE | re.DOTALL)
-                if header_match:
-                    safe_tags.append(header_match.group(0))
-                    
-                preserved_prefix = "\n".join(safe_tags) + "\n" if safe_tags else ""
-                
-                # If overflow exists from the previous split, it replaces the legacy text entirely
-                if overflow:
-                    combined_text = preserved_prefix + overflow.strip()
-                else:
-                    combined_text = current_wikitext.strip()
-                
-                if combined_text:
-                    log_container.write("💾 Saving unmapped middle section locally...")
-                    
-                    # --- Apply cleanup, header formatting, and NOTOC ---
-                    combined_text = apply_final_formatting(combined_text, active_chapter, found_year)
-                    
-                    safe_sp = active_chapter.replace("/", "_")
-                    ch_file_path = os.path.join(pdf_dir, f"{safe_sp}.txt")
-                    with open(ch_file_path, "w", encoding="utf-8") as f:
-                        f.write(combined_text)
-                    
-                    state["completed_subpages"].append(active_chapter)
-                    save_book_state(safe_title, state)
-                    continue
-                else:
-                    log_container.write("No PDF pages mapped and no cached text. Skipping section.")
-                    state["completed_subpages"].append(active_chapter)
-                    save_book_state(safe_title, state)
-                    continue
-
-            pages_to_process = [t["pdf_num"] for t in pdf_targets]
-            
-            # --- TEXT EXTRACTION FROM PRE-LOADED JSON ---
-            all_extracted_text = {}
-            for p_num in pages_to_process:
-                if str(p_num) in master_data:
-                    all_extracted_text[int(p_num)] = master_data[str(p_num)]
-                else:
-                    log_container.warning(f"⚠️ Page {p_num} missing from master JSON.")
-
-            # --- TARGETED LLM SPLIT LOGIC ---
-            # 1. Identify all "ghost chapters" (no mapped pages)
-            all_ghost_chapters = [ch for ch in state["subpages"] if not state["route_map"].get(ch, {}).get("pdf_pages")]
-            
-            # 2. Filter out ghosts that are already completed OR already found and cached
-            pending_ghosts = [
-                ch for ch in all_ghost_chapters 
-                if ch not in state.get("completed_subpages", []) 
-                and ch not in state.get("overflow_cache", {}) 
-                and ch != active_chapter
-            ]
-            
-            # 3. Check if the NEXT chapter explicitly needs a split
-            next_chapter_needs_split = False
-            if next_chapter:
-                next_chapter_needs_split = state["route_map"].get(next_chapter, {}).get("needs_split", False)
-
-            # Trigger LLM if we are still hunting for unfound ghost chapters, OR if the next chapter needs a split
-            if pages_to_process and (pending_ghosts or next_chapter_needs_split):
-                last_page_num = pages_to_process[-1]
-                last_page_text = all_extracted_text.get(last_page_num, "")
-                
-                if last_page_text:
-                    if next_chapter_needs_split:
-                        log_container.write(f"🧠 Asking LLM to split page {last_page_num} (Next chapter requires split)...")
-                    else:
-                        log_container.write(f"🧠 Asking LLM to scan page {last_page_num} (Because {len(pending_ghosts)} unmapped ghost chapter(s) exist)...")
-                    
-                    # Pass the next chapter AND the remaining unfound ghost chapters
-                    unmapped_to_pass = [ch for ch in pending_ghosts if ch != next_chapter]
-                    
-                    split_results = apply_chunked_split(last_page_text, next_chapter, unmapped_to_pass, split_prompt)
-                    
-                    if "_previous_" in split_results:
-                        all_extracted_text[last_page_num] = split_results["_previous_"]
-                        
-                    for found_chap, text_content in split_results.items():
-                        if found_chap == "_previous_" or not text_content.strip(): 
-                            continue
-                        
-                        # Store remainder safely in overflow cache
-                        existing_overflow = state["overflow_cache"].get(found_chap, "")
-                        
-                        # Prevent duplicates and append
-                        if text_content.strip() not in existing_overflow:
-                            state["overflow_cache"][found_chap] = f"{existing_overflow}\n\n{text_content}".strip()
-
-            # Inject Current Chapter
-            current_wikitext = state["wikitext_cache"].get(active_chapter, "")
-            for target in pdf_targets:
-                pdf_num = target["pdf_num"]
-                label = target["label"]
-                chunk_to_inject = all_extracted_text.get(pdf_num, "")
-                
-                if chunk_to_inject:
-                    current_wikitext, err = inject_text_into_page(current_wikitext, label, chunk_to_inject, state["master_pdf"])
-
-            # Final Cleanup & Local Save (NO WIKI UPLOAD)
-            final_wikitext = current_wikitext
-            preserved_prefix = ""
-            
-            # Clear legacy unproofread text before the first {{page| template
-            if pdf_targets:
-                match = re.search(r'\{\{page\|', final_wikitext, flags=re.IGNORECASE)
-                if match:
-                    leading_text = final_wikitext[:match.start()]
-
-                    # Explicitly preserve accesscontrol tags and the header
-                    safe_tags = []
-                    access_match = re.search(r'<accesscontrol>.*?</accesscontrol>', leading_text, flags=re.IGNORECASE | re.DOTALL)
-                    if access_match:
-                        safe_tags.append(access_match.group(0))
-                        
-                    header_match = re.search(r'\{\{header(?:[^{}]|\{\{[^}]*\}\})*\}\}', leading_text, flags=re.IGNORECASE | re.DOTALL)
-                    if header_match:
-                        safe_tags.append(header_match.group(0))
-
-                    preserved_prefix = "\n".join(safe_tags) + "\n" if safe_tags else ""
-
-                    final_wikitext = final_wikitext[match.start():]
-                else:
-                    # If no page template is found, delete the legacy content entirely
-                    final_wikitext = ""
-            
-            # Pull any overflow belonging to this chapter and prepend it
-            overflow = state.get("overflow_cache", {}).get(active_chapter, "")
-            if overflow:
-                final_wikitext = f"{overflow}\n\n{final_wikitext}".strip()
-                
-            # Reattach the preserved prefix at the very top so apply_final_formatting can see it
-            final_wikitext = preserved_prefix + final_wikitext
-                
-            # --- Apply Header, Seam Cleanup, NOTOC, & OCR Cleanup ---
-            final_wikitext = apply_final_formatting(final_wikitext, active_chapter, found_year)
-                
-            log_container.write(f"💾 Saving {active_chapter} to local txt file...")
-            
-            safe_sp = active_chapter.replace("/", "_")
-            ch_file_path = os.path.join(pdf_dir, f"{safe_sp}.txt")
-            with open(ch_file_path, "w", encoding="utf-8") as f:
-                f.write(final_wikitext)
-                
-            state["completed_subpages"].append(active_chapter)
-            save_book_state(safe_title, state)
-
-        # After loop finishes
-        progress_bar.progress(1.0)
-        st.success("✅ All chapters processed and saved locally!")
-        st.rerun()
-
-    st.stop() # Halts execution here so the wiki upload UI below is hidden until offline is complete
-
-
-# ==============================================================================
-# STEP 4: WIKI UPLOAD PHASE (Runs when Offline is complete)
-# ==============================================================================
-st.success(f"✅ Offline processing complete for {target_book}! Local txt files are ready for review.")
-
-if subpages_to_upload:
-    st.divider()
-    st.subheader("Step 4: Wiki Upload Phase")
-    st.info(f"Ready to upload {len(subpages_to_upload)} sections to the wiki.")
-
-    if st.button("🌐 Upload All Chapters to Wiki", type="primary", width='stretch'):
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        log_container = st.container(border=True)
-        
-        local_pdf_path = resolve_pdf_path(state, input_folder)
-        pdf_dir = os.path.dirname(local_pdf_path) if local_pdf_path else ""
-        
-        spam_blocked, hard_failures = upload_subpages_parallel(
-            subpages_to_upload, pdf_dir, safe_title, state, session, progress_bar, status_text, log_container
-        )
-
-        if spam_blocked or hard_failures:
-            st.stop()
-                
-        progress_bar.progress(1.0)
-        queue_data[target_book]["status"] = "COMPLETED"
-        save_queue(queue_data)
-        status_text.success("🎉 All chapters successfully uploaded to the wiki!")
-        time.sleep(1)
-        st.rerun()
-
-# ==============================================================================
-# STEP 5: CLEANUP PHASE
-# ==============================================================================
-else:
-    st.divider()
-    st.subheader("Step 5: Cleanup Phase")
-    st.success(f"🎉 All sections for {target_book} have been uploaded to the wiki!")
-    
-    if st.button("🧹 Finalize & Cleanup Local Text Files", type="primary", width='stretch'):
-        
-        # Ensure the queue status is explicitly marked as COMPLETED
-        queue_data[target_book]["status"] = "COMPLETED"
-        save_queue(queue_data)
-        
-        # Locate the directory and delete the .txt files
-        local_pdf_path = resolve_pdf_path(state, input_folder)
-        if local_pdf_path:
-            pdf_dir = os.path.dirname(local_pdf_path)
-            deleted_count = 0
-            
-            for sp in state.get("subpages", []):
-                safe_sp = sp.replace("/", "_")
-                ch_file_path = os.path.join(pdf_dir, f"{safe_sp}.txt")
-                
-                if os.path.exists(ch_file_path):
-                    os.remove(ch_file_path)
-                    deleted_count += 1
-            
-            st.success(f"✅ Cleanup complete! {deleted_count} local `.txt` files were removed. The Master JSON remains intact.")
-        else:
-            st.error("❌ Could not locate the local PDF directory to perform cleanup.")
+                st.error("❌ Could not locate the local PDF directory to perform cleanup.")
