@@ -16,7 +16,7 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 # --- Imports ---
-from src.batch_worker import process_pdf_batch, get_page_image_data
+from src.batch_worker import process_single_page, _fitz_lock
 from src.mediawiki_uploader import (
     upload_to_bahaiworks, 
     API_URL, 
@@ -219,6 +219,97 @@ def extract_pdf_filename_from_wikitext(wikitext):
         return match.group(1).strip()
     return None
 
+def render_ocr_telemetry(pages_to_process, page_futures, shared_results, shared_log_list, ui_holders):
+    """Updates the live metric cards, straggler radar, full-height color-coded page grid, and filtered warning log."""
+    total_pages = len(pages_to_process)
+    docai_pages = set()
+    error_pages = set()
+    skipped_cached_pages = set()
+    warning_logs = []
+
+    for msg in shared_log_list:
+        if any(w in msg for w in ["⚠️", "❌", "🚨", "🤖"]):
+            warning_logs.append(msg)
+        m = re.search(r'Page\s+(\d+)', msg)
+        if m:
+            p = int(m.group(1))
+            if "Falling back to DocAI" in msg or "DocAI Only Mode" in msg:
+                docai_pages.add(p)
+            if "❌ SKIPPING" in msg or "🚨" in msg:
+                error_pages.add(p)
+            if "⏩ Skipping" in msg:
+                skipped_cached_pages.add(p)
+
+    completed_count = 0
+    running_pages = []
+    unfinished_pages = []
+    badges_html = []
+
+    for p in pages_to_process:
+        f = page_futures[p]
+        val = shared_results.get(str(p))
+
+        if f.done():
+            completed_count += 1
+            if p in error_pages or (val == "" and str(p) in shared_results):
+                bg, fg, border, title = "#ffebee", "#c62828", "#ef9a9a", "Error / Failed"
+            elif p in docai_pages:
+                bg, fg, border, title = "#fff8e1", "#f57f17", "#ffe082", "DocAI Fallback"
+            elif p in skipped_cached_pages:
+                bg, fg, border, title = "#e0f2f1", "#00695c", "#80cbc4", "Resumed from Cache"
+            else:
+                bg, fg, border, title = "#e8f5e9", "#2e7d32", "#a5d6a7", "Gemini Success"
+        elif f.running():
+            running_pages.append(p)
+            unfinished_pages.append(p)
+            bg, fg, border, title = "#e3f2fd", "#1565c0", "#90caf9", "Running Now"
+        else:
+            unfinished_pages.append(p)
+            bg, fg, border, title = "#f5f5f5", "#757575", "#e0e0e0", "Queued"
+
+        badges_html.append(
+            f'<span title="Page {p}: {title}" style="display:inline-block; width:38px; text-align:center; '
+            f'margin:2px; padding:3px 0; border-radius:4px; font-size:11px; font-weight:600; font-family:monospace; '
+            f'background:{bg}; color:{fg}; border:1px solid {border};">{p}</span>'
+        )
+
+    ui_holders["progress"].progress(completed_count / total_pages if total_pages > 0 else 1.0)
+
+    ui_holders["m_done"].metric("✅ Completed", f"{completed_count} / {total_pages}")
+    ui_holders["m_flight"].metric("⚡ Running Now", len(running_pages))
+    ui_holders["m_docai"].metric("🤖 DocAI Fallbacks", len(docai_pages))
+    ui_holders["m_err"].metric("❌ Errors", len(error_pages))
+
+    if 0 < len(unfinished_pages) <= 15:
+        straggler_str = ", ".join(str(p) for p in unfinished_pages)
+        ui_holders["stragglers"].info(f"⏳ **Waiting on final {len(unfinished_pages)} page(s):** `{straggler_str}`")
+    else:
+        ui_holders["stragglers"].empty()
+
+    legend = (
+        '<div style="margin-bottom:6px; font-size:12px;">'
+        '<b>Legend:</b> '
+        '<span style="background:#e8f5e9;color:#2e7d32;padding:2px 6px;border-radius:4px;border:1px solid #a5d6a7;">🟩 Gemini</span> '
+        '<span style="background:#e0f2f1;color:#00695c;padding:2px 6px;border-radius:4px;border:1px solid #80cbc4;">🧼 Resumed</span> '
+        '<span style="background:#fff8e1;color:#f57f17;padding:2px 6px;border-radius:4px;border:1px solid #ffe082;">🟨 DocAI Fallback</span> '
+        '<span style="background:#e3f2fd;color:#1565c0;padding:2px 6px;border-radius:4px;border:1px solid #90caf9;">🟦 Running</span> '
+        '<span style="background:#f5f5f5;color:#757575;padding:2px 6px;border-radius:4px;border:1px solid #e0e0e0;">⬜ Queued</span> '
+        '<span style="background:#ffebee;color:#c62828;padding:2px 6px;border-radius:4px;border:1px solid #ef9a9a;">🟥 Error</span>'
+        '</div>'
+    )
+    grid_box = (
+        f'{legend}<div style="line-height:1.4; padding:8px; '
+        f'border:1px solid rgba(128,128,128,0.25); border-radius:6px;">{"".join(badges_html)}</div>'
+    )
+    ui_holders["grid"].markdown(grid_box, unsafe_allow_html=True)
+
+    if warning_logs:
+        ui_holders["warnings"].code("\n".join(warning_logs[-100:]), language="text")
+    else:
+        ui_holders["warnings"].caption("🎉 No warnings, blocks, or DocAI fallbacks triggered so far.")
+
+    return completed_count == total_pages
+
 # ==============================================================================
 # 2. STATE MANAGEMENT
 # ==============================================================================
@@ -406,105 +497,105 @@ if __name__ == '__main__':
             else:
                 log_area.text(f"📂 Resuming from local working copy for {short_name}...")
 
-            # 4c. Parallel Batch Processing
-            doc = fitz.open(pdf_path)
-            total_pages = len(doc)
-            doc.close()
+            # 4c. Parallel Page Processing (100 Workers + Live Telemetry)
+            with fitz.open(pdf_path) as doc:
+                total_pages = len(doc)
 
-            # Process all pages; batch_worker will skip the ones that are already done
             pages_to_process = list(range(1, total_pages + 1))
             
             if not pages_to_process:
                 log_area.text(f"No pages left to process for {short_name}.")
                 continue
 
-            # Split into 5 roughly equal batches
-            num_batches = 5
-            batch_size = math.ceil(len(pages_to_process) / num_batches)
-            batches = [pages_to_process[j:j + batch_size] for j in range(0, len(pages_to_process), batch_size)]
+            temp_master_path = os.path.join(project_root, f"temp_master_{short_name}.json")
+            shared_results = {}
+            if os.path.exists(temp_master_path):
+                try:
+                    with open(temp_master_path, "r", encoding="utf-8") as f:
+                        loaded_temp = json.load(f)
+                        shared_results = {str(k): v for k, v in loaded_temp.items() if v}
+                except json.JSONDecodeError:
+                    shared_results = {}
 
-            st.write(f"🚀 Starting parallel processing: {len(pages_to_process)} pages across {len(batches)} batches.")
+            ocr_box = st.container(border=True)
+            if shared_results:
+                ocr_box.info(f"🔄 Resuming from checkpoint: **{len(shared_results)} / {len(pages_to_process)}** pages already saved.")
 
-            # --- UI SETUP FOR BATCH LOGGING ---
-            batch_placeholders = {}
-            
-            for i in range(len(batches)):
-                start_pg = batches[i][0]
-                end_pg = batches[i][-1]
-                
-                # Format cleanly if a batch happens to only have 1 page
-                page_label = f"pg {start_pg}" if start_pg == end_pg else f"pgs {start_pg}-{end_pg}"
-                
-                with st.expander(f"Batch {i+1} Status ({page_label})", expanded=True):
-                    batch_placeholders[i] = st.empty()
+            ocr_progress_bar = ocr_box.progress(0)
+            m_cols = ocr_box.columns(4)
+            straggler_holder = ocr_box.empty()
+            grid_holder = ocr_box.empty()
+            with ocr_box.expander("⚠️ Warnings & DocAI Fallbacks Log", expanded=True):
+                warnings_holder = st.empty()
 
-            # --- THREADING SETUP ---
-            shared_logs = {i: [] for i in range(len(batches))}
+            ui_holders = {
+                "progress": ocr_progress_bar,
+                "m_done": m_cols[0].empty(),
+                "m_flight": m_cols[1].empty(),
+                "m_docai": m_cols[2].empty(),
+                "m_err": m_cols[3].empty(),
+                "stragglers": straggler_holder,
+                "grid": grid_holder,
+                "warnings": warnings_holder,
+            }
 
-            with st.spinner(f"Processing {short_name} in {len(batches)} parallel batches..."):
-                executor = concurrent.futures.ThreadPoolExecutor(
-                    max_workers=num_batches
-                )
+            for attempt in range(2):
+                fatal_error = False
+                fatal_error_msg = ""
+                shared_log_list = []
 
-                futures = []
-                for batch_id, batch_pages in enumerate(batches):
-                    future = executor.submit(
-                        process_pdf_batch,
-                        batch_id,          # batch_id
-                        batch_pages,       # page_list
-                        pdf_path,          # pdf_path
-                        ocr_strategy,      # ocr_strategy
-                        short_name,        # short_name
-                        project_root,      # project_root
-                        shared_logs[batch_id] # shared_log_list
+                pdf_doc = fitz.open(pdf_path)
+                executor = concurrent.futures.ThreadPoolExecutor(max_workers=100)
+                page_futures = {
+                    page_num: executor.submit(
+                        process_single_page,
+                        page_num, pdf_doc, ocr_strategy,
+                        temp_master_path, shared_results, shared_log_list
                     )
-                    futures.append(future)
+                    for page_num in pages_to_process
+                }
 
-                # --- REAL-TIME POLLING LOOP ---
                 while True:
-                    all_done = True
-                    for batch_id, future in enumerate(futures):
-                        current_logs = list(shared_logs[batch_id])
-                        if current_logs:
-                            batch_placeholders[batch_id].text("\n".join(current_logs[-15:]))
-                        
-                        if not future.done():
-                            all_done = False
-                            
-                    if all_done:
+                    all_done = render_ocr_telemetry(
+                        pages_to_process, page_futures, shared_results, shared_log_list, ui_holders
+                    )
+                    for log_msg in list(shared_log_list):
+                        if "FATAL_RATE_LIMIT" in log_msg:
+                            fatal_error = True
+                            fatal_error_msg = log_msg
+                            break
+                    if fatal_error or all_done:
                         break
-                        
                     time.sleep(1)
 
-                # Check if any batch worker crashed or returned False (Fatal Rate Limit)
-                batch_failed = False
-                for batch_id, future in enumerate(futures):
-                    exc = future.exception()
-                    if exc:
-                        st.error(f"🚨 Worker Batch {batch_id + 1} crashed with exception: {exc}")
-                        batch_failed = True
-                    elif future.result() is False:
-                        st.error(f"🚨 Worker Batch {batch_id + 1} halted early (check batch logs above for rate limit or fatal error).")
-                        batch_failed = True
+                executor.shutdown(wait=False, cancel_futures=True)
+                with _fitz_lock:
+                    if not pdf_doc.is_closed:
+                        pdf_doc.close()
 
-            executor.shutdown(wait=False, cancel_futures=True)
-
-            if batch_failed:
-                st.stop()
+                if fatal_error:
+                    if attempt == 0:
+                        ocr_box.warning(f"⚠️ Fatal API/Network error detected: `{fatal_error_msg}`. Sleeping for 15 minutes before retrying once...")
+                        retry_countdown = ocr_box.empty()
+                        for remaining in range(900, 0, -1):
+                            mins, secs = divmod(remaining, 60)
+                            retry_countdown.code(f"Retrying OCR in: {mins:02d}:{secs:02d}")
+                            time.sleep(1)
+                        retry_countdown.empty()
+                    else:
+                        st.error(f"❌ FATAL (Failed twice): `{fatal_error_msg}`. Halting execution.")
+                        st.stop()
+                else:
+                    break
 
             # 4d. Sequential Merge & Wiki Injection
-            log_area.text(f"🔄 Merging parallel batches and injecting wikitext for {short_name}...")
+            log_area.text(f"🔄 Merging extracted pages and injecting wikitext for {short_name}...")
             
-            # Load all temporary batch files into one dictionary
-            all_extracted_text = {}
-            for batch_id in range(len(batches)):
-                batch_file_path = os.path.join(project_root, f"temp_{short_name}_batch_{batch_id}.json")
-                if os.path.exists(batch_file_path):
-                    with open(batch_file_path, "r", encoding="utf-8") as f:
-                        batch_data = json.load(f)
-                        for p_num_str, text in batch_data.items():
-                            if text and text.strip():
-                                all_extracted_text[int(p_num_str)] = text
+            all_extracted_text = {
+                int(p_num_str): text
+                for p_num_str, text in shared_results.items()
+                if text and text.strip()
+            }
 
             # SAFETY GUARD: Never touch the Wiki if no pages were extracted!
             if not all_extracted_text:
@@ -608,11 +699,9 @@ if __name__ == '__main__':
             if os.path.exists(wip_file_path):
                 os.remove(wip_file_path)
             
-            # Clean up temp batch files only after successful upload
-            for batch_id in range(len(batches)):
-                batch_file_path = os.path.join(project_root, f"temp_{short_name}_batch_{batch_id}.json")
-                if os.path.exists(batch_file_path):
-                    os.remove(batch_file_path)
+            # Clean up temp master checkpoint file only after successful upload
+            if os.path.exists(temp_master_path):
+                os.remove(temp_master_path)
 
             # Update State (Success for entire file)
             save_state(idx + 1, "running", last_file_path=short_name)
