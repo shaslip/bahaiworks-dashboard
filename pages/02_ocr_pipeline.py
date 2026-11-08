@@ -651,15 +651,24 @@ def render_exec_tab():
                 
                 engine_instance = OcrEngine(doc.file_path)
                 
+                def _update_prog(curr_p, total_p):
+                    base = i / len(ready_docs)
+                    span = 1.0 / len(ready_docs)
+                    progress_bar.progress(
+                        min(0.99, base + (curr_p / total_p) * span),
+                        text=f"Processing {i+1}/{len(ready_docs)}: {doc.filename} (Page {curr_p}/{total_p})..."
+                    )
+
                 # --- C. Run OCR or Extract Text Layer ---
                 if use_text_layer:
-                    output_path = engine_instance.extract_text_layer(config)
+                    output_path = engine_instance.extract_text_layer(config, progress_callback=_update_prog)
                 else:
                     # Generate images first
+                    progress_bar.progress(i / len(ready_docs), text=f"Generating images for {doc.filename}...")
                     engine_instance.generate_images()
                     
                     # Run extraction
-                    output_path = engine_instance.run_ocr(config)
+                    output_path = engine_instance.run_ocr(config, progress_callback=_update_prog)
                     
                     # Cleanup
                     engine_instance.cleanup(config)
