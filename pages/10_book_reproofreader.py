@@ -301,10 +301,11 @@ def extract_page_content(wikitext, pdf_page_num):
             return content
     return ""
 
-def build_sequential_route_map(subpages, session, input_folder):
+def build_sequential_route_map(subpages, session, input_folder, include_proofread=False):
     route_map = {}
     master_pdf_filename = None
     wikitext_cache = {}
+    skipped_proofread_count = 0
     
     # Pre-fetch all subpages in batches of 50 per HTTP request
     batched_texts = fetch_wikitext_batch(subpages, session=session)
@@ -323,14 +324,16 @@ def build_sequential_route_map(subpages, session, input_folder):
         if re.match(r'^\s*#redirect\s*\[\[', text, flags=re.IGNORECASE):
             continue
             
-        # --- Skip pages that are already proofread ---
-        header_match = re.search(r'\{\{header\s*\n.*?\n\}\}', text, re.DOTALL | re.IGNORECASE)
-        if header_match:
-            header_body = header_match.group(0)
-            notes_match = re.search(r'\|\s*notes\s*=\s*(.*?)(?=\n\s*\||$)', header_body, re.DOTALL | re.IGNORECASE)
-            # If the notes field exists and contains {{ps|1}}, skip mapping this chapter entirely
-            if notes_match and re.search(r'\{\{ps\|\s*1\s*\}\}', notes_match.group(1), re.IGNORECASE):
-                continue
+        # --- Skip pages that are already proofread (unless force override is active) ---
+        if not include_proofread:
+            header_match = re.search(r'\{\{header\s*\n.*?\n\}\}', text, re.DOTALL | re.IGNORECASE)
+            if header_match:
+                header_body = header_match.group(0)
+                notes_match = re.search(r'\|\s*notes\s*=\s*(.*?)(?=\n\s*\||$)', header_body, re.DOTALL | re.IGNORECASE)
+                # If the notes field exists and contains {{ps|1}}, skip mapping this chapter entirely
+                if notes_match and re.search(r'\{\{ps\|\s*1\s*\}\}', notes_match.group(1), re.IGNORECASE):
+                    skipped_proofread_count += 1
+                    continue
 
         wikitext_cache[title] = text
         route_map[title] = {"pdf_pages": [], "old_texts": {}, "needs_split": False}
@@ -421,7 +424,7 @@ def build_sequential_route_map(subpages, session, input_folder):
                 with open(ch_file_path, "w", encoding="utf-8") as f:
                     f.write(wikitext_cache.get(sp, ""))
 
-    return route_map, master_pdf_filename, wikitext_cache, ordered_subpages
+    return route_map, master_pdf_filename, wikitext_cache, ordered_subpages, skipped_proofread_count
 
 def normalize_filename(name):
     """Normalizes spaces/underscores, strips accents/punctuation, and lowercases for fuzzy matching."""
@@ -1193,11 +1196,17 @@ with tab_main:
                 if not state.get("subpages") or not state.get("route_map") or not state.get("master_pdf"):
                     log_container.write(f"🔍 Generating Chapter Map for {target_book}...")
                     subpages = get_all_subpages(target_book, session)
-                    route_map, master_pdf_filename, wikitext_cache, ordered_subpages = build_sequential_route_map(subpages, session, input_folder)
+                    route_map, master_pdf_filename, wikitext_cache, ordered_subpages, skipped_ps1 = build_sequential_route_map(
+                        subpages, session, input_folder, include_proofread=False
+                    )
                     
                     if not route_map or not master_pdf_filename:
-                        log_container.error(f"❌ Could not find PDF references for {target_book}. Marking ERROR and skipping.")
-                        queue_data[target_book]["status"] = "ERROR: No Map"
+                        if skipped_ps1 > 0:
+                            log_container.success(f"✅ All {skipped_ps1} subpage(s) for {target_book} already have `{{{{ps|1}}}}`. Marking COMPLETED.")
+                            queue_data[target_book]["status"] = "COMPLETED"
+                        else:
+                            log_container.error(f"❌ Could not find PDF references for {target_book}. Marking ERROR and skipping.")
+                            queue_data[target_book]["status"] = "ERROR: No Map"
                         save_queue(queue_data)
                         continue
                         
@@ -1510,13 +1519,26 @@ with tab_main:
 
     if not state.get("subpages"):
         st.info(f"Route map is missing or has been reset for **{target_book}**.")
+        force_include_ps1 = st.checkbox(
+            "🔄 Force Include Already Proofread (`{{ps|1}}`) Pages",
+            value=False,
+            help="Check this to re-proofread chapters even if their header already contains {{ps|1}}."
+        )
         if st.button("🛠️ Generate Chapter Map", type="primary"):
             with st.spinner("🔍 Scanning wiki subpages and building route map..."):
                 subpages = get_all_subpages(target_book, session)
-                route_map, master_pdf_filename, wikitext_cache, ordered_subpages = build_sequential_route_map(subpages, session, input_folder)
+                route_map, master_pdf_filename, wikitext_cache, ordered_subpages, skipped_ps1 = build_sequential_route_map(
+                    subpages, session, input_folder, include_proofread=force_include_ps1
+                )
                 
                 if not route_map or not master_pdf_filename:
-                    st.error(f"Could not find any {{page}} tags or PDF references for {target_book}.")
+                    if skipped_ps1 > 0:
+                        st.warning(
+                            f"⚠️ All **{skipped_ps1}** subpage(s) for **{target_book}** were skipped because they are already marked as proofread (`{{{{ps|1}}}}`).\n\n"
+                            f"Check **'🔄 Force Include Already Proofread (`{{{{ps|1}}}}`) Pages'** above and click **Generate Chapter Map** again to re-proofread this book."
+                        )
+                    else:
+                        st.error(f"❌ No `{{{{page|...}}}}` tags with `file=` and `page=` parameters were found across {len(subpages)} subpage(s) of **{target_book}**.")
                     st.stop()
                     
                 state["subpages"] = ordered_subpages
