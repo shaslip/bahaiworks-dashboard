@@ -569,8 +569,18 @@ def render_exec_tab():
         with st.expander("View Queue Details", expanded=False):
             for d in ready_docs:
                 ranges_match = re.search(r"\[RANGES:([\d\-,]+)\]", d.ai_justification or "")
-                badge = " 🎨 (Has Illustrations)" if ranges_match else ""
-                st.write(f"• {d.filename}{badge}")
+                offset_match = re.search(r"\[OFFSET:(\d+)\]", d.ai_justification or "")
+                if ranges_match:
+                    c_info, c_btn = st.columns([4, 1])
+                    c_info.write(f"• {d.filename} 🎨 (Ranges: `{ranges_match.group(1)}`)")
+                    if c_btn.button("🖼️ Extract Images", key=f"goto_img_{d.id}"):
+                        st.session_state["img_ext_folder"] = os.path.dirname(d.file_path)
+                        st.session_state["img_ext_filename"] = d.filename
+                        st.session_state["img_ext_ranges"] = ranges_match.group(1)
+                        st.session_state["img_ext_offset"] = offset_match.group(1) if offset_match else "0"
+                        st.switch_page("pages/11_image_extractor.py")
+                else:
+                    st.write(f"• {d.filename}")
 
     use_text_layer = st.checkbox(
         "⚡ Extract embedded PDF text layer directly (Skip Tesseract OCR)",
