@@ -16,6 +16,9 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 # --- Imports ---
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+from src.database import engine, Document
 from src.gemini_processor import parse_range_string, extract_image_caption_and_filename
 from src.calibration import calculate_start_offset
 
@@ -338,11 +341,42 @@ tab1, tab2, tab3 = st.tabs([
 
 with tab1:
     st.sidebar.header("Configuration")
-    
-    input_folder = st.sidebar.text_input("Local PDF Root Folder", value="/home/sarah/Desktop/Projects/Bahai.works/English/")
 
-    pdf_filename = st.text_input("PDF Filename", placeholder="e.g., The_American_Bahá’í_Vol2_No1.pdf")
-    page_ranges = st.text_input("Page Ranges", placeholder="e.g., 1-10, 12, 14-15")
+    # Query DB for any documents that have [RANGES:...] configured
+    with Session(engine) as session:
+        illus_docs = session.scalars(
+            select(Document).where(Document.ai_justification.like("%[RANGES:%")).order_by(Document.id.desc())
+        ).all()
+
+    if illus_docs:
+        with st.expander("📥 Load Queued Book with Illustrations from Pipeline", expanded=True):
+            q_col1, q_col2 = st.columns([4, 1])
+            sel_doc = q_col1.selectbox(
+                "Select Document",
+                options=illus_docs,
+                format_func=lambda d: f"[{d.status}] {d.filename}",
+                key="db_illus_select"
+            )
+            q_col2.write("")
+            q_col2.write("")
+            if q_col2.button("📥 Load Info", type="secondary", width="stretch"):
+                r_match = re.search(r"\[RANGES:([\d\-,]+)\]", sel_doc.ai_justification or "")
+                o_match = re.search(r"\[OFFSET:(\d+)\]", sel_doc.ai_justification or "")
+                st.session_state["img_ext_folder"] = os.path.dirname(sel_doc.file_path)
+                st.session_state["img_ext_filename"] = sel_doc.filename
+                st.session_state["img_ext_ranges"] = r_match.group(1) if r_match else ""
+                st.session_state["img_ext_offset"] = o_match.group(1) if o_match else "0"
+                st.rerun()
+
+    default_folder = st.session_state.get("img_ext_folder", "/home/sarah/Desktop/Projects/Bahai.works/English/")
+    default_filename = st.session_state.get("img_ext_filename", "")
+    default_ranges = st.session_state.get("img_ext_ranges", "")
+    default_offset = st.session_state.get("img_ext_offset", "0")
+
+    input_folder = st.sidebar.text_input("Local PDF Root Folder", value=default_folder)
+
+    pdf_filename = st.text_input("PDF Filename", value=default_filename, placeholder="e.g., The_American_Bahá’í_Vol2_No1.pdf")
+    page_ranges = st.text_input("Page Ranges", value=default_ranges, placeholder="e.g., 1-10, 12, 14-15")
     skip_crop_ranges = st.text_input("Full Page Document Ranges (Skip Cropping)", placeholder="e.g., 11, 16")
     access_control = st.text_input("Access Control (Optional)", placeholder="e.g., <accesscontrol>Access:DayVeryGreatThings</accesscontrol>")
 
@@ -361,7 +395,7 @@ with tab1:
 
     misc_offset_input = None
     if offset_mode == "Manual Offset":
-        misc_offset_input = st.text_input("Enter Manual Offset", value="0", placeholder="e.g., 14")
+        misc_offset_input = st.text_input("Enter Manual Offset", value=default_offset, placeholder="e.g., 14")
 
     if st.button("🚀 Process Images", type="primary"):
         if not pdf_filename:
