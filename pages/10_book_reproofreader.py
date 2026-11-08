@@ -728,12 +728,13 @@ if active_view == "🛠️ Fix 'No Map' Books":
     # Reset splitter state when switching books
     if st.session_state.get("nm_active_book") != nm_book:
         st.session_state["nm_active_book"] = nm_book
-        for k in ["nm_pdf_path", "nm_offset", "nm_is_double", "nm_calibrated", "nm_toc_list", "nm_is_copyright", "nm_page_map", "nm_page_order", "nm_splitter_indices"]:
+        for k in ["nm_pdf_path", "nm_pdf_input_box", "nm_offset", "nm_is_double", "nm_calibrated", "nm_toc_list", "nm_is_copyright", "nm_page_map", "nm_page_order", "nm_splitter_indices"]:
             st.session_state.pop(k, None)
         if nm_book:
             guessed_pdf = find_local_pdf(f"{nm_book}.pdf", input_folder)
             if guessed_pdf:
                 st.session_state["nm_pdf_path"] = guessed_pdf
+                st.session_state["nm_pdf_input_box"] = guessed_pdf
 
     with nm_col2:
         nm_pdf_input = st.text_input(
