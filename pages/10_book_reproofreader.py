@@ -31,6 +31,10 @@ from src.mediawiki_uploader import (
     update_header_ps_tag
 )
 from src.gemini_processor import apply_chunked_split
+from src.processor import analyze_split_boundaries, split_pdf_doubles
+from src.calibration import calculate_start_offset
+from src.ocr_engine import OcrEngine, OcrConfig
+from src.text_processing import parse_text_file, find_best_match_for_title
 
 # --- Configuration ---
 if 'GEMINI_API_KEY' not in os.environ:
@@ -203,6 +207,45 @@ NAMESPACE_MAP = {
     "bahaiworks": 4,
     "project": 4,
 }
+
+def parse_wiki_toc_for_recovery(target_page, session=None):
+    """Fetches the existing main book page from Bahai.works and extracts subpage links."""
+    wikitext, err = fetch_wikitext(target_page, session=session)
+    if err or not wikitext:
+        return None, False, err or "Empty page content."
+
+    has_restricted = bool(re.search(r'\{\{\s*restricted\s+use', wikitext, re.IGNORECASE))
+
+    contents_match = re.search(r'==+\s*Contents\s*==+(.*)', wikitext, re.IGNORECASE | re.DOTALL)
+    toc_block = contents_match.group(1) if contents_match else wikitext
+
+    toc_items = []
+    link_pattern = re.compile(r'\[\[/([^\]|]+)(?:\|([^\]]+))?\]\]')
+    for match in link_pattern.finditer(toc_block):
+        subpage_path = match.group(1).strip().replace("_", " ")
+        display_title = (match.group(2) or subpage_path.split("/")[-1]).strip()
+
+        page_guess = ""
+        sub_text, sub_err = fetch_wikitext(f"{target_page}/{match.group(1).strip()}", session=session)
+        if not sub_err and sub_text:
+            p_match = re.search(r'\{\{page\|\s*([^|}\s]+)', sub_text, re.IGNORECASE)
+            if p_match:
+                page_guess = p_match.group(1).strip()
+
+        toc_items.append({
+            "title": display_title,
+            "page_name": match.group(1).strip(),
+            "display_title": display_title,
+            "prefix": "",
+            "level": 1,
+            "page_range": page_guess,
+            "author": []
+        })
+
+    if not toc_items:
+        return None, has_restricted, f"No [[/Subpage]] links found on '{target_page}'."
+
+    return toc_items, has_restricted, None
 
 def get_all_subpages(root_title, session):
     pages = []
@@ -653,6 +696,348 @@ def reset_book_cache(book_title, root_folder):
                     os.remove(ch_file_path)
     if os.path.exists(state_file):
         os.remove(state_file)
+
+# --- VIEW SELECTOR (No indentation changes to existing code below) ---
+active_view = st.radio(
+    "View",
+    ["📚 Re-Proofreader Pipeline", "🛠️ Fix 'No Map' Books"],
+    horizontal=True,
+    label_visibility="collapsed"
+)
+st.divider()
+
+if active_view == "🛠️ Fix 'No Map' Books":
+    st.subheader("🛠️ One-Stop 'No Map' Recovery (Page 02 + Page 03 Consolidated)")
+    st.caption("Automatically calibrates offsets, generates fallback OCR `.txt` with live progress, imports the existing Wiki TOC, and splits/uploads `{{page}}` tags.")
+
+    no_map_books = sorted([
+        title for title, data in queue_data.items()
+        if "NO MAP" in data.get("status", "").upper()
+    ])
+    all_queue_books = sorted(list(queue_data.keys()))
+    dropdown_books = no_map_books if no_map_books else all_queue_books
+
+    nm_col1, nm_col2 = st.columns([2, 3])
+    with nm_col1:
+        nm_book = st.selectbox(
+            f"1. Select Book ({len(no_map_books)} 'ERROR: No Map' in queue)",
+            options=dropdown_books,
+            key="nm_selected_book"
+        )
+
+    # Reset splitter state when switching books
+    if st.session_state.get("nm_active_book") != nm_book:
+        st.session_state["nm_active_book"] = nm_book
+        for k in ["nm_pdf_path", "nm_offset", "nm_is_double", "nm_calibrated", "nm_toc_list", "nm_is_copyright", "nm_page_map", "nm_page_order", "nm_splitter_indices"]:
+            st.session_state.pop(k, None)
+        if nm_book:
+            guessed_pdf = find_local_pdf(f"{nm_book}.pdf", input_folder)
+            if guessed_pdf:
+                st.session_state["nm_pdf_path"] = guessed_pdf
+
+    with nm_col2:
+        nm_pdf_input = st.text_input(
+            "2. Full Local PDF Path (Auto-searched in Root Folder if found)",
+            value=st.session_state.get("nm_pdf_path", ""),
+            placeholder="/path/to/Book.pdf",
+            key="nm_pdf_input_box"
+        )
+        clean_nm_pdf = nm_pdf_input.strip().strip('"').strip("'")
+        if clean_nm_pdf != st.session_state.get("nm_pdf_path", ""):
+            st.session_state["nm_pdf_path"] = clean_nm_pdf
+
+    valid_pdf = bool(clean_nm_pdf and os.path.isfile(clean_nm_pdf) and clean_nm_pdf.lower().endswith(".pdf"))
+    if clean_nm_pdf and not valid_pdf:
+        st.error(f"❌ File not found or not a PDF: `{clean_nm_pdf}`")
+
+    if valid_pdf:
+        txt_output_path = clean_nm_pdf[:-4] + ".txt"
+        txt_already_exists = os.path.exists(txt_output_path)
+
+        # Auto-calibrate once per book/PDF selection
+        if not st.session_state.get("nm_calibrated"):
+            with st.spinner("🔍 Auto-detecting page offset, double-page layout, and Wiki TOC..."):
+                try:
+                    with fitz.open(clean_nm_pdf) as pdf:
+                        total_pages = len(pdf)
+                    start_off, is_dbl = calculate_start_offset(clean_nm_pdf, total_pages)
+                    st.session_state["nm_offset"] = start_off if start_off else 1
+                    st.session_state["nm_is_double"] = bool(is_dbl)
+                except Exception as e:
+                    st.warning(f"Auto-calibration fallback used: {e}")
+                    st.session_state["nm_offset"] = 1
+                    st.session_state["nm_is_double"] = False
+
+                toc_items, has_restricted, toc_err = parse_wiki_toc_for_recovery(nm_book, session=session)
+                if toc_err:
+                    st.error(f"⚠️ Wiki TOC fetch warning: {toc_err}")
+                    st.session_state["nm_toc_list"] = []
+                    st.session_state["nm_is_copyright"] = False
+                else:
+                    st.session_state["nm_toc_list"] = toc_items
+                    st.session_state["nm_is_copyright"] = has_restricted
+
+                st.session_state["nm_calibrated"] = True
+
+        with st.container(border=True):
+            st.markdown("#### Step A: Prep & Generate Fallback OCR `.txt`")
+            c_cfg1, c_cfg2, c_cfg3, c_cfg4, c_cfg5 = st.columns([1.2, 1.5, 1.2, 1.2, 1.5])
+            with c_cfg1:
+                nm_offset_val = st.number_input(
+                    "Offset (Index of Page 1)",
+                    min_value=0,
+                    value=int(st.session_state.get("nm_offset", 1)),
+                    help="0-based index where printed Page 1 starts (same as Page 02 Prep tab)."
+                )
+            with c_cfg2:
+                nm_ranges_str = st.text_input(
+                    "Unnumbered Ranges",
+                    value="",
+                    placeholder="e.g. 48-52, 102-105",
+                    help="Optional 0-based PDF page ranges for unnumbered illustrations."
+                )
+            with c_cfg3:
+                nm_lang = st.selectbox("OCR Language", ["eng", "deu", "fra", "fas", "ara"], index=0)
+            with c_cfg4:
+                st.write("")
+                nm_is_dbl = st.checkbox("2-Up Double Page?", value=st.session_state.get("nm_is_double", False))
+                nm_use_text_layer = st.checkbox("Use Embedded Text Layer", value=False, help="Skip Tesseract if PDF has clean digital text.")
+            with c_cfg5:
+                st.write("")
+                nm_is_copy = st.checkbox("Copyright Protected?", value=st.session_state.get("nm_is_copyright", False))
+                st.session_state["nm_is_copyright"] = nm_is_copy
+
+            btn_col1, btn_col2 = st.columns([2, 2])
+            with btn_col1:
+                run_prep_label = "🔄 Re-Run OCR & Load Splitter" if txt_already_exists else "🚀 Run OCR & Load Chapter Splitter"
+                run_prep_clicked = st.button(run_prep_label, type="primary", width="stretch")
+            with btn_col2:
+                skip_ocr_clicked = False
+                if txt_already_exists:
+                    skip_ocr_clicked = st.button("⚡ Existing `.txt` Found — Load Splitter Immediately", width="stretch")
+
+            if run_prep_clicked:
+                active_pdf_path = clean_nm_pdf
+                final_offset = nm_offset_val
+                prog_bar = st.progress(0, text="Starting preparation...")
+                status_box = st.empty()
+
+                # 1. Optional 2-up split
+                if nm_is_dbl:
+                    status_box.info("✂️ Splitting 2-up double-page spreads...")
+                    s_start, s_end = analyze_split_boundaries(active_pdf_path)
+                    split_name = f"split_{os.path.basename(active_pdf_path)}"
+                    split_path = os.path.join(os.path.dirname(active_pdf_path), split_name)
+                    if split_pdf_doubles(active_pdf_path, split_path, s_start, s_end):
+                        active_pdf_path = split_path
+                        st.session_state["nm_pdf_path"] = active_pdf_path
+                        with fitz.open(active_pdf_path) as pdf:
+                            recalc_start, _ = calculate_start_offset(active_pdf_path, len(pdf))
+                            final_offset = recalc_start if recalc_start else 0
+                        st.toast(f"Split complete! Re-calibrated offset: {final_offset}")
+                    else:
+                        st.error("Failed to split double-page PDF.")
+                        st.stop()
+
+                # 2. Parse illustration ranges
+                ranges_list = []
+                if nm_ranges_str.strip():
+                    for r in nm_ranges_str.split(","):
+                        if "-" in r:
+                            s, e = r.split("-")
+                            ranges_list.append((int(s.strip()), int(e.strip())))
+
+                config = OcrConfig(
+                    has_cover_image=True,
+                    first_numbered_page_index=final_offset,
+                    illustration_ranges=ranges_list,
+                    language=nm_lang
+                )
+                ocr_eng = OcrEngine(active_pdf_path)
+
+                # 3. Run OCR or Text Layer with live progress bar
+                if nm_use_text_layer:
+                    def _tl_cb(done, total):
+                        prog_bar.progress(done / total if total else 1.0, text=f"Extracting text layer: Page {done}/{total}")
+                    txt_output_path = ocr_eng.extract_text_layer(config, progress_callback=_tl_cb)
+                else:
+                    status_box.info("🖼️ Rendering PDF pages to 300 DPI images via pdftoppm (parallel chunks)...")
+                    prog_bar.progress(0.05, text="Rendering PDF pages to PNGs...")
+                    total_imgs = ocr_eng.generate_images()
+                    status_box.info(f"🔍 Running parallel Tesseract OCR across {total_imgs} pages...")
+
+                    def _ocr_cb(done, total):
+                        pct = 0.1 + 0.85 * (done / total if total else 1.0)
+                        prog_bar.progress(pct, text=f"Tesseract OCR: {done}/{total} pages completed")
+
+                    txt_output_path = ocr_eng.run_ocr(config, progress_callback=_ocr_cb)
+                    prog_bar.progress(0.98, text="Cleaning up temporary images...")
+                    ocr_eng.cleanup(config)
+
+                prog_bar.progress(1.0, text="✅ Fallback .txt generation complete!")
+                status_box.success(f"Saved `{os.path.basename(txt_output_path)}`")
+                for k in ["nm_page_map", "nm_page_order", "nm_splitter_indices"]:
+                    st.session_state.pop(k, None)
+                skip_ocr_clicked = True
+
+            if skip_ocr_clicked and os.path.exists(txt_output_path):
+                p_map, p_order = parse_text_file(txt_output_path)
+                st.session_state["nm_page_map"] = p_map
+                st.session_state["nm_page_order"] = p_order
+                st.session_state.pop("nm_splitter_indices", None)
+                st.rerun()
+
+        # --- STEP B: INTERACTIVE CHAPTER SPLITTER ---
+        if "nm_page_map" in st.session_state and st.session_state.get("nm_toc_list"):
+            st.divider()
+            st.markdown(f"#### Step B: Verify Chapter Start Pages & Upload (`{len(st.session_state['nm_toc_list'])}` chapters)")
+
+            page_map = st.session_state["nm_page_map"]
+            page_order = st.session_state["nm_page_order"]
+            toc_list = [
+                item for item in st.session_state["nm_toc_list"]
+                if item.get("page_name") and str(item.get("page_name")).strip() != ""
+            ]
+
+            if not page_order:
+                st.error("No `{{page|...}}` tags found in the `.txt` file.")
+            else:
+                if "nm_splitter_indices" not in st.session_state:
+                    indices = {}
+                    last_valid_idx = 0
+                    for i, item in enumerate(toc_list):
+                        title = item["title"]
+                        raw_range = str(item.get("page_range", "")).strip()
+                        guess = raw_range.split("-")[0].strip() if "-" in raw_range else (raw_range or None)
+
+                        if title.lower() in ["preface", "contents", "introduction", "foreword"] and not guess:
+                            guess = find_best_match_for_title(title, page_map, page_order, search_all=False)
+                        elif not guess:
+                            guess = find_best_match_for_title(title, page_map, page_order, search_all=True, min_index=last_valid_idx)
+
+                        if guess and guess in page_order:
+                            idx = page_order.index(guess)
+                            if idx < last_valid_idx and not raw_range:
+                                idx = last_valid_idx
+                        else:
+                            idx = last_valid_idx
+
+                        indices[i] = idx
+                        last_valid_idx = idx
+                    st.session_state["nm_splitter_indices"] = indices
+
+                def _nm_adjust_idx(i, direction):
+                    curr = st.session_state["nm_splitter_indices"][i]
+                    new = curr + direction
+                    if 0 <= new < len(page_order):
+                        st.session_state["nm_splitter_indices"][i] = new
+                        st.session_state[f"nm_lbl_{i}"] = page_order[new]
+
+                def _nm_set_lbl(i):
+                    typed = st.session_state.get(f"nm_lbl_{i}", "").strip()
+                    if typed in page_order:
+                        st.session_state["nm_splitter_indices"][i] = page_order.index(typed)
+
+                for i, item in enumerate(toc_list):
+                    curr_idx = st.session_state["nm_splitter_indices"][i]
+                    curr_lbl = page_order[curr_idx]
+                    if f"nm_lbl_{i}" not in st.session_state:
+                        st.session_state[f"nm_lbl_{i}"] = curr_lbl
+
+                    c_title, c_nav, c_prev = st.columns([2, 1, 4])
+                    with c_title:
+                        st.subheader(item.get("page_name", item["title"]))
+                        st.caption(f"Hint: {item.get('page_range') or 'Auto-matched'}")
+                    with c_nav:
+                        st.text_input(
+                            "Page Tag",
+                            key=f"nm_lbl_{i}",
+                            on_change=_nm_set_lbl,
+                            args=(i,)
+                        )
+                        b_m, b_p = st.columns(2)
+                        with b_m:
+                            st.button("◀", key=f"nm_prev_{i}", width="stretch", on_click=_nm_adjust_idx, args=(i, -1))
+                        with b_p:
+                            st.button("▶", key=f"nm_next_{i}", width="stretch", on_click=_nm_adjust_idx, args=(i, 1))
+                    with c_prev:
+                        p_text = page_map.get(curr_lbl, "Error: Content missing")
+                        st.text_area("Preview", value=p_text[:400] + "...", height=120, key=f"nm_pv_{i}_{curr_idx}", disabled=True)
+                    st.divider()
+
+                if st.button("✂️ Split, Upload to Bahai.works & Reset to PENDING", type="primary", width="stretch"):
+                    target_base = nm_book
+                    pdf_filename = os.path.basename(st.session_state["nm_pdf_path"])
+                    is_copyright = st.session_state.get("nm_is_copyright", False)
+
+                    if is_copyright:
+                        access_group = target_base.replace(" ", "")
+                        header_content = f"<accesscontrol>Access:{access_group}</accesscontrol>{{{{Publicationinfo}}}}\n"
+                    else:
+                        header_content = "{{Publicationinfo}}\n"
+
+                    up_prog = st.progress(0)
+                    up_status = st.empty()
+
+                    try:
+                        if is_copyright:
+                            file_page_title = f"File:{pdf_filename}"
+                            up_status.write(f"🔒 Securing {file_page_title}...")
+                            upload_to_bahaiworks(
+                                file_page_title,
+                                f"<accesscontrol>Access:{access_group}</accesscontrol>",
+                                "Automated: Applied Access Control tag to File page",
+                                check_exists=False,
+                                session=session
+                            )
+
+                        final_split_data = [
+                            {
+                                "title": item["title"],
+                                "page_name": item.get("page_name", item["title"]),
+                                "start_idx": st.session_state["nm_splitter_indices"][i],
+                                "original_item": item
+                            }
+                            for i, item in enumerate(toc_list)
+                        ]
+
+                        for i, chapter in enumerate(final_split_data):
+                            start_idx = chapter["start_idx"]
+                            end_idx = max(start_idx, final_split_data[i + 1]["start_idx"]) if i + 1 < len(final_split_data) else len(page_order)
+                            safe_end_idx = max(start_idx, end_idx - 1)
+                            chapter["original_item"]["page_range"] = f"{page_order[start_idx]}-{page_order[safe_end_idx]}"
+
+                            up_status.write(f"Uploading `{target_base}/{chapter['page_name']}` ({i+1}/{len(final_split_data)})...")
+                            raw_text = "".join(
+                                page_map.get(page_order[p_idx], "") + "\n\n"
+                                for p_idx in range(start_idx, end_idx)
+                                if 0 <= p_idx < len(page_order)
+                            )
+                            full_content = f"{header_content}\n{raw_text}"
+                            upload_to_bahaiworks(f"{target_base}/{chapter['page_name']}", full_content, "Splitter Upload", session=session)
+                            up_prog.progress((i + 1) / len(final_split_data))
+
+                        # Save toc.json alongside PDF
+                        toc_path = os.path.join(os.path.dirname(st.session_state["nm_pdf_path"]), "toc.json")
+                        with open(toc_path, "w", encoding="utf-8") as f:
+                            json.dump(st.session_state["nm_toc_list"], f, indent=2, ensure_ascii=False)
+
+                        # Clear cached state and mark book PENDING in queue
+                        reset_book_cache(target_base, input_folder)
+                        queue_data[target_base] = {"status": "PENDING", "last_updated": time.time()}
+                        save_queue(queue_data)
+                        st.session_state["selected_book"] = target_base
+
+                        for k in ["nm_page_map", "nm_page_order", "nm_splitter_indices", "nm_calibrated"]:
+                            st.session_state.pop(k, None)
+
+                        up_status.success(f"🎉 Uploaded all chapters for **{target_base}** and reset queue status to `PENDING`! Switch back to '📚 Re-Proofreader Pipeline' above to run it.")
+                        time.sleep(1.5)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Upload failed: {e}")
+
+    st.stop()
 
 if queue_data:
     with st.expander("📋 Processing Queue & Triage", expanded=True):
