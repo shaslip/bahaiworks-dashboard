@@ -282,16 +282,6 @@ class OcrEngine:
                 page_content = f"{template}\n{text}\n"
                 full_text_content.append(page_content)
 
-                # D. If this page is in illustration_ranges, save a rendered PNG of it
-                if config.illustration_ranges:
-                    for start, end in config.illustration_ranges:
-                        if start <= page_idx <= end:
-                            dest_root = os.path.join(self.work_dir, "images", self.book_name, "raw")
-                            os.makedirs(dest_root, exist_ok=True)
-                            pix = page.get_pixmap(dpi=300)
-                            pix.save(os.path.join(dest_root, f"illus_p{physical_page}.png"))
-                            break
-
         with open(self.output_txt_path, "w", encoding="utf-8") as f:
             f.writelines(full_text_content)
 
@@ -300,55 +290,11 @@ class OcrEngine:
     
     def cleanup(self, config: OcrConfig):
         """
-        Moves illustration images to permanent storage, then nukes the temp folder.
+        Nukes the temp folder after OCR completes.
         """
         if not os.path.exists(self.cache_dir):
             return
 
-        # 1. Setup Destination
-        # Structure: data/images/{book_name}/raw/
-        # We move up from work_dir to find root, or just create a 'data' folder next to the pdf folder
-        # For simplicity, let's create a "images" folder in the same directory as the PDF
-        dest_root = os.path.join(self.work_dir, "images", self.book_name, "raw")
-        
-        # 2. Identify Images to Save
-        images_to_save = []
-        if config.illustration_ranges:
-            os.makedirs(dest_root, exist_ok=True)
-            
-            # config.illustration_ranges is [(10, 15), (20, 22)] (0-based indices)
-            # Files are named "page-1.png" (1-based index) or similar.
-            # We need to map carefully.
-            
-            # Let's look at the files in cache
-            for filename in os.listdir(self.cache_dir):
-                if not filename.endswith(".png"): continue
-                
-                # Extract page number from "page-15.png"
-                # Assuming standard pdftoppm output format "page-15.png" or "page-015.png"
-                try:
-                    # Split by last - or just extract numbers
-                    num_part = re.findall(r'\d+', filename)[-1]
-                    page_num_1_based = int(num_part)
-                    page_index_0_based = page_num_1_based - 1
-                    
-                    # Check if this index is in any range
-                    is_illus = False
-                    for start, end in config.illustration_ranges:
-                        if start <= page_index_0_based <= end:
-                            is_illus = True
-                            break
-                    
-                    if is_illus:
-                        src = os.path.join(self.cache_dir, filename)
-                        dst = os.path.join(dest_root, f"illus_p{page_num_1_based}.png")
-                        shutil.move(src, dst)
-                        print(f"Saved illustration: {dst}")
-                        
-                except Exception as e:
-                    print(f"Warning: Could not process {filename} during cleanup: {e}")
-
-        # 3. Nuke the rest
         shutil.rmtree(self.cache_dir, ignore_errors=True)
         if os.path.exists(self.cache_dir):
             subprocess.run(["rm", "-rf", self.cache_dir], check=False)
