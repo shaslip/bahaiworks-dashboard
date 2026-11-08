@@ -344,7 +344,7 @@ def render_prep_tab(docs):
     )
     
     selected_indices = event.selection['rows']
-    selected_table_ids = [queue_data[i]["ID"] for i in selected_indices]
+    selected_table_ids = [queue_data[i]["ID"] for i in selected_indices if i < len(queue_data)]
     
     # Action bar for selection
     col1, col2 = st.columns(2)
