@@ -83,21 +83,28 @@ class OcrEngine:
     def generate_images(self, chunk_size: int = 20) -> int:
         """
         Runs pdftoppm to generate PNGs in parallel chunks.
-        ALWAYS starts fresh to prevent corrupted cache issues.
+        Reuses existing PNGs if all pages are already rendered.
         """
-        # 1. Force Clean Start
+        # 1. Get total pages in the PDF first
+        with fitz.open(self.file_path) as pdf:
+            total_pages = len(pdf)
+
+        # 2. Check if all PNGs already exist and are valid (non-zero bytes)
         if os.path.exists(self.cache_dir):
+            existing_pngs = glob.glob(os.path.join(self.cache_dir, "*.png"))
+            if len(existing_pngs) == total_pages and all(os.path.getsize(p) > 0 for p in existing_pngs):
+                print(f"Reusing {len(existing_pngs)} existing cached images for {self.filename}...")
+                return len(existing_pngs)
+
+            # Otherwise, clean up incomplete/corrupted cache before re-rendering
             shutil.rmtree(self.cache_dir, ignore_errors=True)
             if os.path.exists(self.cache_dir):
                 subprocess.run(["rm", "-rf", self.cache_dir], check=False)
+
         os.makedirs(self.cache_dir, exist_ok=True)
         
         prefix = os.path.join(self.cache_dir, "page")
         print(f"Generating images for {self.filename} in parallel chunks...")
-
-        # 2. Get total pages to calculate chunks
-        with fitz.open(self.file_path) as pdf:
-            total_pages = len(pdf)
 
         # 3. Define the start and end pages for each chunk (e.g., 1-20, 21-40)
         chunks = []
