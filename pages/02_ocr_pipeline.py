@@ -40,61 +40,6 @@ def render_details(selected_id):
                 open_local_file(os.path.dirname(record.file_path))
         
         st.sidebar.divider()
-
-        # --- MANUAL CONFIGURATION (For irregular books) ---
-        with st.sidebar.expander("🛠️ Manual Pagination", expanded=True):
-            st.caption("Use this if auto-detection fails or if the book has unnumbered illustration pages.")
-            
-            # 1. Page 1 Location
-            # We ask for the "Human" page number (1-based) and convert to 0-based index for the system
-            current_offset_match = re.search(r"\[OFFSET:(\d+)\]", record.ai_justification or "")
-            default_page_one = int(current_offset_match.group(1)) + 1 if current_offset_match else 1
-            
-            page_one_loc = st.number_input(
-                "PDF Page # of 'Page 1'", 
-                min_value=1, 
-                value=default_page_one,
-                help="Enter the PDF page number where the printed 'Page 1' begins."
-            )
-            
-            # 2. Unnumbered Ranges
-            # Parse existing ranges from justification if they exist
-            # Format in DB: [RANGES:48-55,102-105]
-            existing_ranges_match = re.search(r"\[RANGES:([\d\-,]+)\]", record.ai_justification or "")
-            default_ranges = existing_ranges_match.group(1) if existing_ranges_match else ""
-            
-            ranges_str = st.text_area(
-                "Unnumbered Ranges", 
-                value=default_ranges,
-                placeholder="e.g. 10-15, 48-52",
-                help="Comma-separated ranges of PDF page numbers that are images/illustrations and skip numbering."
-            )
-            
-            if st.button("💾 Save & Mark Ready", type="primary", key="save_manual_cfg"):
-                # Clean up old tags
-                clean_just = record.ai_justification or ""
-                clean_just = re.sub(r"\[OFFSET:\d+\]", "", clean_just)
-                clean_just = re.sub(r"\[RANGES:[\d\-,]+\]", "", clean_just).strip()
-                
-                # Format new tags
-                # Convert 1-based input to 0-based index for the engine
-                new_start_index = page_one_loc - 1
-                
-                # Append tags
-                clean_just += f"\n[OFFSET:{new_start_index}]"
-                if ranges_str.strip():
-                    # Basic validation could go here
-                    clean_just += f"\n[RANGES:{ranges_str.strip()}]"
-                
-                record.ai_justification = clean_just
-                record.status = "READY_FOR_OCR"
-                session.commit()
-                
-                st.toast(f"Saved! Page 1 starts at index {new_start_index}")
-                time.sleep(1)
-                st.rerun()
-
-        st.sidebar.divider()
         
         # --- Management ---
         st.sidebar.subheader("Management")
@@ -509,6 +454,10 @@ def render_prep_tab(docs):
                 with Session(engine) as session:
                     current_db_doc = session.get(Document, doc.id)
                     is_ready = current_db_doc.status == "READY_FOR_OCR"
+                    existing_ranges_match = re.search(r"\[RANGES:([\d\-,]+)\]", current_db_doc.ai_justification or "")
+                    default_ranges = existing_ranges_match.group(1) if existing_ranges_match else ""
+                    current_offset_match = re.search(r"\[OFFSET:(\d+)\]", current_db_doc.ai_justification or "")
+                    default_page_one = int(current_offset_match.group(1)) + 1 if current_offset_match else 1
 
                 with st.container(border=True):
                     c1, c2, c3, c4 = st.columns([4, 2, 2, 2])
@@ -519,9 +468,37 @@ def render_prep_tab(docs):
                         c3.empty()
                         c4.markdown("<div style='margin-top: 15px; color: gray;'>➡️ <i>Move to Execute tab</i></div>", unsafe_allow_html=True)
                     else:
-                        new_offset = c2.number_input("Offset", value=item['offset'] if item['offset'] else 0, key=f"off_{doc.id}")
+                        auto_failed = not item.get('offset')
+                        ranges_str = ""
+
+                        if not auto_failed:
+                            new_offset = c2.number_input("Offset", value=item['offset'], key=f"off_{doc.id}")
+                        else:
+                            c2.warning("⚠️ Auto-Offset Failed")
+
                         is_dbl = c3.checkbox("Double Page?", value=item['is_double'], key=f"dbl_{doc.id}")
                         btn_label = "✂️ Split & Mark Ready" if is_dbl else "✅ Confirm & Mark Ready"
+
+                        if auto_failed:
+                            st.caption("🛠️ **Manual Pagination** — Auto-detection failed. Enter the PDF page number where printed 'Page 1' begins and any unnumbered illustration ranges.")
+                            m_col1, m_col2 = st.columns([1, 2])
+                            with m_col1:
+                                page_one_loc = st.number_input(
+                                    "PDF Page # of 'Page 1'",
+                                    min_value=1,
+                                    value=default_page_one,
+                                    help="Enter the PDF page number where the printed 'Page 1' begins.",
+                                    key=f"p1_{doc.id}"
+                                )
+                                new_offset = page_one_loc - 1
+                            with m_col2:
+                                ranges_str = st.text_input(
+                                    "Unnumbered Ranges",
+                                    value=default_ranges,
+                                    placeholder="e.g. 10-15, 48-52",
+                                    help="Comma-separated ranges of PDF page numbers that are images/illustrations and skip numbering.",
+                                    key=f"rng_{doc.id}"
+                                )
                         
                         if c4.button(btn_label, key=f"proc_{doc.id}", help="Applies settings and queues for OCR."):
                             current_path = doc.file_path
@@ -556,8 +533,12 @@ def render_prep_tab(docs):
                                 d.status = "READY_FOR_OCR"
                                 
                                 clean_just = d.ai_justification or ""
-                                clean_just = re.sub(r"\[OFFSET:\d+\]", "", clean_just).strip()
-                                d.ai_justification = f"{clean_just}\n[OFFSET:{final_offset}]"
+                                clean_just = re.sub(r"\[OFFSET:\d+\]", "", clean_just)
+                                clean_just = re.sub(r"\[RANGES:[\d\-,]+\]", "", clean_just).strip()
+                                clean_just += f"\n[OFFSET:{final_offset}]"
+                                if ranges_str.strip():
+                                    clean_just += f"\n[RANGES:{ranges_str.strip().replace(' ', '')}]"
+                                d.ai_justification = clean_just
                                 
                                 session.commit()
                             
