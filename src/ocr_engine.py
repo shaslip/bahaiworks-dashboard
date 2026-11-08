@@ -87,8 +87,10 @@ class OcrEngine:
         """
         # 1. Force Clean Start
         if os.path.exists(self.cache_dir):
-            shutil.rmtree(self.cache_dir)
-        os.makedirs(self.cache_dir)
+            shutil.rmtree(self.cache_dir, ignore_errors=True)
+            if os.path.exists(self.cache_dir):
+                subprocess.run(["rm", "-rf", self.cache_dir], check=False)
+        os.makedirs(self.cache_dir, exist_ok=True)
         
         prefix = os.path.join(self.cache_dir, "page")
         print(f"Generating images for {self.filename} in parallel chunks...")
@@ -333,4 +335,6 @@ class OcrEngine:
                     print(f"Warning: Could not process {filename} during cleanup: {e}")
 
         # 3. Nuke the rest
-        shutil.rmtree(self.cache_dir)
+        shutil.rmtree(self.cache_dir, ignore_errors=True)
+        if os.path.exists(self.cache_dir):
+            subprocess.run(["rm", "-rf", self.cache_dir], check=False)
