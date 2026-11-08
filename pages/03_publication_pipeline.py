@@ -834,6 +834,16 @@ elif st.session_state.pipeline_stage == "split":
     page_map = st.session_state["page_map"]
     page_order = st.session_state["page_order"]
     
+    # Build mapping between list index and PDF page number (from page=X in tag)
+    pdf_page_for_idx = []
+    idx_for_pdf_page = {}
+    for idx_pos, lbl in enumerate(page_order):
+        content_head = page_map.get(lbl, "")[:150]
+        m = re.search(r'\bpage\s*=\s*(\d+)', content_head)
+        pdf_num = m.group(1) if m else str(idx_pos + 1)
+        pdf_page_for_idx.append(pdf_num)
+        idx_for_pdf_page[pdf_num] = idx_pos
+
     # 2. Initialize Indices (Once)
     full_toc = st.session_state.get("toc_map", [])
     
@@ -881,33 +891,34 @@ elif st.session_state.pipeline_stage == "split":
         new = curr + direction
         if 0 <= new < len(page_order):
             st.session_state["splitter_indices"][i] = new
-            st.session_state[f"lbl_in_{i}"] = page_order[new]
+            st.session_state[f"lbl_in_{i}"] = pdf_page_for_idx[new]
 
     def set_label_directly(i):
-        typed_lbl = st.session_state.get(f"lbl_in_{i}", "").strip()
-        if typed_lbl in page_order:
-            st.session_state["splitter_indices"][i] = page_order.index(typed_lbl)
+        typed_pdf_pg = st.session_state.get(f"lbl_in_{i}", "").strip()
+        if typed_pdf_pg in idx_for_pdf_page:
+            st.session_state["splitter_indices"][i] = idx_for_pdf_page[typed_pdf_pg]
 
     # 4. Render Grid
     for i, item in enumerate(toc_list):
         current_idx = st.session_state["splitter_indices"][i]
         current_label = page_order[current_idx]
+        current_pdf_pg = pdf_page_for_idx[current_idx]
         if f"lbl_in_{i}" not in st.session_state:
-            st.session_state[f"lbl_in_{i}"] = current_label
+            st.session_state[f"lbl_in_{i}"] = current_pdf_pg
         
         c_title, c_nav, c_preview = st.columns([2, 1, 4])
         
         with c_title:
             st.subheader(item.get('page_name', item['title'])) 
-            st.caption(f"TOC Range: {item.get('page_range', 'N/A')}")
+            st.caption(f"TOC Range: {item.get('page_range', 'N/A')} | Book Page: {current_label}")
         
         with c_nav:
             st.text_input(
-                "Page Tag",
+                "PDF Page",
                 key=f"lbl_in_{i}",
                 on_change=set_label_directly,
                 args=(i,),
-                help="Type a page number/roman numeral (e.g. 157 or xii) and press Enter."
+                help="Type the PDF page number (e.g. 188) and press Enter."
             )
             
             c_minus, c_plus = st.columns(2)
