@@ -708,9 +708,10 @@ with tab_nomap:
                 st.session_state["nm_pdf_input_box"] = guessed_pdf
 
     with nm_col2:
+        if "nm_pdf_input_box" not in st.session_state:
+            st.session_state["nm_pdf_input_box"] = st.session_state.get("nm_pdf_path", "")
         nm_pdf_input = st.text_input(
             "2. Full Local PDF Path (Auto-searched in Root Folder if found)",
-            value=st.session_state.get("nm_pdf_path", ""),
             placeholder="/path/to/Book.pdf",
             key="nm_pdf_input_box"
         )
@@ -726,8 +727,8 @@ with tab_nomap:
         txt_output_path = clean_nm_pdf[:-4] + ".txt"
         txt_already_exists = os.path.exists(txt_output_path)
 
-        # Auto-calibrate once per book/PDF selection
-        if not st.session_state.get("nm_calibrated"):
+        # Calibrate only when explicitly requested
+        if st.button("🔍 Auto-Calibrate Offset & Fetch Wiki TOC", width="stretch"):
             with st.spinner("🔍 Auto-detecting page offset, double-page layout, and Wiki TOC..."):
                 try:
                     with fitz.open(clean_nm_pdf) as pdf:
