@@ -176,47 +176,54 @@ class OcrEngine:
 
         print(f"Starting OCR for {self.book_name} ({config.language})...")
 
-        for loop_idx, img_path in enumerate(image_files, start=1):
-            # Update Progress Bar (if provided)
-            if progress_callback:
-                progress_callback(loop_idx, total_images)
+        # Prevent Tesseract OpenMP thread contention when running multiple workers
+        os.environ["OMP_THREAD_LIMIT"] = "1"
 
-            # Extract the actual physical page number from the filename (e.g., "page-57.png" -> 57)
+        # Pre-calculate page labels sequentially so numbering stays 100% deterministic
+        page_tasks = []
+        for img_path in image_files:
             filename_only = os.path.basename(img_path)
             page_num_match = re.findall(r'\d+', filename_only)
             if not page_num_match:
                 continue
             physical_page = int(page_num_match[-1])
 
-            # Skip cover image if configured
             if config.has_cover_image and physical_page == 1:
                 print(f"Skipping cover image {physical_page}")
                 continue
 
-            print(f"[{self.book_name}] OCRing page {physical_page}/{total_images}...")
-
-            # A. Calculate Page Label
             label, illus_counter, real_page_counter = self._get_page_label(
                 physical_page, config, illus_counter, real_page_counter
             )
+            page_tasks.append((physical_page, label, img_path))
 
-            # B. Perform OCR
-            with Image.open(img_path) as img:
-                text = pytesseract.image_to_string(img, lang=config.language)
-            
-            # Clean generic garbage (form feed characters)
+        def _ocr_single_page(task):
+            physical_page, label, img_path = task
+            # Pass img_path directly so pytesseract doesn't write duplicate temp files
+            text = pytesseract.image_to_string(img_path, lang=config.language, timeout=60)
             text = text.replace('\f', '')
-
-            # --- NEW: Fix Hyphenation ---
             text = self._clean_hyphenation(text)
-
-            # C. Format Template
-            # {{page|label|file=Filename.pdf|page=index}}
             template = f"{{{{page|{label}|file={self.filename}|page={physical_page}}}}}"
-            
-            # Combine
-            page_content = f"{template}\n{text}\n"
-            full_text_content.append(page_content)
+            return physical_page, f"{template}\n{text}\n"
+
+        results_by_page = {}
+        # Cap at 4-6 workers with OMP_THREAD_LIMIT=1 so CPU & external disk never thrash
+        max_workers = max(1, min(6, (os.cpu_count() or 4) // 2))
+        total_tasks = len(page_tasks)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_page = {executor.submit(_ocr_single_page, t): t[0] for t in page_tasks}
+            completed = 0
+            for future in concurrent.futures.as_completed(future_to_page):
+                phys_page, content = future.result()
+                results_by_page[phys_page] = content
+                completed += 1
+                print(f"[{self.book_name}] OCR completed {completed}/{total_tasks} (Page {phys_page})")
+                if progress_callback:
+                    progress_callback(completed, total_tasks)
+
+        for physical_page, _, _ in page_tasks:
+            full_text_content.append(results_by_page[physical_page])
 
         # 4. Save to Disk
         with open(self.output_txt_path, "w", encoding="utf-8") as f:
