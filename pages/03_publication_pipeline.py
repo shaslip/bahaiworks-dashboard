@@ -911,6 +911,7 @@ elif st.session_state.pipeline_stage == "split":
         with c_title:
             st.subheader(item.get('page_name', item['title'])) 
             st.caption(f"TOC Range: {item.get('page_range', 'N/A')} | Book Page: {current_label}")
+            st.checkbox("Upload to wiki", value=True, key=f"upload_chk_{i}")
         
         with c_nav:
             st.text_input(
@@ -957,7 +958,7 @@ elif st.session_state.pipeline_stage == "split":
             status_box = st.empty()
             
             try:
-                # --- NEW: Apply Protection to the PDF File Page ---
+                # --- Apply Protection to the PDF File Page ---
                 if is_copyright:
                     file_page_title = f"File:{filename}"
                     file_page_text = f"<accesscontrol>Access:{access_group}</accesscontrol>"
@@ -971,7 +972,6 @@ elif st.session_state.pipeline_stage == "split":
                         "Automated: Applied Access Control tag to File page",
                         check_exists=False 
                     )
-                # --------------------------------------------------
 
                 # 2. Build the cut-list (Existing code continues below...)
                 final_split_data = []
@@ -980,6 +980,7 @@ elif st.session_state.pipeline_stage == "split":
                         "title": item['title'],
                         "page_name": item.get('page_name', item['title']), 
                         "start_idx": st.session_state["splitter_indices"][i],
+                        "upload": st.session_state.get(f"upload_chk_{i}", True),
                         "original_item": item 
                     })
 
@@ -1006,6 +1007,11 @@ elif st.session_state.pipeline_stage == "split":
                     real_start_lbl = page_order[start_idx]
                     real_end_lbl = page_order[safe_end_idx]
                     chapter["original_item"]["page_range"] = f"{real_start_lbl}-{real_end_lbl}"
+
+                    if not chapter["upload"]:
+                        status_box.write(f"Skipping upload for {ch_title}...")
+                        progress_bar.progress((i + 1) / len(final_split_data))
+                        continue
 
                     status_box.write(f"Processing {ch_title}...")
                     
