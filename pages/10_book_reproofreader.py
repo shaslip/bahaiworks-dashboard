@@ -1624,7 +1624,7 @@ with tab_main:
     edited_map_rows = st.data_editor(
         map_display,
         width='stretch',
-        height=320,
+        height=35 * len(map_display) + 38,
         hide_index=True,
         disabled=["#", "Wiki Subpage", "Status", "Mapped PDF Pages", "Needs Split Logic"],
         column_config={
