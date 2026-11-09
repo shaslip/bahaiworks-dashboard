@@ -301,11 +301,17 @@ def extract_page_content(wikitext, pdf_page_num):
             return content
     return ""
 
-def build_sequential_route_map(subpages, session, input_folder, include_proofread=False):
+def has_ps1_tag(wikitext):
+    """Checks if the wikitext already contains {{ps|1}}."""
+    if not wikitext:
+        return False
+    return bool(re.search(r'\{\{\s*ps\s*\|\s*1\s*\}\}', wikitext, re.IGNORECASE))
+
+def build_sequential_route_map(subpages, session, input_folder):
     route_map = {}
     master_pdf_filename = None
     wikitext_cache = {}
-    skipped_proofread_count = 0
+    proofread_count = 0
     
     # Pre-fetch all subpages in batches of 50 per HTTP request
     batched_texts = fetch_wikitext_batch(subpages, session=session)
@@ -324,19 +330,19 @@ def build_sequential_route_map(subpages, session, input_folder, include_proofrea
         if re.match(r'^\s*#redirect\s*\[\[', text, flags=re.IGNORECASE):
             continue
             
-        # --- Skip pages that are already proofread (unless force override is active) ---
-        if not include_proofread:
-            header_match = re.search(r'\{\{header\s*\n.*?\n\}\}', text, re.DOTALL | re.IGNORECASE)
-            if header_match:
-                header_body = header_match.group(0)
-                notes_match = re.search(r'\|\s*notes\s*=\s*(.*?)(?=\n\s*\||$)', header_body, re.DOTALL | re.IGNORECASE)
-                # If the notes field exists and contains {{ps|1}}, skip mapping this chapter entirely
-                if notes_match and re.search(r'\{\{ps\|\s*1\s*\}\}', notes_match.group(1), re.IGNORECASE):
-                    skipped_proofread_count += 1
-                    continue
+        # --- Detect {{ps|1}} proofread status (Check unproofread by default) ---
+        is_proofread = has_ps1_tag(text)
+        if is_proofread:
+            proofread_count += 1
 
         wikitext_cache[title] = text
-        route_map[title] = {"pdf_pages": [], "old_texts": {}, "needs_split": False}
+        route_map[title] = {
+            "pdf_pages": [],
+            "old_texts": {},
+            "needs_split": False,
+            "is_proofread": is_proofread,
+            "selected": not is_proofread
+        }
         
         tags = list(re.finditer(r'(\{\{page\|(.*?)\}\})', text, re.IGNORECASE))
         
@@ -424,7 +430,7 @@ def build_sequential_route_map(subpages, session, input_folder, include_proofrea
                 with open(ch_file_path, "w", encoding="utf-8") as f:
                     f.write(wikitext_cache.get(sp, ""))
 
-    return route_map, master_pdf_filename, wikitext_cache, ordered_subpages, skipped_proofread_count
+    return route_map, master_pdf_filename, wikitext_cache, ordered_subpages, proofread_count
 
 def normalize_filename(name):
     """Normalizes spaces/underscores, strips accents/punctuation, and lowercases for fuzzy matching."""
@@ -1191,22 +1197,18 @@ with tab_main:
                 log_container = st.container(border=True)
                 safe_title = target_book.replace("/", "_")
                 state = load_book_state(safe_title)
-                
+
                 # --- AUTO STEP 1: Generate Map ---
                 if not state.get("subpages") or not state.get("route_map") or not state.get("master_pdf"):
                     log_container.write(f"🔍 Generating Chapter Map for {target_book}...")
                     subpages = get_all_subpages(target_book, session)
-                    route_map, master_pdf_filename, wikitext_cache, ordered_subpages, skipped_ps1 = build_sequential_route_map(
-                        subpages, session, input_folder, include_proofread=False
+                    route_map, master_pdf_filename, wikitext_cache, ordered_subpages, proofread_count = build_sequential_route_map(
+                        subpages, session, input_folder
                     )
                     
                     if not route_map or not master_pdf_filename:
-                        if skipped_ps1 > 0:
-                            log_container.success(f"✅ All {skipped_ps1} subpage(s) for {target_book} already have `{{{{ps|1}}}}`. Marking COMPLETED.")
-                            queue_data[target_book]["status"] = "COMPLETED"
-                        else:
-                            log_container.error(f"❌ Could not find PDF references for {target_book}. Marking ERROR and skipping.")
-                            queue_data[target_book]["status"] = "ERROR: No Map"
+                        log_container.error(f"❌ Could not find PDF references for {target_book}. Marking ERROR and skipping.")
+                        queue_data[target_book]["status"] = "ERROR: No Map"
                         save_queue(queue_data)
                         continue
                         
@@ -1221,6 +1223,16 @@ with tab_main:
                     route_map = state["route_map"]
                     master_pdf_filename = state["master_pdf"]
                     wikitext_cache = state.get("wikitext_cache", {})
+
+                selected_subpages = [
+                    sp for sp in ordered_subpages
+                    if route_map.get(sp, {}).get("selected", not route_map.get(sp, {}).get("is_proofread", False))
+                ]
+                if not selected_subpages:
+                    log_container.success(f"✅ All {len(ordered_subpages)} subpage(s) for {target_book} already have `{{{{ps|1}}}}`. Marking COMPLETED.")
+                    queue_data[target_book]["status"] = "COMPLETED"
+                    save_queue(queue_data)
+                    continue
                 
                 # --- AUTO STEP 2: Generate Master JSON ---
                 local_pdf_path = resolve_pdf_path(state, input_folder)
@@ -1236,8 +1248,8 @@ with tab_main:
                 if not os.path.exists(master_json_path):
                     log_container.write(f"⚙️ Generating Master JSON for {master_pdf_filename}...")
                     all_mapped_pages = set()
-                    for ch, data in route_map.items():
-                        for p in data.get("pdf_pages", []):
+                    for ch in selected_subpages:
+                        for p in route_map.get(ch, {}).get("pdf_pages", []):
                             all_mapped_pages.add(p["pdf_num"])
                     pages_to_process = sorted(list(all_mapped_pages))
                     
