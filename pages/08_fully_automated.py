@@ -464,12 +464,17 @@ def load_periodical_issues(input_folder, base_title):
     batched_wikitexts = fetch_wikitext_batch(wiki_pages, session=session)
 
     issues = []
-    for idx, wiki_title in enumerate(wiki_pages):
+    for wiki_title in wiki_pages:
         raw_text = batched_wikitexts.get(wiki_title)
         if not raw_text:
             raw_text, _ = fetch_wikitext(wiki_title, session=session)
         raw_text = raw_text or ""
 
+        # Skip redirect pages
+        if re.match(r'^\s*#redirect\s*\[\[', raw_text, flags=re.IGNORECASE):
+            continue
+
+        idx = len(issues)
         norm_text = normalize_page_templates(raw_text, session)
         wiki_pdf_name = extract_pdf_filename_from_wikitext(norm_text)
         is_proofread = has_ps1_tag(norm_text)
