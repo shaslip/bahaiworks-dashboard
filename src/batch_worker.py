@@ -38,7 +38,7 @@ def get_page_image_data(pdf_path, page_num_1_based):
             doc.close()
     return Image.open(io.BytesIO(png_bytes))
 
-def process_single_page(page_num, pdf_path, ocr_strategy, temp_file_path, shared_results, shared_log_list, log_prefix="", global_log_list=None):
+def process_single_page(page_num, pdf_path, ocr_strategy, temp_file_path, shared_results, shared_log_list, log_prefix="", global_log_list=None, book_title=None, chapter_title=None):
     file_lock = _get_file_lock(temp_file_path)
 
     def _log(msg):
@@ -65,19 +65,19 @@ def process_single_page(page_num, pdf_path, ocr_strategy, temp_file_path, shared
                 raw_ocr = transcribe_with_document_ai(img)
             if "DOCAI_ERROR" in raw_ocr:
                 _log(f"⚠️ DocAI Failed on Page {page_num}. Attempting Gemini Rescue...")
-                final_text = proofread_with_formatting(img)
+                final_text = proofread_with_formatting(img, book_title=book_title, chapter_title=chapter_title)
             else:
-                final_text = reformat_raw_text(raw_ocr)
+                final_text = reformat_raw_text(raw_ocr, book_title=book_title, chapter_title=chapter_title)
                 if "FORMATTING_ERROR" in final_text:
                     _log(f"⚠️ DocAI Formatting Failed on Page {page_num}. Attempting Gemini Rescue...")
-                    rescue_text = proofread_with_formatting(img)
+                    rescue_text = proofread_with_formatting(img, book_title=book_title, chapter_title=chapter_title)
                     if "GEMINI_ERROR" in rescue_text or "Recitation" in rescue_text or "Copyright" in rescue_text:
                         _log(f"⚠️ Rescue also failed on Page {page_num}. Saving RAW OCR text.")
                         final_text = raw_ocr + "\n\n"
                     else:
                         final_text = rescue_text
         else:
-            final_text = proofread_with_formatting(img)
+            final_text = proofread_with_formatting(img, book_title=book_title, chapter_title=chapter_title)
             is_gemini_error = "GEMINI_ERROR" in final_text or "Recitation" in final_text or "Copyright" in final_text
 
             if is_gemini_error:
@@ -87,7 +87,7 @@ def process_single_page(page_num, pdf_path, ocr_strategy, temp_file_path, shared
                 if "DOCAI_ERROR" in raw_ocr:
                     final_text = "DOCAI_ERROR"
                 else:
-                    formatted_text = reformat_raw_text(raw_ocr)
+                    formatted_text = reformat_raw_text(raw_ocr, book_title=book_title, chapter_title=chapter_title)
                     if "FORMATTING_ERROR" in formatted_text:
                         _log(f"⚠️ Formatting failed on Page {page_num}. Saving RAW OCR text.")
                         final_text = raw_ocr + "\n\n"
