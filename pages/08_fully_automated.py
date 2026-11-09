@@ -7,7 +7,6 @@ import time
 import fitz  # PyMuPDF
 import requests
 import concurrent.futures
-import math
 
 # --- Path Setup ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -33,8 +32,6 @@ from src.mediawiki_uploader import (
 if 'GEMINI_API_KEY' not in os.environ:
     st.error("GEMINI_API_KEY not found. Check your .env file.")
     st.stop()
-
-STATE_FILE = os.path.join(project_root, "automation_state.json")
 
 st.set_page_config(page_title="Fully Automated Proofreader", page_icon="🤖", layout="wide")
 
@@ -220,6 +217,12 @@ def extract_pdf_filename_from_wikitext(wikitext):
         return match.group(1).strip()
     return None
 
+def has_ps1_tag(wikitext):
+    """Checks if the wikitext already contains {{ps|1}}."""
+    if not wikitext:
+        return False
+    return bool(re.search(r'\{\{\s*ps\s*\|\s*1\s*\}\}', wikitext, re.IGNORECASE))
+
 def render_multi_issue_telemetry(issue_jobs, global_log_list, ui_holders):
     """Renders live telemetry across all queued periodical issues and their pages."""
     total_pages = 0
@@ -329,7 +332,7 @@ def render_multi_issue_telemetry(issue_jobs, global_log_list, ui_holders):
 
     return completed_count == total_pages
 
-def merge_and_upload_issue(job, session, log_area, status_container, state_display):
+def merge_and_upload_issue(job, session, log_area, status_container):
     """Merges completed OCR pages into the issue wikitext, uploads to Bahai.works, and cleans up temp files."""
     idx = job["idx"]
     wiki_title = job["wiki_title"]
@@ -356,7 +359,6 @@ def merge_and_upload_issue(job, session, log_area, status_container, state_displ
         current_wikitext = f.read()
 
     anchor_pdf_page = find_anchor_offset(current_wikitext)
-    save_state(idx, "merging", last_file_path=short_name)
 
     for page_num in pages_to_process:
         final_text = all_extracted_text.get(page_num, "").strip()
@@ -434,180 +436,267 @@ def merge_and_upload_issue(job, session, log_area, status_container, state_displ
         os.remove(temp_master_path)
 
     job["uploaded"] = True
-    save_state(idx + 1, "running", last_file_path=short_name)
-    state_display.markdown(f"**Current State:**\n- Wiki Page Index: `{idx + 1}`")
+
+    # Update in-memory status so the table reflects completion immediately
+    if "p08_issues" in st.session_state:
+        for item in st.session_state["p08_issues"]:
+            if item["wiki_title"] == wiki_title:
+                item["is_proofread"] = True
+                item["status"] = "✅ Proofread ({{ps|1}})"
+                item["selected"] = False
+                item["wikitext"] = cleaned_text
+
     status_container.success(f"✅ Uploaded #{idx + 1}: `{wiki_title}` (`{short_name}`)")
 
+def load_periodical_issues(input_folder, base_title):
+    """Scans local PDFs, queries Wiki /Text pages, batch-fetches wikitext, and checks {{ps|1}} status."""
+    session = requests.Session()
+    get_csrf_token(session)
+
+    local_pdf_map = build_local_pdf_map(input_folder)
+    if not local_pdf_map:
+        return None, "No PDF files found in the local directory."
+
+    wiki_pages = get_all_wiki_text_pages(base_title, session=session)
+    if not wiki_pages:
+        return None, f"No `/Text` subpages found on Wiki under `{base_title}`."
+
+    batched_wikitexts = fetch_wikitext_batch(wiki_pages, session=session)
+
+    issues = []
+    for idx, wiki_title in enumerate(wiki_pages):
+        raw_text = batched_wikitexts.get(wiki_title)
+        if not raw_text:
+            raw_text, _ = fetch_wikitext(wiki_title, session=session)
+        raw_text = raw_text or ""
+
+        norm_text = normalize_page_templates(raw_text, session)
+        wiki_pdf_name = extract_pdf_filename_from_wikitext(norm_text)
+        is_proofread = has_ps1_tag(norm_text)
+
+        pdf_path = None
+        short_name = ""
+        page_count = 0
+
+        if wiki_pdf_name:
+            lookup_key = wiki_pdf_name.lower().replace(" ", "_")
+            pdf_path = local_pdf_map.get(lookup_key)
+            if pdf_path and os.path.exists(pdf_path):
+                short_name = os.path.basename(pdf_path)
+                try:
+                    with fitz.open(pdf_path) as doc:
+                        page_count = len(doc)
+                except Exception:
+                    page_count = 0
+
+        if not wiki_pdf_name:
+            status_label = "⚠️ No {{page}} tag"
+            default_select = False
+        elif not pdf_path:
+            status_label = f"❌ Missing PDF ({wiki_pdf_name})"
+            default_select = False
+        elif is_proofread:
+            status_label = "✅ Proofread ({{ps|1}})"
+            default_select = False
+        else:
+            status_label = "⏳ Unproofread"
+            default_select = True
+
+        issues.append({
+            "idx": idx,
+            "selected": default_select,
+            "wiki_title": wiki_title,
+            "status": status_label,
+            "is_proofread": is_proofread,
+            "wiki_pdf_name": wiki_pdf_name or "",
+            "pdf_path": pdf_path,
+            "short_name": short_name,
+            "page_count": page_count,
+            "wikitext": norm_text
+        })
+
+    return issues, None
+
 # ==============================================================================
-# 2. STATE MANAGEMENT
-# ==============================================================================
-
-def load_state():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, 'r') as f:
-            state = json.load(f)
-            if 'current_page_num' in state:
-                del state['current_page_num']
-            return state
-    return {"current_file_index": 0, "status": "idle", "last_processed": None}
-
-def save_state(file_index, status, last_file_path=None):
-    state = {
-        "current_file_index": file_index,
-        "status": status,
-        "last_processed": last_file_path
-    }
-    with open(STATE_FILE, 'w') as f:
-        json.dump(state, f, indent=4)
-
-def reset_state():
-    if os.path.exists(STATE_FILE):
-        os.remove(STATE_FILE)
-    return {"current_file_index": 0, "status": "idle", "last_processed": None}
-
-# ==============================================================================
-# 3. UI & MAIN LOGIC
+# 2. UI & MAIN LOGIC
 # ==============================================================================
 
 if __name__ == '__main__':
     st.title("🤖 Fully Automated Periodical Processor")
 
-    # --- Sidebar Controls ---
-    st.sidebar.header("Configuration")
-    input_folder = st.sidebar.text_input("Local PDF Folder", value="/media/sarah/4TB/Projects/Bahai.works/English/Canada/1948-1975_CBN/")
-    base_title = st.sidebar.text_input("Base Wiki Title", value="Canadian_Bahá’í_News")
+    # --- Step 1: Configuration & Load Bar (On Main Page) ---
+    with st.container(border=True):
+        c_folder, c_title, c_ocr, c_load = st.columns([3, 2, 2, 1.2])
+        with c_folder:
+            input_folder = st.text_input(
+                "Local PDF Folder",
+                value="/media/sarah/4TB/Projects/Bahai.works/English/Canada/1948-1975_CBN/"
+            )
+        with c_title:
+            base_title = st.text_input(
+                "Base Wiki Title",
+                value="Canadian_Bahá’í_News"
+            )
+        with c_ocr:
+            ocr_strategy = st.radio(
+                "OCR Strategy",
+                ["Gemini (Default)", "DocAI Only"],
+                horizontal=True,
+                help="DocAI Only skips Gemini and goes straight to Google Cloud Vision OCR."
+            )
+        with c_load:
+            st.write("")
+            load_clicked = st.button("📥 Load Periodical", type="primary", use_container_width=True)
 
-    run_mode = st.sidebar.radio("Run Mode", ["Test (1 PDF Only)", "Production (All PDFs)"])
+    if load_clicked:
+        if not input_folder or not os.path.exists(input_folder):
+            st.error("Please provide a valid local PDF folder path.")
+            st.stop()
+        if not base_title.strip():
+            st.error("Please provide a valid Base Wiki Title.")
+            st.stop()
 
-    ocr_strategy = st.sidebar.radio(
-        "OCR Strategy", 
-        ["Gemini (Default)", "DocAI Only"], 
-        help="DocAI Only skips Gemini and goes straight to Google Cloud Vision OCR."
-    )
-
-    st.sidebar.divider()
-
-    # Load State
-    state = load_state()
-
-    if st.sidebar.button("🗑️ Reset State (Start Over)"):
-        state = reset_state()
-        st.sidebar.success("State cleared.")
-        st.rerun()
-
-    state_display = st.sidebar.empty()
-    state_display.markdown(f"**Current State:**\n- Wiki Page Index: `{state['current_file_index']}`")
-
-    # --- Manual State Modification ---
-    with st.sidebar.expander("🔧 Modify Position"):
-        # Input fields initialized with current state values
-        new_file_index = st.number_input("Wiki Page Index (0-based)", min_value=0, value=state['current_file_index'])
-        
-        if st.button("Update State"):
-            # Update the JSON file with your manual values
-            save_state(new_file_index, "manual_override", last_file_path=state.get('last_processed'))
-            st.sidebar.success("State updated!")
-            time.sleep(0.5) 
+        with st.spinner(f"🔍 Fetching `{base_title}` subpages, checking `{{{{ps|1}}}}` status, and matching local PDFs..."):
+            issues, err = load_periodical_issues(input_folder.strip(), base_title.strip())
+            if err:
+                st.error(err)
+                st.stop()
+            st.session_state["p08_issues"] = issues
+            st.session_state["p08_loaded_title"] = base_title.strip()
+            st.session_state["p08_editor_ver"] = st.session_state.get("p08_editor_ver", 0) + 1
             st.rerun()
 
-    # --- Main Area ---
-
-    if not input_folder or not os.path.exists(input_folder):
-        st.warning("Please provide a valid local folder path.")
+    if "p08_issues" not in st.session_state:
+        st.info("👆 Enter the **Local PDF Folder** and **Base Wiki Title** above, then click **📥 Load Periodical** to populate the issue checklist.")
         st.stop()
 
-    if not base_title.strip():
-        st.warning("Please provide a valid Base Wiki Title.")
-        st.stop()
+    issues_list = st.session_state["p08_issues"]
 
-    # 1. Build Local PDF Map & Query Wiki Pages
-    local_pdf_map = build_local_pdf_map(input_folder)
-    if not local_pdf_map:
-        st.error("No PDF files found in the local directory.")
-        st.stop()
+    # --- Step 2: Summary Metrics & Selection Toolbar ---
+    total_issues = len(issues_list)
+    unproofread_count = sum(1 for x in issues_list if x["status"] == "⏳ Unproofread")
+    proofread_count = sum(1 for x in issues_list if x["is_proofread"])
+    missing_count = total_issues - unproofread_count - proofread_count
 
-    with st.spinner(f"🔍 Searching Bahai.works for `{base_title}` subpages..."):
-        wiki_pages = get_all_wiki_text_pages(base_title)
-    total_pages_count = len(wiki_pages)
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("📚 Total Issues", total_issues)
+    m2.metric("⏳ Unproofread (Ready)", unproofread_count)
+    m3.metric("✅ Already Proofread ({{ps|1}})", proofread_count)
+    m4.metric("⚠️ Missing PDF / Tag", missing_count)
 
-    if total_pages_count == 0:
-        st.error(f"No `/Text` subpages found on Wiki under `{base_title}`.")
-        st.stop()
+    b_col1, b_col2, b_col3, b_col4 = st.columns([1.5, 1.5, 1.5, 2.5])
+    with b_col1:
+        if st.button("☑️ Select All Unproofread", use_container_width=True):
+            for x in issues_list:
+                x["selected"] = (x["status"] == "⏳ Unproofread")
+            st.session_state["p08_editor_ver"] = st.session_state.get("p08_editor_ver", 0) + 1
+            st.rerun()
+    with b_col2:
+        if st.button("✅ Select All (Valid PDF)", use_container_width=True):
+            for x in issues_list:
+                x["selected"] = bool(x["pdf_path"])
+            st.session_state["p08_editor_ver"] = st.session_state.get("p08_editor_ver", 0) + 1
+            st.rerun()
+    with b_col3:
+        if st.button("⬜ Deselect All", use_container_width=True):
+            for x in issues_list:
+                x["selected"] = False
+            st.session_state["p08_editor_ver"] = st.session_state.get("p08_editor_ver", 0) + 1
+            st.rerun()
+    with b_col4:
+        filter_text = st.text_input(
+            "Filter by Issue / Filename",
+            value="",
+            placeholder="e.g. Volume 10 or Issue 5...",
+            label_visibility="collapsed"
+        )
 
-    # --- GUARD CLAUSE ---
-    if state['current_file_index'] >= total_pages_count:
-        st.warning(f"⚠️ Saved index ({state['current_file_index']}) is larger than total Wiki pages ({total_pages_count}). Resetting start position to 0.")
-        state['current_file_index'] = 0
-        # Save the corrected state immediately
-        save_state(0, "auto_reset")
+    # Build table rows for st.data_editor
+    editor_ver = st.session_state.get("p08_editor_ver", 0)
+    visible_rows = []
+    for item in issues_list:
+        if filter_text.strip():
+            q = filter_text.strip().lower()
+            if q not in item["wiki_title"].lower() and q not in item["short_name"].lower():
+                continue
+        visible_rows.append({
+            "#": item["idx"] + 1,
+            "Select": item["selected"],
+            "Wiki Page": item["wiki_title"],
+            "Status": item["status"],
+            "Local PDF": item["short_name"] or "—",
+            "Pages": item["page_count"]
+        })
 
-    st.info(f"🌐 Found **{total_pages_count}** `/Text` pages on Wiki under `{base_title}` (and **{len(local_pdf_map)}** local PDFs indexed).")
+    edited_rows = st.data_editor(
+        visible_rows,
+        use_container_width=True,
+        height=380,
+        hide_index=True,
+        disabled=["#", "Wiki Page", "Status", "Local PDF", "Pages"],
+        column_config={
+            "#": st.column_config.NumberColumn("#", width="small"),
+            "Select": st.column_config.CheckboxColumn("Select", default=False, width="small"),
+            "Wiki Page": st.column_config.TextColumn("Wiki Page", width="large"),
+            "Status": st.column_config.TextColumn("Status", width="medium"),
+            "Local PDF": st.column_config.TextColumn("Local PDF", width="medium"),
+            "Pages": st.column_config.NumberColumn("Pages", width="small"),
+        },
+        key=f"p08_issue_table_{editor_ver}"
+    )
 
-    # 2. Status Display
+    # Sync user edits back to st.session_state["p08_issues"]
+    edited_map = {row["Wiki Page"]: row["Select"] for row in edited_rows}
+    for item in issues_list:
+        if item["wiki_title"] in edited_map:
+            item["selected"] = bool(edited_map[item["wiki_title"]])
+
+    selected_items = [x for x in issues_list if x["selected"] and x["pdf_path"] and x["page_count"] > 0]
+    total_selected_pages = sum(x["page_count"] for x in selected_items)
+
+    # --- Step 3: Action Buttons ---
     status_container = st.container(border=True)
     log_area = st.empty()
 
-    # 3. Action Buttons
     col1, col2 = st.columns(2)
     with col1:
-        start_btn = st.button("🚀 Start / Resume Automation", type="primary", use_container_width=True)
+        start_btn = st.button(
+            f"🚀 Process Selected ({len(selected_items)} Issue(s), {total_selected_pages} Pages)",
+            type="primary",
+            use_container_width=True,
+            disabled=(len(selected_items) == 0)
+        )
     with col2:
-        stop_info = st.button("🛑 Stop (Finish Current Page)", use_container_width=True)
+        stop_info = st.button("🛑 Stop Execution", use_container_width=True)
+        if stop_info:
+            st.warning("Execution stopped.")
+            st.stop()
 
-    # 4. Automation Loop (Continuous 100-Worker Cross-Issue Pool)
+    # --- Step 4: Continuous 100-Worker Cross-Issue Pool ---
     if start_btn:
         session = requests.Session()
         try:
             with st.spinner("🔐 Authenticating with MediaWiki..."):
                 get_csrf_token(session)
-                st.success("Authenticated successfully!")
         except Exception as e:
             st.error(f"Authentication Failed: {e}")
             st.stop()
 
-        current_idx = state['current_file_index']
-        end_idx = current_idx + 1 if run_mode.startswith("Test") else total_pages_count
-        target_slice = list(range(current_idx, end_idx))
-        target_titles = [wiki_pages[i] for i in target_slice]
-
-        # 4a. Batch Pre-fetch All Target Wiki Pages at Once
-        with st.spinner(f"🌐 Batch-fetching wikitext for {len(target_titles)} issue(s)..."):
-            batched_wikitexts = fetch_wikitext_batch(target_titles, session=session)
-
         issue_jobs = []
-        for idx in target_slice:
-            wiki_title = wiki_pages[idx]
-            live_wikitext = batched_wikitexts.get(wiki_title)
-            if not live_wikitext:
-                live_wikitext, error = fetch_wikitext(wiki_title, session=session)
-                if error or not live_wikitext:
-                    st.error(f"CRITICAL ERROR: Could not fetch '{wiki_title}'. Error: {error}")
-                    st.stop()
+        for item in selected_items:
+            idx = item["idx"]
+            wiki_title = item["wiki_title"]
+            wiki_pdf_name = item["wiki_pdf_name"]
+            pdf_path = item["pdf_path"]
+            short_name = item["short_name"]
+            live_wikitext = item["wikitext"]
 
-            live_wikitext = normalize_page_templates(live_wikitext, session)
-            wiki_pdf_name = extract_pdf_filename_from_wikitext(live_wikitext)
-            if not wiki_pdf_name:
-                st.warning(f"⚠️ No `{{{{page|...|file=...}}}}` tag found on `{wiki_title}`. Skipping.")
-                continue
-
-            lookup_key = wiki_pdf_name.lower().replace(" ", "_")
-            pdf_path = local_pdf_map.get(lookup_key)
-            if not pdf_path:
-                st.warning(f"⚠️ Wiki page `{wiki_title}` expects `{wiki_pdf_name}`, which was not found in `{input_folder}`. Skipping.")
-                continue
-
-            short_name = os.path.basename(pdf_path)
             wip_file_path = os.path.join(project_root, f"wip_{short_name}.txt")
             if not os.path.exists(wip_file_path):
                 with open(wip_file_path, "w", encoding="utf-8") as f:
                     f.write(live_wikitext)
 
-            with fitz.open(pdf_path) as doc:
-                total_pages = len(doc)
-            pages_to_process = list(range(1, total_pages + 1))
-            if not pages_to_process:
-                continue
-
+            pages_to_process = list(range(1, item["page_count"] + 1))
             temp_master_path = os.path.join(project_root, f"temp_master_{short_name}.json")
             shared_results = {}
             if os.path.exists(temp_master_path):
@@ -634,13 +723,8 @@ if __name__ == '__main__':
                 "uploaded": False
             })
 
-        if not issue_jobs:
-            st.warning("No valid issues with matching local PDFs found to process.")
-            st.stop()
-
-        total_queued_pages = sum(len(j["pages_to_process"]) for j in issue_jobs)
         status_container.markdown(
-            f"### 🚀 Queued **{len(issue_jobs)}** Issue(s) (**{total_queued_pages}** total pages) into 100-Worker Pool"
+            f"### 🚀 Queued **{len(issue_jobs)}** Issue(s) (**{total_selected_pages}** total pages) into 100-Worker Pool"
         )
 
         ocr_box = st.container(border=True)
@@ -662,7 +746,6 @@ if __name__ == '__main__':
             "warnings": warnings_holder,
         }
 
-        # 4b. Submit All Pages Across All Issues into a Single 100-Worker Executor
         for attempt in range(2):
             fatal_error = False
             fatal_error_msg = ""
@@ -689,7 +772,6 @@ if __name__ == '__main__':
                     for page_num in job["pages_to_process"]
                 }
 
-            # Poll progress and upload each issue in sequence as soon as its pages complete
             next_upload_ptr = 0
             while True:
                 all_done = render_multi_issue_telemetry(issue_jobs, global_log_list, ui_holders)
@@ -708,9 +790,10 @@ if __name__ == '__main__':
                         continue
                     if all(f.done() for f in candidate["futures"].values()):
                         with _fitz_lock:
-                            if candidate["pdf_doc"] and not candidate["pdf_doc"].is_closed:
+                            if candidate["pdf_doc"] is not None and not candidate["pdf_doc"].is_closed:
                                 candidate["pdf_doc"].close()
-                        merge_and_upload_issue(candidate, session, log_area, status_container, state_display)
+                            candidate["pdf_doc"] = None
+                        merge_and_upload_issue(candidate, session, log_area, status_container)
                         next_upload_ptr += 1
                     else:
                         break
@@ -722,8 +805,9 @@ if __name__ == '__main__':
             executor.shutdown(wait=False, cancel_futures=True)
             with _fitz_lock:
                 for job in issue_jobs:
-                    if job["pdf_doc"] and not job["pdf_doc"].is_closed:
+                    if job["pdf_doc"] is not None and not job["pdf_doc"].is_closed:
                         job["pdf_doc"].close()
+                    job["pdf_doc"] = None
 
             if fatal_error:
                 if attempt == 0:
@@ -740,6 +824,5 @@ if __name__ == '__main__':
             else:
                 break
 
-        st.success("🎉 All Queued Periodical Issues Processed and Uploaded!")
-        save_state(end_idx, "done", last_file_path=issue_jobs[-1]["short_name"])
-        state_display.markdown(f"**Current State:**\n- Wiki Page Index: `{end_idx}`")
+        st.session_state["p08_editor_ver"] = st.session_state.get("p08_editor_ver", 0) + 1
+        st.success("🎉 All Selected Periodical Issues Processed and Uploaded!")
