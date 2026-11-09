@@ -9,6 +9,13 @@ from src.gemini_processor import proofread_with_formatting, transcribe_with_docu
 _fitz_lock = threading.Lock()
 _docai_semaphore = threading.Semaphore(10)
 _checkpoint_lock = threading.Lock()
+_file_locks = {}
+
+def _get_file_lock(file_path):
+    with _checkpoint_lock:
+        if file_path not in _file_locks:
+            _file_locks[file_path] = threading.Lock()
+        return _file_locks[file_path]
 
 def get_page_image_data(pdf_path, page_num_1_based):
     with _fitz_lock:
@@ -31,11 +38,18 @@ def get_page_image_data(pdf_path, page_num_1_based):
             doc.close()
     return Image.open(io.BytesIO(png_bytes))
 
-def process_single_page(page_num, pdf_path, ocr_strategy, temp_file_path, shared_results, shared_log_list):
-    with _checkpoint_lock:
+def process_single_page(page_num, pdf_path, ocr_strategy, temp_file_path, shared_results, shared_log_list, log_prefix="", global_log_list=None):
+    file_lock = _get_file_lock(temp_file_path)
+
+    def _log(msg):
+        shared_log_list.append(msg)
+        if global_log_list is not None:
+            global_log_list.append(f"{log_prefix}{msg}" if log_prefix else msg)
+
+    with file_lock:
         existing_val = shared_results.get(str(page_num)) or shared_results.get(page_num)
         if existing_val and "ERROR" not in existing_val:
-            shared_log_list.append(f"⏩ Skipping Page {page_num} (Already processed)")
+            _log(f"⏩ Skipping Page {page_num} (Already processed)")
             return True
 
     img = get_page_image_data(pdf_path, page_num)
@@ -46,19 +60,19 @@ def process_single_page(page_num, pdf_path, ocr_strategy, temp_file_path, shared
 
     try:
         if ocr_strategy == "DocAI Only":
-            shared_log_list.append(f"🤖 [DocAI Only Mode] Processing Page {page_num}...")
+            _log(f"🤖 [DocAI Only Mode] Processing Page {page_num}...")
             with _docai_semaphore:
                 raw_ocr = transcribe_with_document_ai(img)
             if "DOCAI_ERROR" in raw_ocr:
-                shared_log_list.append(f"⚠️ DocAI Failed on Page {page_num}. Attempting Gemini Rescue...")
+                _log(f"⚠️ DocAI Failed on Page {page_num}. Attempting Gemini Rescue...")
                 final_text = proofread_with_formatting(img)
             else:
                 final_text = reformat_raw_text(raw_ocr)
                 if "FORMATTING_ERROR" in final_text:
-                    shared_log_list.append(f"⚠️ DocAI Formatting Failed on Page {page_num}. Attempting Gemini Rescue...")
+                    _log(f"⚠️ DocAI Formatting Failed on Page {page_num}. Attempting Gemini Rescue...")
                     rescue_text = proofread_with_formatting(img)
                     if "GEMINI_ERROR" in rescue_text or "Recitation" in rescue_text or "Copyright" in rescue_text:
-                        shared_log_list.append(f"⚠️ Rescue also failed on Page {page_num}. Saving RAW OCR text.")
+                        _log(f"⚠️ Rescue also failed on Page {page_num}. Saving RAW OCR text.")
                         final_text = raw_ocr + "\n\n"
                     else:
                         final_text = rescue_text
@@ -67,7 +81,7 @@ def process_single_page(page_num, pdf_path, ocr_strategy, temp_file_path, shared
             is_gemini_error = "GEMINI_ERROR" in final_text or "Recitation" in final_text or "Copyright" in final_text
 
             if is_gemini_error:
-                shared_log_list.append(f"⚠️ Page {page_num} blocked/failed on Gemini. Falling back to DocAI...")
+                _log(f"⚠️ Page {page_num} blocked/failed on Gemini. Falling back to DocAI...")
                 with _docai_semaphore:
                     raw_ocr = transcribe_with_document_ai(img)
                 if "DOCAI_ERROR" in raw_ocr:
@@ -75,23 +89,23 @@ def process_single_page(page_num, pdf_path, ocr_strategy, temp_file_path, shared
                 else:
                     formatted_text = reformat_raw_text(raw_ocr)
                     if "FORMATTING_ERROR" in formatted_text:
-                        shared_log_list.append(f"⚠️ Formatting failed on Page {page_num}. Saving RAW OCR text.")
+                        _log(f"⚠️ Formatting failed on Page {page_num}. Saving RAW OCR text.")
                         final_text = raw_ocr + "\n\n"
                     else:
                         final_text = formatted_text
     except Exception as e:
-        shared_log_list.append(f"🚨 FATAL_RATE_LIMIT on Page {page_num}: {e}")
+        _log(f"🚨 FATAL_RATE_LIMIT on Page {page_num}: {e}")
         return False
 
     system_error_flags = ["GEMINI_ERROR", "DOCAI_ERROR", "FORMATTING_ERROR"]
-    with _checkpoint_lock:
+    with file_lock:
         if not final_text or any(flag in final_text for flag in system_error_flags):
             error_summary = final_text if final_text else "Empty Response"
-            shared_log_list.append(f"❌ SKIPPING Page {page_num} due to failure: {error_summary}")
+            _log(f"❌ SKIPPING Page {page_num} due to failure: {error_summary}")
             shared_results[str(page_num)] = ""
         else:
             shared_results[str(page_num)] = final_text
-            shared_log_list.append(f"✅ Saved Page {page_num} locally")
+            _log(f"✅ Saved Page {page_num} locally")
 
         atomic_tmp = f"{temp_file_path}.tmp"
         with open(atomic_tmp, "w", encoding="utf-8") as f:
