@@ -1352,7 +1352,7 @@ with tab_main:
 
                 # --- CHECK IF SPLIT / MANUAL REVIEW IS NEEDED BEFORE STEP 3 ---
                 split_reasons = []
-                for sp in state["subpages"]:
+                for sp in selected_subpages:
                     route_info = state.get("route_map", {}).get(sp, {})
                     if not route_info.get("pdf_pages"):
                         split_reasons.append(f"`{sp}` (Unmapped / No {{page}} tags)")
@@ -1370,7 +1370,7 @@ with tab_main:
                 else:
                     # --- AUTO STEP 3: Offline Batch Processing (No Splits Needed) ---
                     log_container.write("💾 Processing subpages locally...")
-                    subpages_to_process = [sp for sp in state["subpages"] if sp not in state.get("completed_subpages", [])]
+                    subpages_to_process = [sp for sp in selected_subpages if sp not in state.get("completed_subpages", [])]
                     
                     for active_chapter in subpages_to_process:
                         current_wikitext_for_year = state["wikitext_cache"].get(active_chapter, "")
@@ -1416,7 +1416,7 @@ with tab_main:
                         
                     # --- AUTO STEP 4: Wiki Upload ---
                     log_container.write("🌐 No split logic required. Auto-uploading to Wiki in parallel...")
-                    remaining_uploads = [sp for sp in state["subpages"] if sp not in state.get("uploaded_subpages", [])]
+                    remaining_uploads = [sp for sp in selected_subpages if sp not in state.get("uploaded_subpages", [])]
                     up_prog = log_container.progress(0)
                     up_status = log_container.empty()
 
@@ -1433,7 +1433,7 @@ with tab_main:
                             time.sleep(1)
                         retry_countdown.empty()
 
-                        remaining_uploads = [sp for sp in state["subpages"] if sp not in state.get("uploaded_subpages", [])]
+                        remaining_uploads = [sp for sp in selected_subpages if sp not in state.get("uploaded_subpages", [])]
                         spam_blocked_book, hard_failures = upload_subpages_parallel(
                             remaining_uploads, pdf_dir, safe_title, state, session, up_prog, up_status, log_container
                         )
@@ -1527,30 +1527,19 @@ with tab_main:
 
     # --- STEP 1: EXPLICIT AUTHORIZATION FOR ROUTE MAPPING ---
     st.divider()
-    st.subheader("Step 1: Generate Chapter Map")
+    st.subheader("Step 1: Generate Chapter Map & Select Chapters")
 
     if not state.get("subpages"):
         st.info(f"Route map is missing or has been reset for **{target_book}**.")
-        force_include_ps1 = st.checkbox(
-            "🔄 Force Include Already Proofread (`{{ps|1}}`) Pages",
-            value=False,
-            help="Check this to re-proofread chapters even if their header already contains {{ps|1}}."
-        )
         if st.button("🛠️ Generate Chapter Map", type="primary"):
-            with st.spinner("🔍 Scanning wiki subpages and building route map..."):
+            with st.spinner("🔍 Scanning wiki subpages, checking `{{ps|1}}` status, and building route map..."):
                 subpages = get_all_subpages(target_book, session)
-                route_map, master_pdf_filename, wikitext_cache, ordered_subpages, skipped_ps1 = build_sequential_route_map(
-                    subpages, session, input_folder, include_proofread=force_include_ps1
+                route_map, master_pdf_filename, wikitext_cache, ordered_subpages, _ = build_sequential_route_map(
+                    subpages, session, input_folder
                 )
                 
                 if not route_map or not master_pdf_filename:
-                    if skipped_ps1 > 0:
-                        st.warning(
-                            f"⚠️ All **{skipped_ps1}** subpage(s) for **{target_book}** were skipped because they are already marked as proofread (`{{{{ps|1}}}}`).\n\n"
-                            f"Check **'🔄 Force Include Already Proofread (`{{{{ps|1}}}}`) Pages'** above and click **Generate Chapter Map** again to re-proofread this book."
-                        )
-                    else:
-                        st.error(f"❌ No `{{{{page|...}}}}` tags with `file=` and `page=` parameters were found across {len(subpages)} subpage(s) of **{target_book}**.")
+                    st.error(f"❌ No `{{{{page|...}}}}` tags with `file=` and `page=` parameters were found across {len(subpages)} subpage(s) of **{target_book}**.")
                     st.stop()
                     
                 state["subpages"] = ordered_subpages
@@ -1558,23 +1547,122 @@ with tab_main:
                 state["master_pdf"] = master_pdf_filename
                 state["wikitext_cache"] = wikitext_cache
                 save_book_state(safe_title, state)
+                st.session_state[f"map_ed_ver_{safe_title}"] = st.session_state.get(f"map_ed_ver_{safe_title}", 0) + 1
                 st.rerun()
         st.stop() # Halts all execution until authorized
 
-    # Display Map
-    with st.expander(f"📖 Map: {target_book} ({len(state['subpages'])} subpages)", expanded=False):
-        map_display = []
-        for sp in state["subpages"]:
-            pdf_pages = state["route_map"].get(sp, {}).get("pdf_pages", [])
-            page_labels = [str(p["pdf_num"]) for p in pdf_pages]
-            needs_split = state["route_map"].get(sp, {}).get("needs_split", False)
-            
-            map_display.append({
-                "Wiki Subpage": sp,
-                "Mapped PDF Pages": ", ".join(page_labels) if page_labels else "None",
-                "Needs Split Logic": "Yes" if needs_split else "No"
-            })
-        st.dataframe(map_display, width='stretch', height=250, hide_index=True)
+    # Backfill `is_proofread` and `selected` for any older cached state files
+    for sp in state["subpages"]:
+        r_info = state["route_map"].setdefault(sp, {})
+        if "is_proofread" not in r_info:
+            r_info["is_proofread"] = has_ps1_tag(state.get("wikitext_cache", {}).get(sp, ""))
+        if "selected" not in r_info:
+            r_info["selected"] = not r_info["is_proofread"]
+
+    total_ch = len(state["subpages"])
+    proofread_ch = sum(1 for sp in state["subpages"] if state["route_map"].get(sp, {}).get("is_proofread", False))
+    unproofread_ch = total_ch - proofread_ch
+    split_ch = sum(
+        1 for sp in state["subpages"]
+        if state["route_map"].get(sp, {}).get("needs_split", False) or not state["route_map"].get(sp, {}).get("pdf_pages")
+    )
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("📚 Total Chapters", total_ch)
+    m2.metric("⏳ Unproofread", unproofread_ch)
+    m3.metric("✅ Already Proofread ({{ps|1}})", proofread_ch)
+    m4.metric("✂️ Needs Split / Unmapped", split_ch)
+
+    b_col1, b_col2, b_col3 = st.columns(3)
+    with b_col1:
+        if st.button("☑️ Select All Unproofread", width='stretch'):
+            for sp in state["subpages"]:
+                state["route_map"][sp]["selected"] = not state["route_map"][sp].get("is_proofread", False)
+            save_book_state(safe_title, state)
+            st.session_state[f"map_ed_ver_{safe_title}"] = st.session_state.get(f"map_ed_ver_{safe_title}", 0) + 1
+            st.rerun()
+    with b_col2:
+        if st.button("✅ Select All Chapters", width='stretch'):
+            for sp in state["subpages"]:
+                state["route_map"][sp]["selected"] = True
+            save_book_state(safe_title, state)
+            st.session_state[f"map_ed_ver_{safe_title}"] = st.session_state.get(f"map_ed_ver_{safe_title}", 0) + 1
+            st.rerun()
+    with b_col3:
+        if st.button("⬜ Deselect All", width='stretch'):
+            for sp in state["subpages"]:
+                state["route_map"][sp]["selected"] = False
+            save_book_state(safe_title, state)
+            st.session_state[f"map_ed_ver_{safe_title}"] = st.session_state.get(f"map_ed_ver_{safe_title}", 0) + 1
+            st.rerun()
+
+    map_ed_ver = st.session_state.get(f"map_ed_ver_{safe_title}", 0)
+    map_display = []
+    for idx, sp in enumerate(state["subpages"]):
+        r_info = state["route_map"].get(sp, {})
+        pdf_pages = r_info.get("pdf_pages", [])
+        page_labels = [str(p["pdf_num"]) for p in pdf_pages]
+        needs_split = r_info.get("needs_split", False)
+        is_proofread = r_info.get("is_proofread", False)
+
+        if not pdf_pages:
+            status_label = "⚠️ Unmapped (Ghost)"
+        elif is_proofread:
+            status_label = "✅ Proofread ({{ps|1}})"
+        else:
+            status_label = "⏳ Unproofread"
+
+        map_display.append({
+            "#": idx + 1,
+            "Select": r_info.get("selected", not is_proofread),
+            "Wiki Subpage": sp,
+            "Status": status_label,
+            "Mapped PDF Pages": ", ".join(page_labels) if page_labels else "None",
+            "Needs Split Logic": "Yes" if needs_split else "No"
+        })
+
+    edited_map_rows = st.data_editor(
+        map_display,
+        width='stretch',
+        height=320,
+        hide_index=True,
+        disabled=["#", "Wiki Subpage", "Status", "Mapped PDF Pages", "Needs Split Logic"],
+        column_config={
+            "#": st.column_config.NumberColumn("#", width="small"),
+            "Select": st.column_config.CheckboxColumn("Select", default=True, width="small"),
+            "Wiki Subpage": st.column_config.TextColumn("Wiki Subpage", width="large"),
+            "Status": st.column_config.TextColumn("Status", width="medium"),
+            "Mapped PDF Pages": st.column_config.TextColumn("Mapped PDF Pages", width="medium"),
+            "Needs Split Logic": st.column_config.TextColumn("Needs Split Logic", width="small"),
+        },
+        key=f"book_map_table_{safe_title}_{map_ed_ver}"
+    )
+
+    # Persist any checkbox changes back into state
+    selection_changed = False
+    for row in edited_map_rows:
+        sp_title = row["Wiki Subpage"]
+        new_sel = bool(row["Select"])
+        if state["route_map"].get(sp_title, {}).get("selected") != new_sel:
+            state["route_map"][sp_title]["selected"] = new_sel
+            selection_changed = True
+    if selection_changed:
+        save_book_state(safe_title, state)
+
+    selected_subpages = [
+        sp for sp in state["subpages"]
+        if state["route_map"].get(sp, {}).get("selected", True)
+    ]
+
+    if not selected_subpages:
+        st.warning("⚠️ No chapters are selected in the table above. Check at least one chapter to proceed.")
+        st.stop()
+
+    selected_pdf_pages = sorted({
+        p["pdf_num"]
+        for sp in selected_subpages
+        for p in state["route_map"].get(sp, {}).get("pdf_pages", [])
+    })
 
     # ==============================================================================
     # STEP 2: MASTER JSON GENERATION
@@ -1624,33 +1712,39 @@ with tab_main:
         st.caption(f"📁 Using PDF: `{local_pdf_path}`")
         st.success(f"✅ Master JSON already exists for {state['master_pdf']}!")
         with st.expander("Re-generate Master JSON"):
-            st.warning("Only do this if you need to re-OCR the entire document. This will overwrite the existing file.")
+            st.warning("Only do this if you need to re-OCR the selected chapters. This will overwrite the existing file.")
             col_gen, col_stop = st.columns([1, 1])
             with col_gen:
-                regenerate_master = st.button("🔄 Re-generate Master JSON", width='stretch')
+                regenerate_master = st.button(
+                    f"🔄 Re-generate Master JSON ({len(selected_subpages)} Ch, {len(selected_pdf_pages)} Pages)",
+                    width='stretch'
+                )
             with col_stop:
                 if st.button("🛑 Stop Generation", key="stop_regen", width='stretch'):
                     st.warning("Execution stopped.")
                     st.stop()
     else:
-        st.info(f"Master JSON not found for {state['master_pdf']}. This step will OCR all mapped pages.")
+        st.info(
+            f"Master JSON not found for `{state['master_pdf']}`. "
+            f"This step will OCR **{len(selected_pdf_pages)}** mapped PDF page(s) across **{len(selected_subpages)}** selected chapter(s)."
+        )
         col_gen, col_stop = st.columns([1, 1])
         with col_gen:
-            regenerate_master = st.button("🚀 Generate Master JSON", type="primary", width='stretch')
+            regenerate_master = st.button(
+                f"🚀 Generate Master JSON ({len(selected_subpages)} Ch, {len(selected_pdf_pages)} Pages)",
+                type="primary",
+                width='stretch'
+            )
         with col_stop:
             if st.button("🛑 Stop Generation", key="stop_gen", width='stretch'):
                 st.warning("Execution stopped.")
                 st.stop()
 
     if master_json_path and (not master_json_exists and locals().get('regenerate_master', False) or locals().get('regenerate_master', False)):
-        all_mapped_pages = set()
-        for ch, data in state["route_map"].items():
-            for p in data.get("pdf_pages", []):
-                all_mapped_pages.add(p["pdf_num"])
-        pages_to_process = sorted(list(all_mapped_pages))
+        pages_to_process = selected_pdf_pages
 
         if not pages_to_process:
-            st.warning("No PDF pages found in the route map to process.")
+            st.warning("No PDF pages found in the selected chapters to process.")
         else:
             master_log = st.container(border=True)
             master_log.write(f"⚙️ Initiating full OCR processing for {len(pages_to_process)} pages...")
@@ -1740,11 +1834,9 @@ with tab_main:
     if not master_json_exists:
         st.stop()
 
-
     # --- STEP 3 & 4: AUTOMATED BATCH PROCESSING & WIKI UPLOAD ---
-    subpages_to_process = [sp for sp in state["subpages"] if sp not in state.get("completed_subpages", [])]
-    subpages_to_upload = [sp for sp in state["subpages"] if sp not in state.get("uploaded_subpages", [])]
-
+    subpages_to_process = [sp for sp in selected_subpages if sp not in state.get("completed_subpages", [])]
+    subpages_to_upload = [sp for sp in selected_subpages if sp not in state.get("uploaded_subpages", [])]
 
     # ==============================================================================
     # STEP 3: OFFLINE BATCH PROCESSING
