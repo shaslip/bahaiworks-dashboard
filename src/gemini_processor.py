@@ -252,7 +252,22 @@ def transcribe_with_document_ai(image):
         check_fatal_rate_limit(e)
         return f"DOCAI_ERROR: {str(e)}"
 
-def reformat_raw_text(raw_text):
+def _build_running_head_hint(book_title=None, chapter_title=None):
+    examples = []
+    if book_title:
+        clean_book = re.sub(r'\s*\([^)]*\)\s*$', '', book_title).strip()
+        examples.append(f'"{clean_book}"')
+    if chapter_title:
+        examples.append(f'"{chapter_title}"')
+    if examples:
+        joined = " or ".join(examples)
+        return (
+            f" (for example, {joined}, or unaccented/abbreviated variations of them, "
+            f"as well as any other running headers/footers)"
+        )
+    return ""
+
+def reformat_raw_text(raw_text, book_title=None, chapter_title=None):
     """
     Step 2 of Fallback: Use Gemini to format the raw OCR text.
     This bypasses the image-based copyright filter by processing text-to-text.
@@ -262,14 +277,15 @@ def reformat_raw_text(raw_text):
         return "--BLANK--"
 
     model = genai.GenerativeModel(MODEL_NAME)
+    running_head_hint = _build_running_head_hint(book_title, chapter_title)
     
-    prompt = """
+    prompt = f"""
     You are a strict MediaWiki formatting engine. 
     I will provide raw OCR text. Your job is to format it into valid MediaWiki wikitext for a Baha'i archive.
     
     RULES:
     1.  **Do NOT rewrite content.** Only format it.
-    2.  **Remove** page headers, running heads, and page numbers.
+    2.  **Remove** page headers, running heads{running_head_hint}, and page numbers. (However, if a chapter title appears as the actual main heading starting a new chapter/section rather than a top/bottom running head, keep it as a MediaWiki header.)
     3.  **ORTHOGRAPHY:** You MUST match the curly apostrophe (’) for Baha'i terms:
         - "Bahá’í", "Bahá’u’lláh", "‘Abdu’l-Bahá" (match case of original document)
     4.  **STRICT MEDIAWIKI FORMATTING (NO MARKDOWN):**
@@ -336,7 +352,7 @@ def proofread_page(image):
         check_fatal_rate_limit(e)
         return f"Error: {e}"
 
-def proofread_with_formatting(image):
+def proofread_with_formatting(image, book_title=None, chapter_title=None):
     """
     Transcription WITH MediaWiki formatting.
     - Enforces specific Baha'i orthography (curly apostrophes).
@@ -344,15 +360,16 @@ def proofread_with_formatting(image):
     - Includes RETRY logic for Copyright/Recitation errors.
     """
     model = genai.GenerativeModel(MODEL_NAME)
+    running_head_hint = _build_running_head_hint(book_title, chapter_title)
     
     # Prompt updated to emphasize "Text Extraction" to potentially bypass recitation triggers
-    prompt = """
+    prompt = f"""
     You are an expert transcriber and editor for a MediaWiki archive.
     
     Your task:
     1.  **CHECK FOR CONTENT:** If the page is blank, illegible, contains only faint bleed-through, or is just a blank lined page, return ONLY the string: --BLANK--
     2.  Extract the **MAIN CONTENT** of this page.
-    3.  From the second page on, **EXCLUDE** all page headers, running heads, and page numbers.
+    3.  From the second page on, **EXCLUDE** all page headers, running heads{running_head_hint}, and page numbers. (Do not remove an actual chapter/section heading if a new chapter is beginning on this page.)
     4.  **ORTHOGRAPHY:** You MUST match the curly apostrophe (’) if used in the document, eg:
         -   Write "Bahá’í" (Not Bahá'í)
         -   Write "Bahá’u’lláh" (Not Bahá'u'lláh)
