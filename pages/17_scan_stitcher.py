@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
 import os
 import re
@@ -368,47 +369,83 @@ def deskew_and_crop_edges(img, extra_trim_px=5):
 
     return img[top:bottom, left:right]
 
+def _stitch_single_group_worker(folder_path, g, extra_trim):
+    """Worker to stitch, deskew, and save a single page group in parallel."""
+    target_path = os.path.join(folder_path, g["target"])
+    part_paths = [os.path.join(folder_path, p) for p in g["parts"]]
+    raw_stitched = stitch_images_group(part_paths)
+    final_img = deskew_and_crop_edges(raw_stitched, extra_trim_px=extra_trim)
+    cv2.imwrite(target_path, final_img)
+    return (
+        g["target"],
+        target_path,
+        (final_img.shape[1], final_img.shape[0]),
+    )
+
+
+def _ocr_single_page_worker(idx, img_path, jpeg_quality):
+    """Worker to JPEG-compress and run Tesseract OCR on a single page in parallel."""
+    pil_img = Image.open(img_path).convert("RGB")
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+        tmp_jpg_path = tmp.name
+
+    try:
+        pil_img.save(
+            tmp_jpg_path,
+            format="JPEG",
+            quality=jpeg_quality,
+            optimize=True,
+            dpi=(300, 300),
+        )
+        pdf_bytes = pytesseract.image_to_pdf_or_hocr(
+            tmp_jpg_path, extension="pdf", config="--oem 1"
+        )
+        return idx, pdf_bytes
+    finally:
+        if os.path.exists(tmp_jpg_path):
+            os.remove(tmp_jpg_path)
+
 
 def build_ocr_optimized_pdf(
     image_paths, pdf_out_path, jpeg_quality=85, status_callback=None
 ):
-    """Compresses each stitched PNG to a temporary JPEG (drastically reducing PDF size from ~200MB to ~15-25MB),
+    """Runs JPEG compression + Tesseract OCR on all pages in parallel across all CPU cores,
 
-    runs Tesseract OCR to generate a searchable PDF page, and merges all pages
-    into `pdf_out_path`.
+    then merges them in page order into `pdf_out_path`.
     """
+    max_workers = min(len(image_paths), os.cpu_count() or 8)
+    if status_callback:
+        status_callback(
+            f"🚀 Running OCR & optimization on {len(image_paths)} pages in parallel ({max_workers} workers)..."
+        )
+
+    results = {}
+    completed = 0
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(
+                _ocr_single_page_worker, idx, img_path, jpeg_quality
+            ): (idx, img_path)
+            for idx, img_path in enumerate(image_paths)
+        }
+        for future in as_completed(futures):
+            idx, img_path = futures[future]
+            page_idx, pdf_bytes = future.result()
+            results[page_idx] = pdf_bytes
+            completed += 1
+            if status_callback:
+                status_callback(
+                    f"🔍 OCR & optimizing pages in parallel ({completed}/{len(image_paths)} finished — latest: `{os.path.basename(img_path)}`)..."
+                )
+
     doc = fitz.open()
-    for idx, img_path in enumerate(image_paths):
-        if status_callback:
-            status_callback(
-                f"🔍 OCR & optimizing `{os.path.basename(img_path)}` ({idx + 1}/{len(image_paths)})..."
-            )
-
-        pil_img = Image.open(img_path).convert("RGB")
-        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-            tmp_jpg_path = tmp.name
-
-        try:
-            pil_img.save(
-                tmp_jpg_path,
-                format="JPEG",
-                quality=jpeg_quality,
-                optimize=True,
-                dpi=(300, 300),
-            )
-            pdf_bytes = pytesseract.image_to_pdf_or_hocr(
-                tmp_jpg_path, extension="pdf"
-            )
-            page_doc = fitz.open("pdf", pdf_bytes)
-            doc.insert_pdf(page_doc)
-            page_doc.close()
-        finally:
-            if os.path.exists(tmp_jpg_path):
-                os.remove(tmp_jpg_path)
+    for idx in range(len(image_paths)):
+        page_doc = fitz.open("pdf", results[idx])
+        doc.insert_pdf(page_doc)
+        page_doc.close()
 
     doc.save(pdf_out_path, garbage=4, deflate=True)
     doc.close()
-
 
 # ==============================================================================
 # UI & MAIN WORKFLOW
@@ -498,29 +535,48 @@ if "Automatic" in mode:
             log_box.markdown(
                 f"### 📂 Processing `{folder_path}` → `{pdf_name}`"
             )
-            stitched_paths = []
+            groups_to_stitch = [
+                g
+                for g in f_groups
+                if overwrite_existing
+                or not os.path.exists(os.path.join(folder_path, g["target"]))
+            ]
 
-            for g in f_groups:
-                target_path = os.path.join(folder_path, g["target"])
-                if os.path.exists(target_path) and not overwrite_existing:
-                    stitched_paths.append(target_path)
-                    continue
+            if groups_to_stitch:
+                max_workers = min(len(groups_to_stitch), os.cpu_count() or 8)
+                done_count = 0
+                status_line.markdown(
+                    f"**[{f_idx + 1}/{len(issue_folders)}] `{os.path.basename(folder_path)}`: Stitching {len(groups_to_stitch)} pages in parallel ({max_workers} workers)...**"
+                )
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {
+                        executor.submit(
+                            _stitch_single_group_worker,
+                            folder_path,
+                            g,
+                            extra_trim,
+                        ): g
+                        for g in groups_to_stitch
+                    }
+                    for future in as_completed(futures):
+                        g = futures[future]
+                        done_count += 1
+                        try:
+                            future.result()
+                            status_line.markdown(
+                                f"**[{f_idx + 1}/{len(issue_folders)}] `{os.path.basename(folder_path)}`: Stitched {done_count}/{len(groups_to_stitch)} pages...**"
+                            )
+                        except Exception as e:
+                            log_box.error(
+                                f"❌ Failed to stitch `{g['target']}` in `{folder_path}`: {e}"
+                            )
 
-                part_paths = [os.path.join(folder_path, p) for p in g["parts"]]
-                try:
-                    status_line.markdown(
-                        f"**[{f_idx + 1}/{len(issue_folders)}] `{os.path.basename(folder_path)}`: Stitching `{g['target']}`...**"
-                    )
-                    raw_stitched = stitch_images_group(part_paths)
-                    final_img = deskew_and_crop_edges(
-                        raw_stitched, extra_trim_px=extra_trim
-                    )
-                    cv2.imwrite(target_path, final_img)
-                    stitched_paths.append(target_path)
-                except Exception as e:
-                    log_box.error(
-                        f"❌ Failed to stitch `{g['target']}` in `{folder_path}`: {e}"
-                    )
+            # Collect all valid stitched page paths in sorted order
+            stitched_paths = [
+                os.path.join(folder_path, g["target"])
+                for g in f_groups
+                if os.path.exists(os.path.join(folder_path, g["target"]))
+            ]
 
             if stitched_paths:
                 try:
@@ -594,22 +650,14 @@ else:
 
     if stitch_one_clicked and test_target_group:
         log_box = st.container(border=True)
-        target_path = os.path.join(input_dir, test_target_group["target"])
-        part_paths = [
-            os.path.join(input_dir, p) for p in test_target_group["parts"]
-        ]
         try:
             log_box.write(
                 f"🔄 Test-stitching `{test_target_group['target']}` from `{', '.join(test_target_group['parts'])}`..."
             )
-            raw_stitched = stitch_images_group(part_paths)
-            final_img = deskew_and_crop_edges(
-                raw_stitched, extra_trim_px=extra_trim
+            t_name, _, (w, h) = _stitch_single_group_worker(
+                input_dir, test_target_group, extra_trim
             )
-            cv2.imwrite(target_path, final_img)
-            log_box.success(
-                f"✅ Saved `{test_target_group['target']}` ({final_img.shape[1]}x{final_img.shape[0]} px)"
-            )
+            log_box.success(f"✅ Saved `{t_name}` ({w}x{h} px)")
             st.rerun()
         except Exception as e:
             log_box.error(
@@ -619,33 +667,39 @@ else:
     if stitch_all_clicked:
         progress = st.progress(0)
         log_box = st.container(border=True)
+        groups_to_stitch = [
+            g
+            for g in groups
+            if overwrite_existing
+            or not os.path.exists(os.path.join(input_dir, g["target"]))
+        ]
 
-        for idx, g in enumerate(groups):
-            target_path = os.path.join(input_dir, g["target"])
-            if os.path.exists(target_path) and not overwrite_existing:
-                log_box.info(
-                    f"⏭️ `{g['target']}` already exists. Skipping (check 'Re-stitch' to overwrite)."
-                )
-                progress.progress((idx + 1) / len(groups))
-                continue
-
-            part_paths = [os.path.join(input_dir, p) for p in g["parts"]]
-            try:
-                log_box.write(
-                    f"🔄 Stitching `{g['target']}` from `{', '.join(g['parts'])}`..."
-                )
-                raw_stitched = stitch_images_group(part_paths)
-                final_img = deskew_and_crop_edges(
-                    raw_stitched, extra_trim_px=extra_trim
-                )
-                cv2.imwrite(target_path, final_img)
-                log_box.success(
-                    f"✅ Saved `{g['target']}` ({final_img.shape[1]}x{final_img.shape[0]} px)"
-                )
-            except Exception as e:
-                log_box.error(f"❌ Failed to stitch `{g['target']}`: {e}")
-
-            progress.progress((idx + 1) / len(groups))
+        if not groups_to_stitch:
+            log_box.info(
+                "⏭️ All target `.png` files already exist. Check 'Re-stitch' to overwrite."
+            )
+        else:
+            max_workers = min(len(groups_to_stitch), os.cpu_count() or 8)
+            log_box.write(
+                f"🚀 Stitching {len(groups_to_stitch)} pages in parallel across {max_workers} workers..."
+            )
+            done_count = 0
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {
+                    executor.submit(
+                        _stitch_single_group_worker, input_dir, g, extra_trim
+                    ): g
+                    for g in groups_to_stitch
+                }
+                for future in as_completed(futures):
+                    g = futures[future]
+                    done_count += 1
+                    try:
+                        t_name, _, (w, h) = future.result()
+                        log_box.success(f"✅ Saved `{t_name}` ({w}x{h} px)")
+                    except Exception as e:
+                        log_box.error(f"❌ Failed to stitch `{g['target']}`: {e}")
+                    progress.progress(done_count / len(groups_to_stitch))
 
         st.rerun()
 
