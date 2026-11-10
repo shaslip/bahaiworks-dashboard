@@ -378,10 +378,10 @@ def proofread_with_formatting(image, book_title=None, chapter_title=None):
         -   Output MUST be valid MediaWiki syntax, NOT Markdown.
         -   NEVER use Markdown syntax: do NOT use `**bold**` or `*italic*`, do NOT use `#` for headers, and do NOT wrap the output in ``` code fences.
         -   If you see a **Header** (that is part of the text, not a running head), use `== Header ==`.
-        -   If you see a **Table**, use `{| class="wikitable" ... |}`.
+        -   If you see a **Table**, use `{{| class="wikitable" ... |}}`.
         -   If you see **Bold** or *Italic*, use MediaWiki apostrophes: `'''bold'''` and `''italic''`.
         -   Standard HTML tags supported by MediaWiki (such as `<div>`, `<center>`, `<blockquote>`, `<br>`) are allowed where appropriate for layout/alignment, but `<poem>` tags are not supported.
-        -   If the text has an OBVIOUS typo (e.g. "sentance"), transcribe it as: {{sic|sentance|sentence}}
+        -   If the text has an OBVIOUS typo (e.g. "sentance"), transcribe it as: {{{{sic|sentance|sentence}}}}
     6.  Paragraph breaks require an extra return.
     7.  Output ONLY the clean wikitext with no conversational filler.
     """
