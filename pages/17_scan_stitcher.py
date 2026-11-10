@@ -340,7 +340,44 @@ with st.expander("View Detected Scan Parts Mapping", expanded=True):
             f"- **`{g['target']}`** ({exists_badge}) ← `{', '.join(g['parts'])}`"
         )
 
-if st.button("🚀 Stitch All Pages", type="primary"):
+btn_col1, btn_col2, btn_col3 = st.columns([1, 1, 2])
+with btn_col1:
+    stitch_all_clicked = st.button(
+        "🚀 Stitch All Pages", type="primary", use_container_width=True
+    )
+with btn_col2:
+    stitch_one_clicked = st.button(
+        "🧪 Stitch One Page (Test)", type="secondary", use_container_width=True
+    )
+with btn_col3:
+    test_target_group = st.selectbox(
+        "Select Page for Test Stitch",
+        options=groups,
+        format_func=lambda g: f"{g['target']} ({', '.join(g['parts'])})",
+        label_visibility="collapsed",
+    )
+
+if stitch_one_clicked and test_target_group:
+    log_box = st.container(border=True)
+    target_path = os.path.join(input_dir, test_target_group["target"])
+    part_paths = [os.path.join(input_dir, p) for p in test_target_group["parts"]]
+    try:
+        log_box.write(
+            f"🔄 Test-stitching `{test_target_group['target']}` from `{', '.join(test_target_group['parts'])}`..."
+        )
+        raw_stitched = stitch_images_group(part_paths)
+        final_img = deskew_and_crop_edges(raw_stitched, extra_trim_px=extra_trim)
+        cv2.imwrite(target_path, final_img)
+        log_box.success(
+            f"✅ Saved `{test_target_group['target']}` ({final_img.shape[1]}x{final_img.shape[0]} px)"
+        )
+        st.rerun()
+    except Exception as e:
+        log_box.error(
+            f"❌ Failed to stitch `{test_target_group['target']}`: {e}"
+        )
+
+if stitch_all_clicked:
     progress = st.progress(0)
     log_box = st.container(border=True)
 
