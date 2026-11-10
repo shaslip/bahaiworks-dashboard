@@ -106,9 +106,46 @@ def discover_scan_groups(folder_path):
 
     return sorted(result, key=lambda x: x["sort_key"])
 
+def trim_scanner_whitespace(img):
+    """Crops away pure-white scanner bed margins (like the left margin of 1b and right margin of 1a)
+
+    before stitching, keeping only the physical magazine page.
+    """
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    # Magazine paper & ink are darker than pure white (252-255) scanner bed background
+    _, non_white = cv2.threshold(gray, 250, 255, cv2.THRESH_BINARY_INV)
+
+    # Close small gaps and remove tiny dust specks on the scanner glass
+    kernel_open = np.ones((5, 5), np.uint8)
+    cleaned = cv2.morphologyEx(
+        non_white, cv2.MORPH_OPEN, kernel_open, iterations=2
+    )
+
+    # Dilate horizontally/vertically to connect page columns and cream paper into one solid block
+    kernel_close = np.ones((25, 25), np.uint8)
+    connected = cv2.morphologyEx(
+        cleaned, cv2.MORPH_CLOSE, kernel_close, iterations=2
+    )
+
+    contours, _ = cv2.findContours(
+        connected, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    if not contours:
+        return img
+
+    # Find bounding box of all major page contours (>1% of image area)
+    min_area = img.shape[0] * img.shape[1] * 0.01
+    valid_contours = [c for c in contours if cv2.contourArea(c) >= min_area]
+    if not valid_contours:
+        valid_contours = [max(contours, key=cv2.contourArea)]
+
+    all_pts = np.vstack(valid_contours)
+    x, y, w, h = cv2.boundingRect(all_pts)
+    return img[y : y + h, x : x + w]
+
 
 def stitch_pair_fallback(img1, img2):
-    """Fallback 2D affine stitcher using SIFT + RANSAC when OpenCV Stitcher_SCANS fails."""
+    """2D affine stitcher using SIFT + RANSAC (translation + rotation + uniform scale)."""
     gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
     gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
 
@@ -117,7 +154,7 @@ def stitch_pair_fallback(img1, img2):
     kp2, des2 = sift.detectAndCompute(gray2, None)
 
     if des1 is None or des2 is None:
-        raise ValueError("Could not find features for fallback stitching.")
+        raise ValueError("Could not find features for stitching.")
 
     bf = cv2.BFMatcher()
     matches = bf.knnMatch(des2, des1, k=2)  # Transform img2 into img1's space
@@ -164,17 +201,30 @@ def stitch_pair_fallback(img1, img2):
         (out_w, out_h),
         flags=cv2.INTER_CUBIC,
         borderMode=cv2.BORDER_CONSTANT,
-        borderValue=(0, 0, 0),
+        borderValue=(255, 255, 255),
     )
-    canvas1 = np.zeros((out_h, out_w, 3), dtype=np.uint8)
-    canvas1[t_dist[1] : t_dist[1] + h1, t_dist[0] : t_dist[0] + w1] = img1
+    mask2 = np.zeros((h2, w2), dtype=np.uint8) + 255
+    warped_mask2 = cv2.warpAffine(
+        mask2,
+        M_translated,
+        (out_w, out_h),
+        flags=cv2.INTER_NEAREST,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0,
+    )
 
-    mask1 = (cv2.cvtColor(canvas1, cv2.COLOR_BGR2GRAY) > 0).astype(np.float32)
-    mask2 = (cv2.cvtColor(warped2, cv2.COLOR_BGR2GRAY) > 0).astype(np.float32)
+    canvas1 = np.full((out_h, out_w, 3), 255, dtype=np.uint8)
+    canvas1[t_dist[1] : t_dist[1] + h1, t_dist[0] : t_dist[0] + w1] = img1
+    warped_mask1 = np.zeros((out_h, out_w), dtype=np.uint8)
+    warped_mask1[t_dist[1] : t_dist[1] + h1, t_dist[0] : t_dist[0] + w1] = 255
 
     # Distance transform feathering across the overlap region
-    dist1 = cv2.distanceTransform((mask1 > 0).astype(np.uint8), cv2.DIST_L2, 5)
-    dist2 = cv2.distanceTransform((mask2 > 0).astype(np.uint8), cv2.DIST_L2, 5)
+    dist1 = cv2.distanceTransform(
+        (warped_mask1 > 0).astype(np.uint8), cv2.DIST_L2, 5
+    )
+    dist2 = cv2.distanceTransform(
+        (warped_mask2 > 0).astype(np.uint8), cv2.DIST_L2, 5
+    )
     total_dist = dist1 + dist2 + 1e-6
 
     w_map1 = (dist1 / total_dist)[..., None]
@@ -188,49 +238,48 @@ def stitch_pair_fallback(img1, img2):
 
 
 def stitch_images_group(image_paths):
-    """Stitches a list of image paths using OpenCV Stitcher_SCANS with pairwise fallback."""
-    imgs = [cv2.imread(p) for p in image_paths]
-    imgs = [im for im in imgs if im is not None]
-    if not imgs:
+    """Pre-trims scanner whitespace and stitches image parts, verifying full page height."""
+    raw_imgs = [cv2.imread(p) for p in image_paths]
+    raw_imgs = [im for im in raw_imgs if im is not None]
+    if not raw_imgs:
         raise ValueError("No valid images loaded.")
+
+    # Pre-trim wide white scanner margins (e.g. left of 1b, right of 1a)
+    imgs = [trim_scanner_whitespace(im) for im in raw_imgs]
     if len(imgs) == 1:
         return imgs[0]
 
-    stitcher = cv2.Stitcher_create(cv2.Stitcher_SCANS)
-    status, stitched = stitcher.stitch(imgs)
-    if status == cv2.Stitcher_OK:
-        return stitched
+    max_part_h = max(im.shape[0] for im in imgs)
 
-    # Fallback: Sequential pairwise affine stitching
+    # Use SIFT + RANSAC 2D affine stitching sequentially (guarantees no internal ROI cropping)
     current = imgs[0]
     for next_img in imgs[1:]:
-        status_pair, res_pair = stitcher.stitch([current, next_img])
-        if status_pair == cv2.Stitcher_OK:
-            current = res_pair
-        else:
-            current = stitch_pair_fallback(current, next_img)
+        current = stitch_pair_fallback(current, next_img)
+
+    # Sanity check: stitched vertical page must be taller than the tallest single part
+    if current.shape[0] < max_part_h * 1.1:
+        stitcher = cv2.Stitcher_create(cv2.Stitcher_SCANS)
+        status, stitched = stitcher.stitch(imgs)
+        if status == cv2.Stitcher_OK and stitched.shape[0] > current.shape[0]:
+            # Replace any black background from OpenCV stitcher with white before deskewing
+            black_mask = np.all(stitched == 0, axis=-1)
+            stitched[black_mask] = [255, 255, 255]
+            return stitched
+
     return current
 
 
 def deskew_and_crop_edges(img, extra_trim_px=10):
     """1.
 
-    Crops outer black bounding box.
-    2. Detects text/line skew angle and straightens page.
-    3. Crops away black rotation wedges along the outer edges.
+    Detects skew angle from text/layout lines and straightens the page.
+    2. Crops away outer scanner whitespace and rotation edges without cutting off
+    page content.
     """
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    _, valid_mask = cv2.threshold(gray, 5, 255, cv2.THRESH_BINARY)
-
-    coords = cv2.findNonZero(valid_mask)
-    if coords is not None:
-        x, y, w, h = cv2.boundingRect(coords)
-        img = img[y : y + h, x : x + w]
-        gray = gray[y : y + h, x : x + w]
-        valid_mask = valid_mask[y : y + h, x : x + w]
-
-    # Estimate skew angle using Hough lines on text/layout features inside the interior
     h, w = gray.shape
+
+    # 1. Estimate skew angle using Hough lines on interior text/borders
     margin_y, margin_x = int(h * 0.1), int(w * 0.1)
     interior = gray[margin_y : h - margin_y, margin_x : w - margin_x]
 
@@ -241,7 +290,7 @@ def deskew_and_crop_edges(img, extra_trim_px=10):
             1,
             np.pi / 180,
             threshold=100,
-            minLineLength=w // 8,
+            minLineLength=w // 6,
             maxLineGap=20,
         )
         angles = []
@@ -263,34 +312,22 @@ def deskew_and_crop_edges(img, extra_trim_px=10):
                     (w, h),
                     flags=cv2.INTER_CUBIC,
                     borderMode=cv2.BORDER_CONSTANT,
-                    borderValue=(0, 0, 0),
-                )
-                valid_mask = cv2.warpAffine(
-                    valid_mask,
-                    M,
-                    (w, h),
-                    flags=cv2.INTER_NEAREST,
-                    borderMode=cv2.BORDER_CONSTANT,
-                    borderValue=0,
+                    borderValue=(255, 255, 255),
                 )
 
-    # Trim black wedges along top, bottom, left, right until >=99% of the row/col is valid scan content
-    h, w = valid_mask.shape
-    row_Ratio = np.mean(valid_mask > 0, axis=1)
-    col_Ratio = np.mean(valid_mask > 0, axis=0)
+    # 2. Trim outer white scanner margins to the actual magazine paper bounding box
+    img = trim_scanner_whitespace(img)
 
-    valid_rows = np.where(row_Ratio >= 0.98)[0]
-    valid_cols = np.where(col_Ratio >= 0.98)[0]
-
-    if len(valid_rows) > 0 and len(valid_cols) > 0:
-        top = min(h - 1, valid_rows[0] + extra_trim_px)
-        bottom = max(top + 1, valid_rows[-1] - extra_trim_px)
-        left = min(w - 1, valid_cols[0] + extra_trim_px)
-        right = max(left + 1, valid_cols[-1] - extra_trim_px)
-        img = img[top:bottom, left:right]
+    # 3. Apply optional extra edge trim
+    if extra_trim_px > 0:
+        ch, cw = img.shape[:2]
+        if ch > 2 * extra_trim_px and cw > 2 * extra_trim_px:
+            img = img[
+                extra_trim_px : ch - extra_trim_px,
+                extra_trim_px : cw - extra_trim_px,
+            ]
 
     return img
-
 
 # ==============================================================================
 # UI & MAIN WORKFLOW
