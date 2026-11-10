@@ -1248,9 +1248,12 @@ with tab_main:
                 if not os.path.exists(master_json_path):
                     log_container.write(f"⚙️ Generating Master JSON for {master_pdf_filename}...")
                     all_mapped_pages = set()
+                    page_to_chapter = {}
                     for ch in selected_subpages:
+                        ch_short = ch.split("/")[-1].strip()
                         for p in route_map.get(ch, {}).get("pdf_pages", []):
                             all_mapped_pages.add(p["pdf_num"])
+                            page_to_chapter[p["pdf_num"]] = ch_short
                     pages_to_process = sorted(list(all_mapped_pages))
                     
                     temp_master_path = os.path.join(pdf_dir, f"temp_master_{master_pdf_filename}.json")
@@ -1293,7 +1296,9 @@ with tab_main:
                         page_futures = {
                             page_num: executor.submit(
                                 process_single_page, page_num, pdf_doc, ocr_strategy,
-                                temp_master_path, shared_results, shared_log_list
+                                temp_master_path, shared_results, shared_log_list,
+                                book_title=target_book,
+                                chapter_title=page_to_chapter.get(page_num)
                             )
                             for page_num in pages_to_process
                         }
@@ -1658,11 +1663,13 @@ with tab_main:
         st.warning("⚠️ No chapters are selected in the table above. Check at least one chapter to proceed.")
         st.stop()
 
-    selected_pdf_pages = sorted({
-        p["pdf_num"]
-        for sp in selected_subpages
-        for p in state["route_map"].get(sp, {}).get("pdf_pages", [])
-    })
+    page_to_chapter = {}
+    for sp in selected_subpages:
+        ch_short = sp.split("/")[-1].strip()
+        for p in state["route_map"].get(sp, {}).get("pdf_pages", []):
+            page_to_chapter[p["pdf_num"]] = ch_short
+
+    selected_pdf_pages = sorted(page_to_chapter.keys())
 
     # ==============================================================================
     # STEP 2: MASTER JSON GENERATION
@@ -1787,7 +1794,9 @@ with tab_main:
                 page_num: executor.submit(
                     process_single_page,
                     page_num, pdf_doc, ocr_strategy, 
-                    temp_master_path, shared_results, shared_log_list
+                    temp_master_path, shared_results, shared_log_list,
+                    book_title=target_book,
+                    chapter_title=page_to_chapter.get(page_num)
                 )
                 for page_num in pages_to_process
             }
