@@ -133,18 +133,20 @@ def discover_issue_folders_recursive(root_folder):
 
 
 def trim_scanner_whitespace(img):
-    """Crops away the pure-white scanner background (mean brightness > 253) on the left/right/top/bottom
+    """Crops away ONLY the pure-white scanner bed (gray >= 254).
 
-    so only the cream newspaper page remains. Never trims into content at the
-    top/bottom edge.
+    Preserves the entire physical magazine page including its blank outer paper
+    margins.
     """
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape
 
-    # Pure white scanner bed columns have almost every pixel >= 253
-    # Newspaper paper is cream/textured (~230-246) with dark ink
-    non_white_col_ratio = np.mean(gray < 251, axis=0)
-    page_cols = np.where(non_white_col_ratio > 0.10)[0]
+    # Scanner bed is pure 255 white. Any pixel < 254 is physical magazine paper.
+    is_paper = gray < 254
+
+    # A column is part of the physical page if at least 20% of its height is < 254
+    col_paper_ratio = np.mean(is_paper, axis=0)
+    page_cols = np.where(col_paper_ratio > 0.20)[0]
 
     if len(page_cols) > 0:
         left = int(page_cols[0])
@@ -152,13 +154,12 @@ def trim_scanner_whitespace(img):
     else:
         left, right = 0, w
 
-    # For top and bottom, keep a 5px buffer outside the first detected paper row so top bars (like 2a) aren't touched
-    non_white_row_ratio = np.mean(gray[:, left:right] < 251, axis=1)
-    page_rows = np.where(non_white_row_ratio > 0.10)[0]
+    row_paper_ratio = np.mean(is_paper[:, left:right], axis=1)
+    page_rows = np.where(row_paper_ratio > 0.20)[0]
 
     if len(page_rows) > 0:
-        top = max(0, int(page_rows[0]) - 5)
-        bottom = min(h, int(page_rows[-1]) + 5)
+        top = int(page_rows[0])
+        bottom = int(page_rows[-1]) + 1
     else:
         top, bottom = 0, h
 
@@ -166,7 +167,7 @@ def trim_scanner_whitespace(img):
 
 
 def stitch_pair_fallback(img1, img2):
-    """2D rigid/affine stitcher using SIFT + RANSAC without creating black border artifacts."""
+    """2D rigid stitcher using SIFT + RANSAC. Returns (blended_img, valid_page_mask)."""
     gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
     gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
 
@@ -193,7 +194,7 @@ def stitch_pair_fallback(img1, img2):
     if M is None:
         raise ValueError("Could not estimate affine transform between scans.")
 
-    # Lock scale to 1.0 so one half of the page doesn't shrink/grow relative to the other
+    # Lock scale to 1.0 so both halves stay the exact same physical width
     scale = np.sqrt(M[0, 0] ** 2 + M[1, 0] ** 2)
     if 0.95 < scale < 1.05:
         M[:2, :2] /= scale
@@ -244,14 +245,12 @@ def stitch_pair_fallback(img1, img2):
     warped_mask1 = np.zeros((out_h, out_w), dtype=np.uint8)
     warped_mask1[t_dist[1] : t_dist[1] + h1, t_dist[0] : t_dist[0] + w1] = 255
 
-    # Distance transform on interior of each mask (pad border with 0 so distance to outer edge is > 0 inside)
     m1_bin = (warped_mask1 > 0).astype(np.uint8)
     m2_bin = (warped_mask2 > 0).astype(np.uint8)
 
     dist1 = cv2.distanceTransform(m1_bin, cv2.DIST_L2, 5)
     dist2 = cv2.distanceTransform(m2_bin, cv2.DIST_L2, 5)
 
-    # Start with white canvas, place non-overlapping regions directly, blend only the overlap
     blended = np.full((out_h, out_w, 3), 255, dtype=np.uint8)
     only1 = (m1_bin == 1) & (m2_bin == 0)
     only2 = (m2_bin == 1) & (m1_bin == 0)
@@ -264,7 +263,6 @@ def stitch_pair_fallback(img1, img2):
         d1 = dist1[overlap]
         d2 = dist2[overlap]
         denom = d1 + d2
-        # Where both distances are 0 right on a corner pixel, default 50/50 instead of 0!
         w1_ov = np.where(denom > 0, d1 / np.maximum(denom, 1e-6), 0.5)[
             :, None
         ]
@@ -274,11 +272,12 @@ def stitch_pair_fallback(img1, img2):
             + warped2[overlap].astype(np.float32) * w2_ov
         ).astype(np.uint8)
 
-    return blended
+    combined_mask = cv2.bitwise_or(warped_mask1, warped_mask2)
+    return blended, combined_mask
 
 
 def stitch_images_group(image_paths):
-    """Pre-trims white scanner margins and stitches image parts."""
+    """Pre-trims pure-white scanner bed and stitches image parts, returning (image, mask)."""
     raw_imgs = [cv2.imread(p) for p in image_paths]
     raw_imgs = [im for im in raw_imgs if im is not None]
     if not raw_imgs:
@@ -286,22 +285,31 @@ def stitch_images_group(image_paths):
 
     imgs = [trim_scanner_whitespace(im) for im in raw_imgs]
     if len(imgs) == 1:
-        return imgs[0]
+        h, w = imgs[0].shape[:2]
+        return imgs[0], np.full((h, w), 255, dtype=np.uint8)
 
     current = imgs[0]
+    current_mask = np.full(current.shape[:2], 255, dtype=np.uint8)
     for next_img in imgs[1:]:
-        current = stitch_pair_fallback(current, next_img)
+        current, current_mask = stitch_pair_fallback(current, next_img)
 
-    return current
+    return current, current_mask
 
 
-def deskew_and_crop_edges(img, extra_trim_px=5):
+def deskew_and_crop_edges(stitched_data, extra_trim_px=0):
     """1.
 
-    Straightens page using both vertical column rules and horizontal dividers.
-    2. Crops away left/right white rotation wedges where one scan stuck out
-    further than the other, without cutting top/bottom content.
+    Straightens page using vertical column rules and horizontal dividers.
+    2. Uses the geometric page mask (not ink brightness!) to crop only the empty
+    canvas outside the paper, preserving the full paper margin on all four
+    sides.
     """
+    if isinstance(stitched_data, tuple):
+        img, page_mask = stitched_data
+    else:
+        img = stitched_data
+        page_mask = np.full(img.shape[:2], 255, dtype=np.uint8)
+
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape
 
@@ -344,26 +352,32 @@ def deskew_and_crop_edges(img, extra_trim_px=5):
                     borderMode=cv2.BORDER_CONSTANT,
                     borderValue=(255, 255, 255),
                 )
-                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                page_mask = cv2.warpAffine(
+                    page_mask,
+                    M,
+                    (w, h),
+                    flags=cv2.INTER_NEAREST,
+                    borderMode=cv2.BORDER_CONSTANT,
+                    borderValue=0,
+                )
 
-    # 2. Crop Left and Right to eliminate white steps/wedges (require column to be paper across >=95% of height)
-    is_paper = gray < 251
-    col_paper_ratio = np.mean(is_paper, axis=0)
-    solid_cols = np.where(col_paper_ratio >= 0.95)[0]
+    # 2. Crop using the geometric page_mask (where the physical paper actually exists),
+    # NOT pixel darkness (which previously mistook blank paper margins for scanner bed).
+    col_mask_ratio = np.mean(page_mask > 0, axis=0)
+    valid_cols = np.where(col_mask_ratio >= 0.90)[0]
 
-    if len(solid_cols) > 0:
-        left = min(w - 1, int(solid_cols[0]) + extra_trim_px)
-        right = max(left + 1, int(solid_cols[-1]) - extra_trim_px)
+    if len(valid_cols) > 0:
+        left = min(w - 1, int(valid_cols[0]) + extra_trim_px)
+        right = max(left + 1, int(valid_cols[-1]) + 1 - extra_trim_px)
     else:
         left, right = 0, w
 
-    # 3. Crop Top and Bottom only where pure white (>251) spans the width—never trim extra_trim_px from top/bottom!
-    row_paper_ratio = np.mean(is_paper[:, left:right], axis=1)
-    solid_rows = np.where(row_paper_ratio >= 0.50)[0]
+    row_mask_ratio = np.mean(page_mask[:, left:right] > 0, axis=1)
+    valid_rows = np.where(row_mask_ratio >= 0.90)[0]
 
-    if len(solid_rows) > 0:
-        top = max(0, int(solid_rows[0]))
-        bottom = min(h, int(solid_rows[-1]) + 1)
+    if len(valid_rows) > 0:
+        top = max(0, int(valid_rows[0]))
+        bottom = min(h, int(valid_rows[-1]) + 1)
     else:
         top, bottom = 0, h
 
