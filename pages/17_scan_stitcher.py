@@ -396,9 +396,9 @@ def _stitch_single_group_worker(folder_path, g, extra_trim):
         (final_img.shape[1], final_img.shape[0]),
     )
 
-
 def _ocr_single_page_worker(idx, img_path, jpeg_quality):
     """Worker to JPEG-compress and run Tesseract OCR on a single page in parallel."""
+    os.environ["OMP_THREAD_LIMIT"] = "1"
     pil_img = Image.open(img_path).convert("RGB")
     with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
         tmp_jpg_path = tmp.name
@@ -421,17 +421,24 @@ def _ocr_single_page_worker(idx, img_path, jpeg_quality):
 
 
 def build_ocr_optimized_pdf(
-    image_paths, pdf_out_path, jpeg_quality=85, status_callback=None
+    image_paths,
+    pdf_out_path,
+    jpeg_quality=85,
+    status_callback=None,
+    progress_callback=None,
 ):
-    """Runs JPEG compression + Tesseract OCR on all pages in parallel across all CPU cores,
+    """Runs JPEG compression + Tesseract OCR on all pages in parallel across physical CPU cores,
 
     then merges them in page order into `pdf_out_path`.
     """
-    max_workers = min(len(image_paths), os.cpu_count() or 8)
+    total_pages = len(image_paths)
+    max_workers = min(total_pages, max(1, (os.cpu_count() or 8) // 2))
     if status_callback:
         status_callback(
-            f"🚀 Running OCR & optimization on {len(image_paths)} pages in parallel ({max_workers} workers)..."
+            f"🚀 Running OCR & optimization on {total_pages} pages in parallel ({max_workers} workers)..."
         )
+    if progress_callback:
+        progress_callback(0.0)
 
     results = {}
     completed = 0
@@ -449,11 +456,16 @@ def build_ocr_optimized_pdf(
             completed += 1
             if status_callback:
                 status_callback(
-                    f"🔍 OCR & optimizing pages in parallel ({completed}/{len(image_paths)} finished — latest: `{os.path.basename(img_path)}`)..."
+                    f"🔍 OCR & optimizing pages ({completed}/{total_pages} finished — latest: `{os.path.basename(img_path)}`)..."
                 )
+            if progress_callback:
+                progress_callback(completed / total_pages)
+
+    if status_callback:
+        status_callback("📦 Merging OCR'd pages and writing final PDF...")
 
     doc = fitz.open()
-    for idx in range(len(image_paths)):
+    for idx in range(total_pages):
         page_doc = fitz.open("pdf", results[idx])
         doc.insert_pdf(page_doc)
         page_doc.close()
@@ -810,6 +822,7 @@ else:
         st.divider()
         if st.button("📕 Combine All Pages into OCR'd PDF", type="primary"):
             pdf_out_path = os.path.join(input_dir, pdf_filename)
+            pdf_progress = st.progress(0.0)
             status_line = st.empty()
             try:
                 img_paths = [
@@ -821,6 +834,7 @@ else:
                     pdf_out_path,
                     jpeg_quality=jpeg_quality,
                     status_callback=lambda msg: status_line.info(msg),
+                    progress_callback=lambda frac: pdf_progress.progress(frac),
                 )
                 size_mb = os.path.getsize(pdf_out_path) / (1024 * 1024)
                 status_line.success(
