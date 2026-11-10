@@ -2,10 +2,12 @@ from io import BytesIO
 import os
 import re
 import sys
+import tempfile
 import cv2
 import fitz
 import numpy as np
 from PIL import Image
+import pytesseract
 import streamlit as st
 
 # --- Path Setup ---
@@ -32,7 +34,8 @@ def infer_pdf_filename(folder_path):
         vol = vol_match.group(1)
         no = no_match.group(1)
         return f"The_American_Bahá’í_Vol{vol}_No{no}.pdf"
-    return "Stitched_Output.pdf"
+    folder_name = os.path.basename(os.path.normpath(folder_path))
+    return f"{folder_name}_Stitched.pdf"
 
 
 def discover_scan_groups(folder_path):
@@ -105,6 +108,28 @@ def discover_scan_groups(folder_path):
         })
 
     return sorted(result, key=lambda x: x["sort_key"])
+
+
+def discover_issue_folders_recursive(root_folder):
+    """Recursively finds all folders under root_folder that contain scan parts."""
+    issue_folders = []
+    if not os.path.isdir(root_folder):
+        return issue_folders
+
+    for dirpath, dirnames, _ in os.walk(root_folder):
+        # Natural sort subdirectories (so No1, No2, ..., No10 run in numeric order)
+        dirnames.sort(
+            key=lambda s: [
+                int(t) if t.isdigit() else t.lower()
+                for t in re.split(r"(\d+)", s)
+            ]
+        )
+        groups = discover_scan_groups(dirpath)
+        if groups:
+            issue_folders.append((dirpath, groups))
+
+    return issue_folders
+
 
 def trim_scanner_whitespace(img):
     """Crops away the pure-white scanner background (mean brightness > 253) on the left/right/top/bottom
@@ -343,108 +368,239 @@ def deskew_and_crop_edges(img, extra_trim_px=5):
 
     return img[top:bottom, left:right]
 
+
+def build_ocr_optimized_pdf(
+    image_paths, pdf_out_path, jpeg_quality=85, status_callback=None
+):
+    """Compresses each stitched PNG to a temporary JPEG (drastically reducing PDF size from ~200MB to ~15-25MB),
+
+    runs Tesseract OCR to generate a searchable PDF page, and merges all pages
+    into `pdf_out_path`.
+    """
+    doc = fitz.open()
+    for idx, img_path in enumerate(image_paths):
+        if status_callback:
+            status_callback(
+                f"🔍 OCR & optimizing `{os.path.basename(img_path)}` ({idx + 1}/{len(image_paths)})..."
+            )
+
+        pil_img = Image.open(img_path).convert("RGB")
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            tmp_jpg_path = tmp.name
+
+        try:
+            pil_img.save(
+                tmp_jpg_path,
+                format="JPEG",
+                quality=jpeg_quality,
+                optimize=True,
+                dpi=(300, 300),
+            )
+            pdf_bytes = pytesseract.image_to_pdf_or_hocr(
+                tmp_jpg_path, extension="pdf"
+            )
+            page_doc = fitz.open("pdf", pdf_bytes)
+            doc.insert_pdf(page_doc)
+            page_doc.close()
+        finally:
+            if os.path.exists(tmp_jpg_path):
+                os.remove(tmp_jpg_path)
+
+    doc.save(pdf_out_path, garbage=4, deflate=True)
+    doc.close()
+
+
 # ==============================================================================
 # UI & MAIN WORKFLOW
 # ==============================================================================
 st.title("🧩 Magazine Scan Stitcher & PDF Builder")
 
+mode = st.radio(
+    "Select Workflow Mode",
+    [
+        "🔍 Single Issue Mode (Interactive Review)",
+        "🤖 Automatic Batch Mode (Recursive)",
+    ],
+    horizontal=True,
+)
+
 default_dir = (
     "/media/sarah/4TB/Projects/Bahai.works/English/American_Bahai/Vol34/No1/"
+    if "Single" in mode
+    else "/media/sarah/4TB/Projects/Bahai.works/English/American_Bahai/Vol34/"
 )
-input_dir = st.text_input("Input Issue Directory", value=default_dir)
+input_dir = st.text_input("Input Directory", value=default_dir)
 
 if not os.path.isdir(input_dir):
     st.warning("Please enter a valid directory path.")
     st.stop()
 
-groups = discover_scan_groups(input_dir)
-
-if not groups:
-    st.info(
-        "No scan parts (e.g., `1a.png`, `1b.png`, `5-6a.png`) found in this directory."
-    )
-    st.stop()
-
-st.subheader(f"📋 Discovered Page Groups ({len(groups)})")
-
-cols_cfg = st.columns([2, 1, 1])
+cols_cfg = st.columns([1, 1, 1])
 with cols_cfg[0]:
-    default_pdf_name = infer_pdf_filename(input_dir)
-    pdf_filename = st.text_input("Output PDF Filename", value=default_pdf_name)
-with cols_cfg[1]:
     extra_trim = st.number_input(
         "Auto-Crop Edge Trim (px)", min_value=0, max_value=200, value=15, step=5
+    )
+with cols_cfg[1]:
+    jpeg_quality = st.slider(
+        "PDF JPEG Compression Quality",
+        min_value=60,
+        max_value=95,
+        value=85,
+        step=5,
     )
 with cols_cfg[2]:
     overwrite_existing = st.checkbox(
         "Re-stitch even if target `.png` exists", value=False
     )
 
-with st.expander("View Detected Scan Parts Mapping", expanded=True):
-    for g in groups:
-        exists_badge = (
-            "✅ Exists"
-            if os.path.exists(os.path.join(input_dir, g["target"]))
-            else "⏳ Pending"
-        )
-        st.markdown(
-            f"- **`{g['target']}`** ({exists_badge}) ← `{', '.join(g['parts'])}`"
-        )
+# ==============================================================================
+# MODE 1: AUTOMATIC BATCH MODE (RECURSIVE)
+# ==============================================================================
+if "Automatic" in mode:
+    issue_folders = discover_issue_folders_recursive(input_dir)
 
-btn_col1, btn_col2, btn_col3 = st.columns([1, 1, 2])
-with btn_col1:
-    stitch_all_clicked = st.button(
-        "🚀 Stitch All Pages", type="primary", use_container_width=True
-    )
-with btn_col2:
-    stitch_one_clicked = st.button(
-        "🧪 Stitch One Page (Test)", type="secondary", use_container_width=True
-    )
-with btn_col3:
-    test_target_group = st.selectbox(
-        "Select Page for Test Stitch",
-        options=groups,
-        format_func=lambda g: f"{g['target']} ({', '.join(g['parts'])})",
-        label_visibility="collapsed",
-    )
+    if not issue_folders:
+        st.info(f"No folders containing scan parts found under `{input_dir}`.")
+        st.stop()
 
-if stitch_one_clicked and test_target_group:
-    log_box = st.container(border=True)
-    target_path = os.path.join(input_dir, test_target_group["target"])
-    part_paths = [os.path.join(input_dir, p) for p in test_target_group["parts"]]
-    try:
-        log_box.write(
-            f"🔄 Test-stitching `{test_target_group['target']}` from `{', '.join(test_target_group['parts'])}`..."
-        )
-        raw_stitched = stitch_images_group(part_paths)
-        final_img = deskew_and_crop_edges(raw_stitched, extra_trim_px=extra_trim)
-        cv2.imwrite(target_path, final_img)
-        log_box.success(
-            f"✅ Saved `{test_target_group['target']}` ({final_img.shape[1]}x{final_img.shape[0]} px)"
-        )
-        st.rerun()
-    except Exception as e:
-        log_box.error(
-            f"❌ Failed to stitch `{test_target_group['target']}`: {e}"
-        )
-
-if stitch_all_clicked:
-    progress = st.progress(0)
-    log_box = st.container(border=True)
-
-    for idx, g in enumerate(groups):
-        target_path = os.path.join(input_dir, g["target"])
-        if os.path.exists(target_path) and not overwrite_existing:
-            log_box.info(
-                f"⏭️ `{g['target']}` already exists. Skipping (check 'Re-stitch' to overwrite)."
+    st.subheader(f"📂 Discovered Issue Folders ({len(issue_folders)})")
+    with st.expander("View Queued Issue Folders", expanded=True):
+        for folder_path, f_groups in issue_folders:
+            inferred_pdf = infer_pdf_filename(folder_path)
+            pdf_exists = os.path.exists(os.path.join(folder_path, inferred_pdf))
+            badge = "✅ PDF Exists" if pdf_exists else "⏳ Pending"
+            st.markdown(
+                f"- **`{folder_path}`** → `{inferred_pdf}` ({len(f_groups)} pages) [{badge}]"
             )
-            progress.progress((idx + 1) / len(groups))
-            continue
 
-        part_paths = [os.path.join(input_dir, p) for p in g["parts"]]
+    skip_existing_pdfs = st.checkbox(
+        "Skip folders where target `.pdf` already exists", value=True
+    )
+
+    if st.button(
+        "🚀 Run Automatic Stitch + OCR PDF on All Folders", type="primary"
+    ):
+        overall_progress = st.progress(0)
+        status_line = st.empty()
+        log_box = st.container(border=True)
+
+        for f_idx, (folder_path, f_groups) in enumerate(issue_folders):
+            pdf_name = infer_pdf_filename(folder_path)
+            pdf_out_path = os.path.join(folder_path, pdf_name)
+
+            if os.path.exists(pdf_out_path) and skip_existing_pdfs:
+                log_box.info(
+                    f"⏭️ Skipping `{folder_path}` (`{pdf_name}` already exists)."
+                )
+                overall_progress.progress((f_idx + 1) / len(issue_folders))
+                continue
+
+            log_box.markdown(
+                f"### 📂 Processing `{folder_path}` → `{pdf_name}`"
+            )
+            stitched_paths = []
+
+            for g in f_groups:
+                target_path = os.path.join(folder_path, g["target"])
+                if os.path.exists(target_path) and not overwrite_existing:
+                    stitched_paths.append(target_path)
+                    continue
+
+                part_paths = [os.path.join(folder_path, p) for p in g["parts"]]
+                try:
+                    status_line.markdown(
+                        f"**[{f_idx + 1}/{len(issue_folders)}] `{os.path.basename(folder_path)}`: Stitching `{g['target']}`...**"
+                    )
+                    raw_stitched = stitch_images_group(part_paths)
+                    final_img = deskew_and_crop_edges(
+                        raw_stitched, extra_trim_px=extra_trim
+                    )
+                    cv2.imwrite(target_path, final_img)
+                    stitched_paths.append(target_path)
+                except Exception as e:
+                    log_box.error(
+                        f"❌ Failed to stitch `{g['target']}` in `{folder_path}`: {e}"
+                    )
+
+            if stitched_paths:
+                try:
+                    build_ocr_optimized_pdf(
+                        stitched_paths,
+                        pdf_out_path,
+                        jpeg_quality=jpeg_quality,
+                        status_callback=lambda msg: status_line.markdown(
+                            f"**[{f_idx + 1}/{len(issue_folders)}] `{os.path.basename(folder_path)}`: {msg}**"
+                        ),
+                    )
+                    size_mb = os.path.getsize(pdf_out_path) / (1024 * 1024)
+                    log_box.success(
+                        f"✅ Created OCR'd PDF `{pdf_out_path}` ({len(stitched_paths)} pages, {size_mb:.1f} MB)"
+                    )
+                except Exception as e:
+                    log_box.error(
+                        f"❌ Failed to build PDF for `{folder_path}`: {e}"
+                    )
+
+            overall_progress.progress((f_idx + 1) / len(issue_folders))
+
+        status_line.success("🎉 Automatic batch processing complete!")
+
+# ==============================================================================
+# MODE 2: SINGLE ISSUE MODE (INTERACTIVE REVIEW)
+# ==============================================================================
+else:
+    groups = discover_scan_groups(input_dir)
+
+    if not groups:
+        st.info(
+            "No scan parts (e.g., `1a.png`, `1b.png`, `5-6a.png`) found in this directory."
+        )
+        st.stop()
+
+    st.subheader(f"📋 Discovered Page Groups ({len(groups)})")
+
+    default_pdf_name = infer_pdf_filename(input_dir)
+    pdf_filename = st.text_input("Output PDF Filename", value=default_pdf_name)
+
+    with st.expander("View Detected Scan Parts Mapping", expanded=True):
+        for g in groups:
+            exists_badge = (
+                "✅ Exists"
+                if os.path.exists(os.path.join(input_dir, g["target"]))
+                else "⏳ Pending"
+            )
+            st.markdown(
+                f"- **`{g['target']}`** ({exists_badge}) ← `{', '.join(g['parts'])}`"
+            )
+
+    btn_col1, btn_col2, btn_col3 = st.columns([1, 1, 2])
+    with btn_col1:
+        stitch_all_clicked = st.button(
+            "🚀 Stitch All Pages", type="primary", use_container_width=True
+        )
+    with btn_col2:
+        stitch_one_clicked = st.button(
+            "🧪 Stitch One Page (Test)",
+            type="secondary",
+            use_container_width=True,
+        )
+    with btn_col3:
+        test_target_group = st.selectbox(
+            "Select Page for Test Stitch",
+            options=groups,
+            format_func=lambda g: f"{g['target']} ({', '.join(g['parts'])})",
+            label_visibility="collapsed",
+        )
+
+    if stitch_one_clicked and test_target_group:
+        log_box = st.container(border=True)
+        target_path = os.path.join(input_dir, test_target_group["target"])
+        part_paths = [
+            os.path.join(input_dir, p) for p in test_target_group["parts"]
+        ]
         try:
             log_box.write(
-                f"🔄 Stitching `{g['target']}` from `{', '.join(g['parts'])}`..."
+                f"🔄 Test-stitching `{test_target_group['target']}` from `{', '.join(test_target_group['parts'])}`..."
             )
             raw_stitched = stitch_images_group(part_paths)
             final_img = deskew_and_crop_edges(
@@ -452,121 +608,155 @@ if stitch_all_clicked:
             )
             cv2.imwrite(target_path, final_img)
             log_box.success(
-                f"✅ Saved `{g['target']}` ({final_img.shape[1]}x{final_img.shape[0]} px)"
+                f"✅ Saved `{test_target_group['target']}` ({final_img.shape[1]}x{final_img.shape[0]} px)"
             )
+            st.rerun()
         except Exception as e:
-            log_box.error(f"❌ Failed to stitch `{g['target']}`: {e}")
+            log_box.error(
+                f"❌ Failed to stitch `{test_target_group['target']}`: {e}"
+            )
 
-        progress.progress((idx + 1) / len(groups))
+    if stitch_all_clicked:
+        progress = st.progress(0)
+        log_box = st.container(border=True)
 
-    st.rerun()
+        for idx, g in enumerate(groups):
+            target_path = os.path.join(input_dir, g["target"])
+            if os.path.exists(target_path) and not overwrite_existing:
+                log_box.info(
+                    f"⏭️ `{g['target']}` already exists. Skipping (check 'Re-stitch' to overwrite)."
+                )
+                progress.progress((idx + 1) / len(groups))
+                continue
 
-# ==============================================================================
-# HUMAN REVIEW & MANUAL CROP ADJUSTMENT
-# ==============================================================================
-existing_targets = [
-    g for g in groups if os.path.exists(os.path.join(input_dir, g["target"]))
-]
+            part_paths = [os.path.join(input_dir, p) for p in g["parts"]]
+            try:
+                log_box.write(
+                    f"🔄 Stitching `{g['target']}` from `{', '.join(g['parts'])}`..."
+                )
+                raw_stitched = stitch_images_group(part_paths)
+                final_img = deskew_and_crop_edges(
+                    raw_stitched, extra_trim_px=extra_trim
+                )
+                cv2.imwrite(target_path, final_img)
+                log_box.success(
+                    f"✅ Saved `{g['target']}` ({final_img.shape[1]}x{final_img.shape[0]} px)"
+                )
+            except Exception as e:
+                log_box.error(f"❌ Failed to stitch `{g['target']}`: {e}")
 
-if existing_targets:
-    st.divider()
-    st.subheader("👁️ Review Stitched Pages & Build PDF")
+            progress.progress((idx + 1) / len(groups))
 
-    review_cols = st.columns(3)
-    for idx, g in enumerate(existing_targets):
-        t_name = g["target"]
-        t_path = os.path.join(input_dir, t_name)
-        col = review_cols[idx % 3]
+        st.rerun()
 
-        with col:
-            with st.container(border=True):
-                pil_img = Image.open(t_path)
-                w, h = pil_img.size
-                st.markdown(f"**`{t_name}`** ({w} × {h} px)")
-                st.image(pil_img, use_container_width=True)
+    # ==============================================================================
+    # HUMAN REVIEW & MANUAL CROP ADJUSTMENT
+    # ==============================================================================
+    existing_targets = [
+        g for g in groups if os.path.exists(os.path.join(input_dir, g["target"]))
+    ]
 
-                with st.expander(f"✂️ Manual Trim `{t_name}`"):
-                    t_top = st.number_input(
-                        "Trim Top (px)",
-                        0,
-                        h // 2,
-                        0,
-                        step=10,
-                        key=f"tt_{t_name}",
-                    )
-                    t_bot = st.number_input(
-                        "Trim Bottom (px)",
-                        0,
-                        h // 2,
-                        0,
-                        step=10,
-                        key=f"tb_{t_name}",
-                    )
-                    t_left = st.number_input(
-                        "Trim Left (px)",
-                        0,
-                        w // 2,
-                        0,
-                        step=10,
-                        key=f"tl_{t_name}",
-                    )
-                    t_right = st.number_input(
-                        "Trim Right (px)",
-                        0,
-                        w // 2,
-                        0,
-                        step=10,
-                        key=f"tr_{t_name}",
-                    )
-                    rot_deg = st.number_input(
-                        "Fine Rotate (°)",
-                        -5.0,
-                        5.0,
-                        0.0,
-                        step=0.1,
-                        key=f"rot_{t_name}",
-                    )
+    if existing_targets:
+        st.divider()
+        st.subheader("👁️ Review Stitched Pages & Build PDF")
 
-                    if st.button("💾 Apply Adjustment", key=f"apply_{t_name}"):
-                        img_cv = cv2.imread(t_path)
-                        if abs(rot_deg) > 0.01:
+        review_cols = st.columns(3)
+        for idx, g in enumerate(existing_targets):
+            t_name = g["target"]
+            t_path = os.path.join(input_dir, t_name)
+            col = review_cols[idx % 3]
+
+            with col:
+                with st.container(border=True):
+                    pil_img = Image.open(t_path)
+                    w, h = pil_img.size
+                    st.markdown(f"**`{t_name}`** ({w} × {h} px)")
+                    st.image(pil_img, use_container_width=True)
+
+                    with st.expander(f"✂️ Manual Trim `{t_name}`"):
+                        t_top = st.number_input(
+                            "Trim Top (px)",
+                            0,
+                            h // 2,
+                            0,
+                            step=10,
+                            key=f"tt_{t_name}",
+                        )
+                        t_bot = st.number_input(
+                            "Trim Bottom (px)",
+                            0,
+                            h // 2,
+                            0,
+                            step=10,
+                            key=f"tb_{t_name}",
+                        )
+                        t_left = st.number_input(
+                            "Trim Left (px)",
+                            0,
+                            w // 2,
+                            0,
+                            step=10,
+                            key=f"tl_{t_name}",
+                        )
+                        t_right = st.number_input(
+                            "Trim Right (px)",
+                            0,
+                            w // 2,
+                            0,
+                            step=10,
+                            key=f"tr_{t_name}",
+                        )
+                        rot_deg = st.number_input(
+                            "Fine Rotate (°)",
+                            -5.0,
+                            5.0,
+                            0.0,
+                            step=0.1,
+                            key=f"rot_{t_name}",
+                        )
+
+                        if st.button(
+                            "💾 Apply Adjustment", key=f"apply_{t_name}"
+                        ):
+                            img_cv = cv2.imread(t_path)
+                            if abs(rot_deg) > 0.01:
+                                ch, cw = img_cv.shape[:2]
+                                M = cv2.getRotationMatrix2D(
+                                    (cw // 2, ch // 2), rot_deg, 1.0
+                                )
+                                img_cv = cv2.warpAffine(
+                                    img_cv,
+                                    M,
+                                    (cw, ch),
+                                    flags=cv2.INTER_CUBIC,
+                                    borderValue=(255, 255, 255),
+                                )
                             ch, cw = img_cv.shape[:2]
-                            M = cv2.getRotationMatrix2D(
-                                (cw // 2, ch // 2), rot_deg, 1.0
-                            )
-                            img_cv = cv2.warpAffine(
-                                img_cv,
-                                M,
-                                (cw, ch),
-                                flags=cv2.INTER_CUBIC,
-                                borderValue=(255, 255, 255),
-                            )
-                        ch, cw = img_cv.shape[:2]
-                        cropped = img_cv[
-                            t_top : ch - t_bot, t_left : cw - t_right
-                        ]
-                        cv2.imwrite(t_path, cropped)
-                        st.success(f"Updated `{t_name}`!")
-                        st.rerun()
+                            cropped = img_cv[
+                                t_top : ch - t_bot, t_left : cw - t_right
+                            ]
+                            cv2.imwrite(t_path, cropped)
+                            st.success(f"Updated `{t_name}`!")
+                            st.rerun()
 
-    st.divider()
-    if st.button("📕 Combine All Pages into PDF", type="primary"):
-        pdf_out_path = os.path.join(input_dir, pdf_filename)
-        try:
-            doc = fitz.open()
-            for g in existing_targets:
-                img_path = os.path.join(input_dir, g["target"])
-                img_doc = fitz.open(img_path)
-                pdf_bytes = img_doc.convert_to_pdf()
-                img_pdf = fitz.open("pdf", pdf_bytes)
-                doc.insert_pdf(img_pdf)
-                img_doc.close()
-                img_pdf.close()
-
-            doc.save(pdf_out_path)
-            doc.close()
-            st.success(
-                f"🎉 Created PDF with {len(existing_targets)} page(s): `{pdf_out_path}`"
-            )
-        except Exception as e:
-            st.error(f"❌ Failed to build PDF: {e}")
+        st.divider()
+        if st.button("📕 Combine All Pages into OCR'd PDF", type="primary"):
+            pdf_out_path = os.path.join(input_dir, pdf_filename)
+            status_line = st.empty()
+            try:
+                img_paths = [
+                    os.path.join(input_dir, g["target"])
+                    for g in existing_targets
+                ]
+                build_ocr_optimized_pdf(
+                    img_paths,
+                    pdf_out_path,
+                    jpeg_quality=jpeg_quality,
+                    status_callback=lambda msg: status_line.info(msg),
+                )
+                size_mb = os.path.getsize(pdf_out_path) / (1024 * 1024)
+                status_line.success(
+                    f"🎉 Created OCR'd & optimized PDF with {len(existing_targets)} page(s) ({size_mb:.1f} MB): `{pdf_out_path}`"
+                )
+            except Exception as e:
+                status_line.error(f"❌ Failed to build PDF: {e}")
