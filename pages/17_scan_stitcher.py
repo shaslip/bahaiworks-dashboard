@@ -167,13 +167,13 @@ def trim_scanner_whitespace(img):
     return img[top:bottom, left:right]
 
 
-def stitch_pair_fallback(img1, img2):
+def stitch_pair_fallback(img1, img2, mask1=None):
     """2D rigid stitcher using SIFT + RANSAC. Returns (blended_img, valid_page_mask)."""
     gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
     gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
 
     sift = cv2.SIFT_create()
-    kp1, des1 = sift.detectAndCompute(gray1, None)
+    kp1, des1 = sift.detectAndCompute(gray1, mask1)
     kp2, des2 = sift.detectAndCompute(gray2, None)
 
     if des1 is None or des2 is None:
@@ -244,7 +244,14 @@ def stitch_pair_fallback(img1, img2):
     canvas1 = np.full((out_h, out_w, 3), 255, dtype=np.uint8)
     canvas1[t_dist[1] : t_dist[1] + h1, t_dist[0] : t_dist[0] + w1] = img1
     warped_mask1 = np.zeros((out_h, out_w), dtype=np.uint8)
-    warped_mask1[t_dist[1] : t_dist[1] + h1, t_dist[0] : t_dist[0] + w1] = 255
+    if mask1 is not None:
+        warped_mask1[t_dist[1] : t_dist[1] + h1, t_dist[0] : t_dist[0] + w1] = (
+            mask1
+        )
+    else:
+        warped_mask1[t_dist[1] : t_dist[1] + h1, t_dist[0] : t_dist[0] + w1] = (
+            255
+        )
 
     m1_bin = (warped_mask1 > 0).astype(np.uint8)
     m2_bin = (warped_mask2 > 0).astype(np.uint8)
@@ -292,10 +299,11 @@ def stitch_images_group(image_paths):
     current = imgs[0]
     current_mask = np.full(current.shape[:2], 255, dtype=np.uint8)
     for next_img in imgs[1:]:
-        current, current_mask = stitch_pair_fallback(current, next_img)
+        current, current_mask = stitch_pair_fallback(
+            current, next_img, current_mask
+        )
 
     return current, current_mask
-
 
 def deskew_and_crop_edges(stitched_data, extra_trim_px=0):
     """1.
