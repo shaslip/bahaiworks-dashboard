@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
 import os
 import re
+import shutil
 import sys
 import tempfile
 import cv2
@@ -473,6 +474,18 @@ def build_ocr_optimized_pdf(
     doc.save(pdf_out_path, garbage=4, deflate=True)
     doc.close()
 
+    # Also save a copy in the parent (/Vol/) directory one level up
+    issue_dir = os.path.dirname(os.path.abspath(pdf_out_path))
+    parent_dir = os.path.dirname(issue_dir)
+    parent_pdf_path = None
+    if os.path.isdir(parent_dir) and parent_dir != issue_dir:
+        parent_pdf_path = os.path.join(
+            parent_dir, os.path.basename(pdf_out_path)
+        )
+        shutil.copy2(pdf_out_path, parent_pdf_path)
+
+    return parent_pdf_path
+
 # ==============================================================================
 # UI & MAIN WORKFLOW
 # ==============================================================================
@@ -606,7 +619,7 @@ if "Automatic" in mode:
 
             if stitched_paths:
                 try:
-                    build_ocr_optimized_pdf(
+                    parent_pdf_path = build_ocr_optimized_pdf(
                         stitched_paths,
                         pdf_out_path,
                         jpeg_quality=jpeg_quality,
@@ -615,8 +628,11 @@ if "Automatic" in mode:
                         ),
                     )
                     size_mb = os.path.getsize(pdf_out_path) / (1024 * 1024)
+                    extra_msg = (
+                        f" and `{parent_pdf_path}`" if parent_pdf_path else ""
+                    )
                     log_box.success(
-                        f"✅ Created OCR'd PDF `{pdf_out_path}` ({len(stitched_paths)} pages, {size_mb:.1f} MB)"
+                        f"✅ Created OCR'd PDF `{pdf_out_path}`{extra_msg} ({len(stitched_paths)} pages, {size_mb:.1f} MB)"
                     )
                 except Exception as e:
                     log_box.error(
@@ -829,7 +845,7 @@ else:
                     os.path.join(input_dir, g["target"])
                     for g in existing_targets
                 ]
-                build_ocr_optimized_pdf(
+                parent_pdf_path = build_ocr_optimized_pdf(
                     img_paths,
                     pdf_out_path,
                     jpeg_quality=jpeg_quality,
@@ -837,8 +853,13 @@ else:
                     progress_callback=lambda frac: pdf_progress.progress(frac),
                 )
                 size_mb = os.path.getsize(pdf_out_path) / (1024 * 1024)
+                extra_msg = (
+                    f" (and copied to `{parent_pdf_path}`)"
+                    if parent_pdf_path
+                    else ""
+                )
                 status_line.success(
-                    f"🎉 Created OCR'd & optimized PDF with {len(existing_targets)} page(s) ({size_mb:.1f} MB): `{pdf_out_path}`"
+                    f"🎉 Created OCR'd & optimized PDF with {len(existing_targets)} page(s) ({size_mb:.1f} MB): `{pdf_out_path}`{extra_msg}"
                 )
             except Exception as e:
                 status_line.error(f"❌ Failed to build PDF: {e}")
