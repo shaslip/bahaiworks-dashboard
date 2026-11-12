@@ -393,12 +393,20 @@ def deskew_and_crop_edges(stitched_data, extra_trim_px=0):
 
     return img[top:bottom, left:right]
 
-def _stitch_single_group_worker(folder_path, g, extra_trim):
+def _stitch_single_group_worker(folder_path, g, extra_trim, auto_trim_bc=False):
     """Worker to stitch, deskew, and save a single page group in parallel."""
     target_path = os.path.join(folder_path, g["target"])
     part_paths = [os.path.join(folder_path, p) for p in g["parts"]]
     raw_stitched = stitch_images_group(part_paths)
     final_img = deskew_and_crop_edges(raw_stitched, extra_trim_px=extra_trim)
+
+    # In automatic mode, crop an extra 120px off the right edge of back cover ('bc') scans
+    if auto_trim_bc and any(
+        re.search(r"bc\.", p, re.IGNORECASE) for p in g["parts"]
+    ):
+        if final_img.shape[1] > 120:
+            final_img = final_img[:, :-120]
+
     cv2.imwrite(target_path, final_img)
     return (
         g["target"],
@@ -603,6 +611,7 @@ if "Automatic" in mode:
                             folder_path,
                             g,
                             extra_trim,
+                            True,
                         ): g
                         for g in groups_to_stitch
                     }
