@@ -223,12 +223,6 @@ def has_ps1_tag(wikitext):
         return False
     return bool(re.search(r'\{\{\s*ps\s*\|\s*1\s*\}\}', wikitext, re.IGNORECASE))
 
-def has_ps1_tag(wikitext):
-    """Checks if the wikitext already contains {{ps|1}}."""
-    if not wikitext:
-        return False
-    return bool(re.search(r'\{\{\s*ps\s*\|\s*1\s*\}\}', wikitext, re.IGNORECASE))
-
 def parse_vol_issue_from_filename(filename):
     """Extracts (volume, issue) strings from filenames like The_American_Bahá’í_Vol34_No1.pdf."""
     base = os.path.splitext(filename)[0]
@@ -843,7 +837,7 @@ if __name__ == '__main__':
 
     b_col1, b_col2, b_col3, b_col4 = st.columns([1.5, 1.5, 1.5, 2.5])
     with b_col1:
-        if st.button("☑️ Select All Unproofread / New", use_container_width=True):
+        if st.button("☑️ Select All Unproofread / New", width='stretch'):
             for x in issues_list:
                 x["selected"] = x["status"] in ("⏳ Unproofread", "🆕 New Issue (Will Create 2 Pages)")
             st.session_state["p08_editor_ver"] = st.session_state.get("p08_editor_ver", 0) + 1
