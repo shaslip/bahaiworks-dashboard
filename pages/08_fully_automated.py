@@ -4,6 +4,7 @@ import sys
 import json
 import re
 import time
+import unicodedata
 import fitz  # PyMuPDF
 import requests
 import concurrent.futures
@@ -284,12 +285,22 @@ def inspect_wiki_structure(base_title, existing_text_pages, session):
 
     return info
 
-def get_access_tag(copyright_mode):
+def format_access_pub_name(base_title):
+    """Converts 'The_American_Bahá’í' -> 'TheAmericanBahai'."""
+    if not base_title:
+        return "PublicationName"
+    normalized = unicodedata.normalize('NFKD', base_title)
+    ascii_text = "".join(c for c in normalized if not unicodedata.combining(c))
+    cleaned = re.sub(r'[^A-Za-z0-9]', '', ascii_text)
+    return cleaned or "PublicationName"
+
+def get_access_tag(copyright_mode, base_title=""):
     """Returns the accesscontrol tag prefix based on the selected copyright status."""
+    pub_name = format_access_pub_name(base_title)
     if copyright_mode == "2) Restricted":
-        return "<accesscontrol>Access:PublicationName</accesscontrol>\n"
+        return f"<accesscontrol>Access:{pub_name}</accesscontrol>\n"
     elif copyright_mode == "3) NoSearch":
-        return "<accesscontrol>(nosearch),Access:PublicationName</accesscontrol>\n"
+        return f"<accesscontrol>(nosearch),Access:{pub_name}</accesscontrol>\n"
     return ""
 
 def calc_prev_next_nums(issue_str):
@@ -299,9 +310,9 @@ def calc_prev_next_nums(issue_str):
     curr = int(issue_str)
     return curr - 1, curr + 1
 
-def build_new_base_page_wikitext(vol, iss, pdf_filename, struct_info, copyright_mode):
+def build_new_base_page_wikitext(vol, iss, pdf_filename, struct_info, copyright_mode, base_title=""):
     """Generates the wikitext for the Base Issue page (e.g. .../Volume_34/Issue_1)."""
-    access_tag = get_access_tag(copyright_mode)
+    access_tag = get_access_tag(copyright_mode, base_title)
     prev_num, next_num = calc_prev_next_nums(iss)
     pn_sep = struct_info.get("prev_next_space", " ")
     pdf_space_name = pdf_filename.replace("_", " ")
@@ -339,9 +350,9 @@ def build_new_base_page_wikitext(vol, iss, pdf_filename, struct_info, copyright_
         f"<pdf>File:{pdf_space_name}</pdf>\n"
     )
 
-def build_new_text_page_skeleton(vol, iss, pdf_filename, page_count, struct_info, copyright_mode):
+def build_new_text_page_skeleton(vol, iss, pdf_filename, page_count, struct_info, copyright_mode, base_title=""):
     """Generates the initial /Text skeleton with {{page}} tags for every page in the PDF."""
-    access_tag = get_access_tag(copyright_mode)
+    access_tag = get_access_tag(copyright_mode, base_title)
     prev_num, next_num = calc_prev_next_nums(iss)
     pn_sep = struct_info.get("prev_next_space", " ")
 
@@ -526,7 +537,8 @@ def merge_and_upload_issue(job, session, log_area, status_container, copyright_m
         current_wikitext = f.read()
 
     # Apply accesscontrol tag if selected and not already present
-    access_tag_prefix = get_access_tag(copyright_mode)
+    pub_base = wiki_title.split("/")[0]
+    access_tag_prefix = get_access_tag(copyright_mode, pub_base)
     if access_tag_prefix and "<accesscontrol>" not in current_wikitext.lower():
         current_wikitext = access_tag_prefix + current_wikitext.lstrip()
 
@@ -737,8 +749,8 @@ def load_periodical_issues(input_folder, base_title, copyright_mode="1) Open (No
         if page_count == 0:
             continue
 
-        base_page_wt = build_new_base_page_wikitext(vol, iss, short_name, struct_info, copyright_mode)
-        text_page_wt = build_new_text_page_skeleton(vol, iss, short_name, page_count, struct_info, copyright_mode)
+        base_page_wt = build_new_base_page_wikitext(vol, iss, short_name, struct_info, copyright_mode, base_title)
+        text_page_wt = build_new_text_page_skeleton(vol, iss, short_name, page_count, struct_info, copyright_mode, base_title)
 
         issues.append({
             "idx": len(issues),
@@ -942,12 +954,13 @@ if __name__ == '__main__':
             short_name = item["short_name"]
 
             # Regenerate skeleton with current copyright_mode if it's a new issue
+            # Regenerate skeleton with current copyright_mode if it's a new issue
             if item.get("is_new_issue"):
                 base_page_wt = build_new_base_page_wikitext(
-                    item.get("vol"), item.get("iss"), short_name, item.get("struct_info", {}), copyright_mode
+                    item.get("vol"), item.get("iss"), short_name, item.get("struct_info", {}), copyright_mode, base_title
                 )
                 live_wikitext = build_new_text_page_skeleton(
-                    item.get("vol"), item.get("iss"), short_name, item["page_count"], item.get("struct_info", {}), copyright_mode
+                    item.get("vol"), item.get("iss"), short_name, item["page_count"], item.get("struct_info", {}), copyright_mode, base_title
                 )
             else:
                 base_page_wt = ""
