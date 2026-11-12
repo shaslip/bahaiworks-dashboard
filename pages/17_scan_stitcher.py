@@ -41,7 +41,7 @@ def infer_pdf_filename(folder_path):
 
 
 def discover_scan_groups(folder_path):
-    """Scans directory for part files like 1a.png, 1b.png, 5-6a.png, 6c.png.
+    """Scans directory for part files like 0fc.png, 1a.png, 1b.png, 5-6a.png, 32bc.png.
 
     If 5-6a/b exists, combines 5*, 5-6*, and 6* into a single '5-6' spread
     group. Returns an ordered list of dicts: [{'target': '1.png', 'parts':
@@ -51,7 +51,8 @@ def discover_scan_groups(folder_path):
         return []
 
     part_pattern = re.compile(
-        r"^(\d+(?:-\d+)?)([a-z])\.(png|jpg|jpeg|tif|tiff)$", re.IGNORECASE
+        r"^(\d+(?:-\d+)?)(fc|bc|[a-z])\.(png|jpg|jpeg|tif|tiff)$",
+        re.IGNORECASE,
     )
     raw_groups = {}
     ext_map = {}
@@ -659,7 +660,7 @@ else:
 
     if not groups:
         st.info(
-            "No scan parts (e.g., `1a.png`, `1b.png`, `5-6a.png`) found in this directory."
+            "No scan parts (e.g., `0fc.png`, `1a.png`, `1b.png`, `5-6a.png`, `32bc.png`) found in this directory."
         )
         st.stop()
 
