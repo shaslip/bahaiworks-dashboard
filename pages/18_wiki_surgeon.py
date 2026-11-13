@@ -374,50 +374,60 @@ def locate_defect_window(wikitext: str, csv_snippet: str = "", window_radius: in
     end = min(len(wikitext), anchor_pos + window_radius)
     return wikitext[start:end], method
 
+def propose_surgical_llm_patches_packed(items_chunk: list[dict]) -> dict[int, dict]:
+    """
+    Packs multiple ~600-char local wikitext windows into a SINGLE Gemini call
+    to amortize prompt instructions (~75% token reduction) and returns a dict
+    mapping item `id` -> {"find", "replace", "summary", "confidence"}.
+    """
+    if not items_chunk:
+        return {}
 
-def propose_surgical_llm_patch(
-    page_title: str,
-    window_wikitext: str,
-    invariant_type: str = "",
-    csv_snippet: str = "",
-) -> dict:
-    """
-    Sends ONLY the ~600-char local wikitext window to Gemini and requests a strict
-    verbatim `find` -> `replace` JSON patch.
-    """
     model = genai.GenerativeModel(MODEL_NAME)
+    payload_json = json.dumps(
+        [
+            {
+                "id": it["id"],
+                "title": it["title"],
+                "defect_type": it.get("invariant", ""),
+                "hint": it.get("snippet", ""),
+                "window": it["window"],
+            }
+            for it in items_chunk
+        ],
+        ensure_ascii=False,
+        indent=2,
+    )
 
     prompt = f"""You are a surgical MediaWiki syntax repair bot for Bahai.works.
-You are given a ~600-character local window of raw MediaWiki wikitext from the page "{page_title}".
-
-Reported Defect Type: {invariant_type or "Malformed MediaWiki template, table, or tag"}
-Audit Scanner Hint: {csv_snippet or "(none)"}
-
-LOCAL WIKITEXT WINDOW:
-<<<WINDOW_START>>>
-{window_wikitext}
-<<<WINDOW_END>>>
+Below is a JSON array of {len(items_chunk)} items. Each item contains a ~600-character local `window` of raw MediaWiki wikitext from `title`, along with a `defect_type` and `hint`.
 
 YOUR TASK:
-Identify the broken MediaWiki template (`{{{{...}}}}`), broken table syntax (`{{|`, `|-`, `|}}`), orphan braces (`}}}}`, `{{{{|...}}}}`), or unclosed `<ref>` / HTML tag inside the window, and produce a minimal, surgical `find` and `replace` patch.
+For each item, identify the broken MediaWiki template (`{{{{...}}}}`), broken table syntax (`{{|`, `|-`, `|}}`), orphan braces (`}}}}`, `{{{{|...}}}}`), or unclosed `<ref>` / HTML tag inside its `window`, and produce a minimal, surgical `find` and `replace` patch.
 
 STRICT RULES:
-1. `find` MUST be an exact, character-for-character substring copied verbatim from inside `<<<WINDOW_START>>>` ... `<<<WINDOW_END>>>`. Include enough surrounding words (e.g. 25–120 chars) so `find` is 100% unique on the page.
+1. `find` MUST be an exact, character-for-character substring copied verbatim from that item's `window`. Include enough surrounding words (25–120 chars) so `find` is 100% unique on the page.
 2. Do NOT alter, modernize, or rewrite any author prose, spelling, or punctuation—ONLY fix the broken MediaWiki markup/templates/tags.
 3. Common Bahai.works conventions:
    - Centered headings/lines use `{{{{center|...}}}}`. If `{{{{center|` is missing before an obvious heading ending with `}}}}`, add `{{{{center|` at the start of that heading block.
    - If an image caption or inscription is wrapped in anonymous braces like `{{{{|Caption text}}}}`, convert it to `{{{{center|Caption text}}}}` (or remove the stray braces if it's plain prose).
    - If a stray `}}}}` appears at the end of a regular paragraph or blockquote with no opening template, remove the stray `}}}}`.
    - Transliteration underlines `{{{{u|...}}}}` only wrap 1 or 2 transliterated letters (e.g. `{{{{u|dh}}}}`, `{{{{u|sh}}}}`, `{{{{u|kh}}}}`, `{{{{u|gh}}}}`, `{{{{u|th}}}}`, `{{{{u|zh}}}}`, `{{{{u|ch}}}}`).
-4. If no markup error exists in the window, or if it cannot be safely fixed without seeing the physical book scan, set `"confidence": "SKIP"`.
+4. If no markup error exists in an item's `window`, or if it cannot be safely fixed without seeing the physical book scan, set `"confidence": "SKIP"` and leave `"find": ""`, `"replace": ""`.
 
-Return ONLY a valid JSON object with these exact keys:
-{{
-  "find": "exact substring from window",
-  "replace": "repaired substring",
-  "summary": "Brief 5-10 word edit summary for MediaWiki history",
-  "confidence": "HIGH" | "MEDIUM" | "SKIP"
-}}"""
+INPUT ITEMS:
+{payload_json}
+
+Return ONLY a valid JSON array of objects, one for each input item, with these exact keys:
+[
+  {{
+    "id": 0,
+    "find": "exact substring from window",
+    "replace": "repaired substring",
+    "summary": "Brief 5-10 word edit summary",
+    "confidence": "HIGH" | "MEDIUM" | "SKIP"
+  }}
+]"""
 
     safety_settings = {
         HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
@@ -427,19 +437,37 @@ Return ONLY a valid JSON object with these exact keys:
     }
 
     try:
-        resp = model.generate_content(prompt, safety_settings=safety_settings, request_options={"timeout": 60})
+        resp = model.generate_content(prompt, safety_settings=safety_settings, request_options={"timeout": 120})
         parsed = json_repair.loads(resp.text)
-        if not isinstance(parsed, dict):
-            return {"confidence": "ERROR", "summary": "Invalid JSON returned by LLM", "find": "", "replace": ""}
-        return {
-            "find": str(parsed.get("find", "")),
-            "replace": str(parsed.get("replace", "")),
-            "summary": str(parsed.get("summary", "Bot: Fix malformed MediaWiki syntax")),
-            "confidence": str(parsed.get("confidence", "MEDIUM")).upper(),
-        }
+        if isinstance(parsed, dict) and "items" in parsed:
+            parsed = parsed["items"]
+        if not isinstance(parsed, list):
+            return {
+                it["id"]: {"confidence": "ERROR", "summary": "Invalid JSON array from LLM", "find": "", "replace": ""}
+                for it in items_chunk
+            }
+
+        out = {}
+        for obj in parsed:
+            if not isinstance(obj, dict) or "id" not in obj:
+                continue
+            try:
+                item_id = int(obj["id"])
+            except (ValueError, TypeError):
+                continue
+            out[item_id] = {
+                "find": str(obj.get("find", "")),
+                "replace": str(obj.get("replace", "")),
+                "summary": str(obj.get("summary", "Bot: Fix malformed MediaWiki syntax")),
+                "confidence": str(obj.get("confidence", "MEDIUM")).upper(),
+            }
+        return out
     except Exception as e:
         check_fatal_rate_limit(e)
-        return {"confidence": "ERROR", "summary": f"LLM Error: {e}", "find": "", "replace": ""}
+        return {
+            it["id"]: {"confidence": "ERROR", "summary": f"LLM Error: {e}", "find": "", "replace": ""}
+            for it in items_chunk
+        }
 
 
 # ==============================================================================
@@ -753,23 +781,32 @@ with tab_tier2:
         "`find` ➔ `replace` JSON patch. Verifies that `find` appears **exactly once** in the page before allowing upload."
     )
 
-    col_llm1, col_llm2 = st.columns([1, 2])
+    col_llm1, col_llm2, col_llm3 = st.columns([1, 1, 1.5])
     with col_llm1:
         llm_batch_limit = st.number_input(
-            "Max Pages to Process in This LLM Batch",
+            "Max Pages to Process",
             min_value=1,
-            max_value=200,
-            value=min(25, max(1, len(target_queue))),
-            step=5,
+            max_value=500,
+            value=min(50, max(1, len(target_queue))),
+            step=10,
         )
     with col_llm2:
+        items_per_prompt = st.slider(
+            "Pages Packed per Prompt",
+            min_value=5,
+            max_value=30,
+            value=20,
+            step=5,
+            help="Packs N 600-char windows into a single LLM API call (~75% token savings).",
+        )
+    with col_llm3:
         window_radius = st.slider(
-            "Local Wikitext Context Radius (chars before & after defect)",
+            "Local Wikitext Context Radius (chars)",
             min_value=150,
             max_value=600,
             value=300,
             step=50,
-            help="300 radius = ~600 total characters sent to Gemini per page.",
+            help="300 radius = ~600 total characters per window.",
         )
 
     if st.button("🧠 Generate Surgical LLM Patches for Queue", type="primary", disabled=not target_queue):
@@ -784,20 +821,21 @@ with tab_tier2:
         finally:
             session.close()
 
-        prog = st.progress(0)
-        status = st.empty()
+        # 1. Slice all windows locally in memory first
+        prepared_for_llm = []
+        results_by_idx = {}
 
-        def _process_single_llm_item(item):
+        for idx, item in enumerate(batch_items):
             t = item["title"]
             raw_wt = wt_map.get(t, "")
             if not raw_wt:
-                return None
+                continue
 
             window_txt, anchor_method = locate_defect_window(
                 raw_wt, csv_snippet=item.get("snippet", ""), window_radius=window_radius
             )
             if not window_txt:
-                return {
+                results_by_idx[idx] = {
                     "Approve": False,
                     "Title": t,
                     "Confidence": "NO_ANCHOR",
@@ -808,61 +846,82 @@ with tab_tier2:
                     "Summary": "",
                     "_raw_wikitext": raw_wt,
                 }
+            else:
+                prepared_for_llm.append({
+                    "id": idx,
+                    "title": t,
+                    "invariant": item.get("invariant", ""),
+                    "snippet": item.get("snippet", ""),
+                    "window": window_txt,
+                    "anchor_method": anchor_method,
+                    "raw_wt": raw_wt,
+                })
 
-            patch = propose_surgical_llm_patch(
-                page_title=t,
-                window_wikitext=window_txt,
-                invariant_type=item.get("invariant", ""),
-                csv_snippet=item.get("snippet", ""),
+        # 2. Group into packed chunks of `items_per_prompt` and call Gemini in parallel
+        chunks = [
+            prepared_for_llm[i : i + items_per_prompt]
+            for i in range(0, len(prepared_for_llm), items_per_prompt)
+        ]
+
+        if chunks:
+            prog = st.progress(0)
+            status = st.empty()
+            status.write(
+                f"Sending **{len(prepared_for_llm)}** windows packed into **{len(chunks)}** API call(s) "
+                f"({items_per_prompt} pages/call)..."
             )
 
-            find_str = patch.get("find", "")
-            replace_str = patch.get("replace", "")
-            conf = patch.get("confidence", "SKIP")
+            patches_by_id = {}
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                futs = {executor.submit(propose_surgical_llm_patches_packed, ch): c_idx for c_idx, ch in enumerate(chunks)}
+                done_chunks = 0
+                for fut in concurrent.futures.as_completed(futs):
+                    chunk_res = fut.result()
+                    patches_by_id.update(chunk_res)
+                    done_chunks += 1
+                    prog.progress(done_chunks / len(chunks))
+                    status.write(f"Completed packed prompt {done_chunks}/{len(chunks)}...")
 
-            occ_count = raw_wt.count(find_str) if find_str else 0
-            is_valid = (
-                conf in ("HIGH", "MEDIUM")
-                and bool(find_str)
-                and find_str != replace_str
-                and occ_count == 1
-            )
+            for p_item in prepared_for_llm:
+                idx = p_item["id"]
+                raw_wt = p_item["raw_wt"]
+                patch = patches_by_id.get(
+                    idx,
+                    {"confidence": "ERROR", "summary": "Missing from packed LLM response", "find": "", "replace": ""},
+                )
+                find_str = patch.get("find", "")
+                replace_str = patch.get("replace", "")
+                conf = patch.get("confidence", "SKIP")
 
-            if occ_count == 0 and conf not in ("SKIP", "ERROR"):
-                conf = "HALLUCINATED_FIND (0 matches)"
-            elif occ_count > 1:
-                conf = f"AMBIGUOUS ({occ_count} matches)"
+                occ_count = raw_wt.count(find_str) if find_str else 0
+                is_valid = (
+                    conf in ("HIGH", "MEDIUM")
+                    and bool(find_str)
+                    and find_str != replace_str
+                    and occ_count == 1
+                )
 
-            return {
-                "Approve": is_valid and conf == "HIGH",
-                "Title": t,
-                "Confidence": conf,
-                "Anchor": anchor_method,
-                "Window Preview": window_txt.replace("\n", " ↵ ")[:240],
-                "Find (Exact)": find_str,
-                "Replace (Surgical)": replace_str,
-                "Summary": patch.get("summary", "Bot: Surgical markup fix"),
-                "_raw_wikitext": raw_wt,
-            }
+                if occ_count == 0 and conf not in ("SKIP", "ERROR"):
+                    conf = "HALLUCINATED_FIND (0 matches)"
+                elif occ_count > 1:
+                    conf = f"AMBIGUOUS ({occ_count} matches)"
 
-        results_by_idx = {}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-            future_to_idx = {
-                executor.submit(_process_single_llm_item, item): i
-                for i, item in enumerate(batch_items)
-            }
-            completed = 0
-            for future in concurrent.futures.as_completed(future_to_idx):
-                idx = future_to_idx[future]
-                res = future.result()
-                if res is not None:
-                    results_by_idx[idx] = res
-                completed += 1
-                prog.progress(completed / len(batch_items))
-                status.write(f"Analyzed ({completed}/{len(batch_items)}): `{batch_items[idx]['title']}`...")
+                results_by_idx[idx] = {
+                    "Approve": is_valid and conf == "HIGH",
+                    "Title": p_item["title"],
+                    "Confidence": conf,
+                    "Anchor": p_item["anchor_method"],
+                    "Window Preview": p_item["window"].replace("\n", " ↵ ")[:240],
+                    "Find (Exact)": find_str,
+                    "Replace (Surgical)": replace_str,
+                    "Summary": patch.get("summary", "Bot: Surgical markup fix"),
+                    "_raw_wikitext": raw_wt,
+                }
 
         llm_proposals = [results_by_idx[i] for i in sorted(results_by_idx.keys())]
-        status.success(f"Generated {len(llm_proposals)} surgical patch proposal(s)!")
+        st.success(
+            f"Generated {len(llm_proposals)} surgical patch proposal(s) using only {len(chunks)} packed API call(s)!"
+        )
         st.session_state["tier2_proposals"] = llm_proposals
 
     t2_proposals = st.session_state.get("tier2_proposals")
