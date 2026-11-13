@@ -655,7 +655,8 @@ with tab_tier1:
     st.subheader("🤖 Tier 1: High-Confidence Python Regex Replacements")
     st.caption("Fetches live wikitext in batches of 50, runs deterministic regex fixes, shows exact line diffs, and batch-uploads approved changes.")
 
-    default_packs = st.session_state.get("active_tier1_packs", list(TIER1_RULE_PACKS.keys()))
+    raw_default_packs = st.session_state.get("active_tier1_packs", list(TIER1_RULE_PACKS.keys()))
+    default_packs = [k for k in raw_default_packs if k in TIER1_RULE_PACKS]
     enabled_packs = st.multiselect(
         "Enabled Deterministic Rule Packs",
         options=list(TIER1_RULE_PACKS.keys()),
