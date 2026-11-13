@@ -22,7 +22,6 @@ st.set_page_config(
     page_title="Magazine Scan Stitcher", page_icon="🧩", layout="wide"
 )
 
-
 # ==============================================================================
 # HELPER FUNCTIONS
 # ==============================================================================
@@ -378,19 +377,9 @@ def deskew_and_crop_edges(stitched_data, extra_trim_px=0):
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             h, w = gray.shape
 
-    # 2. Find the clean inscribed rectangle of physical paper (gray < 254 & mask > 0)
-    # Using >= 0.85 strips away the 4 white triangles from rotation and uneven scan overhangs
+    # 2. First crop top and bottom so top/bottom rotation wedges don't affect left/right
     is_paper = (gray < 254) & (page_mask > 0)
-    col_paper_ratio = np.mean(is_paper, axis=0)
-    valid_cols = np.where(col_paper_ratio >= 0.85)[0]
-
-    if len(valid_cols) > 0:
-        left = int(valid_cols[0])
-        right = int(valid_cols[-1]) + 1
-    else:
-        left, right = 0, w
-
-    row_paper_ratio = np.mean(is_paper[:, left:right], axis=1)
+    row_paper_ratio = np.mean(is_paper, axis=1)
     valid_rows = np.where(row_paper_ratio >= 0.85)[0]
 
     if len(valid_rows) > 0:
@@ -399,14 +388,30 @@ def deskew_and_crop_edges(stitched_data, extra_trim_px=0):
     else:
         top, bottom = 0, h
 
+    # For each row between top and bottom, find where 255 white ends on the left
+    # and starts on the right, then take the inner bound (98th/2nd percentile to ignore 1px noise)
+    paper_cropped = is_paper[top:bottom, :]
+    row_has_paper = np.any(paper_cropped, axis=1)
+    if np.any(row_has_paper):
+        valid_r = paper_cropped[row_has_paper]
+        row_lefts = np.argmax(valid_r, axis=1)
+        row_rights = w - np.argmax(valid_r[:, ::-1], axis=1)
+        left = int(np.percentile(row_lefts, 98))
+        right = int(np.percentile(row_rights, 2))
+        if right <= left:
+            left, right = 0, w
+    else:
+        left, right = 0, w
+
     # 3. Protect printed ink/text (gray < 200) inside the interior paper area so a narrower
     # scan half never clips text on a wider scan half (e.g. "members." on Page 16)
     ink_mask = (gray < 200) & (page_mask > 0)
     # Ignore outermost 8px of raw scan edges to avoid scanner-bezel shadow lines
     edge_pad = 8
-    if h > 2 * edge_pad and w > 2 * edge_pad:
+    if bottom - top > 2 * edge_pad and w > 2 * edge_pad:
         ink_cols = np.where(
-            np.mean(ink_mask[edge_pad : h - edge_pad, :], axis=0) > 0.002
+            np.mean(ink_mask[top + edge_pad : bottom - edge_pad, :], axis=0)
+            > 0.002
         )[0]
         if len(ink_cols) > 0:
             left = min(left, max(0, int(ink_cols[0]) - 10))
