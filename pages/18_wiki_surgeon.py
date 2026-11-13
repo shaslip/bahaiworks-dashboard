@@ -47,7 +47,7 @@ INSOURCE_PRESETS = {
     },
     "Mangled {{center|...}} / {{right|...}} Braces ({center|, {[center|, {{center})": {
         "query": r'insource:"center" insource:/([^{]\{\[?center\||\{\{center\}|\{center\{\||\{\{center\|[^}\n]+\}\])/',
-        "packs": ["pack_align", "pack_eol_align"],
+        "packs": ["pack_align"],
     },
     "Unclosed Single-Brace {{SW-ML}": {
         "query": r'insource:"{{SW-ML}" insource:/\{\{SW-ML\}[^}]/',
@@ -297,9 +297,8 @@ def _apply_pack_html_and_seams(text: str) -> tuple[str, list[str]]:
 TIER1_RULE_PACKS = {
     "pack_page": ("1. Unclosed {{page}}, {{bwpage}}, {{SW-ML}}, & empty {{}}", _apply_pack_page_and_void),
     "pack_u": ("2. Unclosed / Mangled {{u|...}} Transliteration Underlines", _apply_pack_underlines),
-    "pack_align": ("3. Mangled {center|...}}, {[center|...}}, {{center|...}] Braces", _apply_pack_alignment_templates),
-    "pack_eol_align": ("4. Auto-Close Unclosed {{center|... / {{right|... at End of First Line", _apply_pack_single_line_autoclose),
-    "pack_html": ("5. Truncated HTML Tags (</small) & Page-Break Hyphens", _apply_pack_html_and_seams),
+    "pack_align": ("3. Mangled {center|...}}, {[center|...}}, {{center|...}] Braces (Single-Line Only)", _apply_pack_alignment_templates),
+    "pack_html": ("4. Truncated HTML Tags (</small) & Page-Break Hyphens", _apply_pack_html_and_seams),
 }
 
 
@@ -350,7 +349,8 @@ def locate_defect_window(wikitext: str, csv_snippet: str = "", window_radius: in
         (r'(?<!\{)\{[A-Za-z]+\|[^\n{}]+\}\}', "Single-opened template '{...|...}}'"),
         (r'(?<!\{)\{\[?[A-Za-z]+\s*\{\|[^\n{}]+\}\}', "Mangled '{name{|...}}' template"),
         (r'\{\{\s*\|[^\n{}]+\}\}', "Anonymous '{{|...}}' template"),
-        (r'\{\{\s*(?:page|bwpage|swpage|center|right|left)\s*\|[^\n{}]+$', "Unclosed template at EOL"),
+        (r'\{\{\s*(?:page|bwpage|swpage)\s*\|[^\n{}]+$', "Unclosed page template at EOL"),
+        (r'\{\{\s*(?:center|right|left)\s*\|(?:(?!\}\}).)*?(?=\{\{|\n\s*\n\s*\n|\Z)', "Unclosed alignment template"),
         (r'^[ \t]*[^\n{}|]+[A-Za-z0-9.\)"”’]\}\}[ \t]*$', "Orphan closing '}}' after prose/heading"),
         (r'<\/(?:small|center|div|span|table|ref)(?![A-Za-z>])', "Truncated HTML tag"),
         (r'<ref\b[^>]*>(?:(?!</ref>).){650,}', "Unclosed/oversized <ref>"),
