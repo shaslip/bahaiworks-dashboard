@@ -135,20 +135,16 @@ def discover_issue_folders_recursive(root_folder):
 
 
 def trim_scanner_whitespace(img):
-    """Crops away ONLY the pure-white scanner bed (gray == 255).
-
-    Preserves the entire physical magazine page including its blank outer paper
-    margins.
-    """
+    """Crops away the pure-white scanner bed (gray >= 254) from a raw scan."""
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape
 
-    # Scanner bed is pure 255 white. Any pixel < 255 is physical magazine paper.
-    is_paper = gray < 255
+    # Scanner bed is pure 254-255 white. Physical magazine paper is < 254.
+    is_paper = gray < 254
 
-    # Keep any column/row that has physical paper (ignore tiny 1-2px dust specks via > 0.01)
+    # Require at least 25% of the column/row to be paper so dust/corner tips don't block cropping
     col_paper_ratio = np.mean(is_paper, axis=0)
-    page_cols = np.where(col_paper_ratio > 0.01)[0]
+    page_cols = np.where(col_paper_ratio > 0.25)[0]
 
     if len(page_cols) > 0:
         left = int(page_cols[0])
@@ -157,7 +153,7 @@ def trim_scanner_whitespace(img):
         left, right = 0, w
 
     row_paper_ratio = np.mean(is_paper[:, left:right], axis=1)
-    page_rows = np.where(row_paper_ratio > 0.01)[0]
+    page_rows = np.where(row_paper_ratio > 0.25)[0]
 
     if len(page_rows) > 0:
         top = int(page_rows[0])
@@ -310,8 +306,9 @@ def deskew_and_crop_edges(stitched_data, extra_trim_px=0):
 
     Straightens page using long horizontal header/footer rules in the top and
     bottom bands (ignoring tilted interior graphics) within ±1.5°.
-    2. Crops ONLY the pure-white empty canvas outside the union of the physical
-    paper mask, never clipping a wider scan half down to a narrower scan half.
+    2. Crops away the 4 white triangles created by rotation and any single-scan
+    paper overhang, while guaranteeing no printed ink (gray < 200) is ever cut
+    off.
     """
     if isinstance(stitched_data, tuple):
         img, page_mask = stitched_data
@@ -378,25 +375,45 @@ def deskew_and_crop_edges(stitched_data, extra_trim_px=0):
                 borderMode=cv2.BORDER_CONSTANT,
                 borderValue=0,
             )
-            h, w = img.shape[:2]
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            h, w = gray.shape
 
-    # 2. Crop ONLY outside the union of the valid paper mask (and any non-255 pixels)
-    non_white = np.any(img < 255, axis=2) & (page_mask > 0)
-    valid_cols = np.where(np.any(non_white, axis=0))[0]
+    # 2. Find the clean inscribed rectangle of physical paper (gray < 254 & mask > 0)
+    # Using >= 0.85 strips away the 4 white triangles from rotation and uneven scan overhangs
+    is_paper = (gray < 254) & (page_mask > 0)
+    col_paper_ratio = np.mean(is_paper, axis=0)
+    valid_cols = np.where(col_paper_ratio >= 0.85)[0]
 
     if len(valid_cols) > 0:
-        left = min(w - 1, int(valid_cols[0]) + extra_trim_px)
-        right = max(left + 1, int(valid_cols[-1]) + 1 - extra_trim_px)
+        left = int(valid_cols[0])
+        right = int(valid_cols[-1]) + 1
     else:
         left, right = 0, w
 
-    valid_rows = np.where(np.any(non_white[:, left:right], axis=1))[0]
+    row_paper_ratio = np.mean(is_paper[:, left:right], axis=1)
+    valid_rows = np.where(row_paper_ratio >= 0.85)[0]
 
     if len(valid_rows) > 0:
-        top = max(0, int(valid_rows[0]))
-        bottom = min(h, int(valid_rows[-1]) + 1)
+        top = int(valid_rows[0])
+        bottom = int(valid_rows[-1]) + 1
     else:
         top, bottom = 0, h
+
+    # 3. Protect printed ink/text (gray < 200) inside the interior paper area so a narrower
+    # scan half never clips text on a wider scan half (e.g. "members." on Page 16)
+    ink_mask = (gray < 200) & (page_mask > 0)
+    # Ignore outermost 8px of raw scan edges to avoid scanner-bezel shadow lines
+    edge_pad = 8
+    if h > 2 * edge_pad and w > 2 * edge_pad:
+        ink_cols = np.where(
+            np.mean(ink_mask[edge_pad : h - edge_pad, :], axis=0) > 0.002
+        )[0]
+        if len(ink_cols) > 0:
+            left = min(left, max(0, int(ink_cols[0]) - 10))
+            right = max(right, min(w, int(ink_cols[-1]) + 11))
+
+    left = min(w - 1, left + extra_trim_px)
+    right = max(left + 1, right - extra_trim_px)
 
     return img[top:bottom, left:right]
 
