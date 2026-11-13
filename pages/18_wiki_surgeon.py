@@ -42,7 +42,7 @@ INSOURCE_PRESETS = {
         "packs": ["pack_page"],
     },
     "Unclosed {{u|...} Transliteration Underlines": {
-        "query": r'insource:/(\{\{u\|[^}\n]+\}[^}]|[^{]\{u\|[^}\n]+\}\}|\{\{u\|\}[a-zA-Z]+|\{\{u\|[a-zA-Z]+[ ,.;:\n])/',
+        "query": r'insource:"{{u|" insource:/\{\{u\|([a-zA-ZÁáÍíÚúḤḥṢṣṬṭḌḍẒẓ]{1,3}\}[^}]|\}[a-zA-Z]+|[dskgtzcDSKGTZC][hH][a-zA-ZÁáÍíÚúḤḥṢṣṬṭḌḍẒẓ]+[^}\n]*\n)/',
         "packs": ["pack_u"],
     },
     "Mangled {{center|...}} / {{right|...}} Braces ({center|, {[center|, {{center})": {
@@ -444,7 +444,7 @@ Return ONLY a valid JSON array of objects, one for each input item, with these e
     }
 
     try:
-        resp = model.generate_content(prompt, safety_settings=safety_settings, request_options={"timeout": 120})
+        resp = model.generate_content(prompt, safety_settings=safety_settings, request_options={"timeout": 180})
         parsed = json_repair.loads(resp.text)
         if isinstance(parsed, dict) and "items" in parsed:
             parsed = parsed["items"]
@@ -471,6 +471,13 @@ Return ONLY a valid JSON array of objects, one for each input item, with these e
         return out
     except Exception as e:
         check_fatal_rate_limit(e)
+        # If a packed chunk hits a 504 Deadline Expired and has > 1 item, split it in half and retry
+        if "504" in str(e) and len(items_chunk) > 1:
+            mid = len(items_chunk) // 2
+            res = {}
+            res.update(propose_surgical_llm_patches_packed(items_chunk[:mid]))
+            res.update(propose_surgical_llm_patches_packed(items_chunk[mid:]))
+            return res
         return {
             it["id"]: {"confidence": "ERROR", "summary": f"LLM Error: {e}", "find": "", "replace": ""}
             for it in items_chunk
@@ -800,11 +807,11 @@ with tab_tier2:
     with col_llm2:
         items_per_prompt = st.slider(
             "Pages Packed per Prompt",
-            min_value=5,
-            max_value=30,
-            value=20,
-            step=5,
-            help="Packs N 600-char windows into a single LLM API call (~75% token savings).",
+            min_value=1,
+            max_value=15,
+            value=5,
+            step=1,
+            help="Packs N 600-char windows into a single LLM API call (5 avoids 504 timeouts while saving 80% instruction tokens).",
         )
     with col_llm3:
         window_radius = st.slider(
