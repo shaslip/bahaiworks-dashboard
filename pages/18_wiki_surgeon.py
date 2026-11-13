@@ -1,10 +1,12 @@
 import streamlit as st
 import pandas as pd
 import requests
+import os
 import re
 import json
 import concurrent.futures
 import json_repair
+from dotenv import load_dotenv
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
@@ -17,6 +19,10 @@ from src.mediawiki_uploader import (
 )
 from src.gemini_processor import MODEL_NAME, check_fatal_rate_limit
 
+load_dotenv()
+if os.getenv("GEMINI_API_KEY"):
+    genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+
 st.set_page_config(page_title="Wiki Surgeon", page_icon="🩺", layout="wide")
 st.title("🩺 Wiki Surgeon (Pywikibot Regex & Surgical LLM Patcher)")
 st.caption(
@@ -26,30 +32,39 @@ st.caption(
 )
 
 # ==============================================================================
-# 1. PRE-FILTERED CIRRUSSEARCH (`insource:`) PRESETS
+# 1. PRE-FILTERED CIRRUSSEARCH (`insource:`) PRESETS (Lucene Regex Compatible)
 # ==============================================================================
+# Note: MediaWiki CirrusSearch uses Lucene regex (no `\d`, `\s`, or `(?!...)` lookaheads).
+# We use `[^}]` after a single `}` so valid `}}` templates are never matched.
 INSOURCE_PRESETS = {
-    "Unclosed {{bwpage|...} (Single brace or missing brace)": (
-        r'insource:"bwpage" insource:/\{\{bwpage\|[^}\n]+(\}(?!\})|$)/'
-    ),
-    "Unclosed {{u|...} Transliteration Underlines": (
-        r'insource:"{{u|" insource:/\{\{u\|([a-zA-Z]{1,2}\}(?!\})|[cdgkstzCDGKSTZ][Hh][a-zA-Z]+)/'
-    ),
-    "Mangled {{center|...}} / {{right|...}} Braces ({center|, {[center|, {{center})": (
-        r'insource:"center" insource:/(\{\[?center\||\{\{center\}|\{center\{\||\{~?center\|\{|\{\{center\|[^}\n]+\}\])/'
-    ),
-    "Unclosed Single-Brace {{SW-ML}": (
-        r'insource:"{{SW-ML}"'
-    ),
-    "Empty {{}} or Anonymous {{|...}} Templates": (
-        r'insource:/\{\{\s*\|?[A-Za-z0-9]/'
-    ),
-    "Broken Closing </small or </center Tags (Missing '>')": (
-        r'insource:"</small" insource:/<\/small(?!>)/'
-    ),
-    "Scoped Unclosed {{page|...} (Requires Prefix below to avoid timeout!)": (
-        r'insource:"{{page|" insource:/\{\{page\|[^}\n]+(\}(?!\})|$)/'
-    ),
+    "Unclosed {{bwpage|...} (Single brace or missing brace)": {
+        "query": r'insource:"bwpage" insource:/\{\{bwpage\|[^}\n]+\}[^}]/',
+        "packs": ["pack_page"],
+    },
+    "Unclosed {{u|...} Transliteration Underlines": {
+        "query": r'insource:"{{u|" insource:/\{\{u\|([a-zA-Z]{1,3}\}[^}]|[cdgkstzCDGKSTZ][hH][a-zA-Z]+)/',
+        "packs": ["pack_u"],
+    },
+    "Mangled {{center|...}} / {{right|...}} Braces ({center|, {[center|, {{center})": {
+        "query": r'insource:"center" insource:/([^{]\{\[?center\||\{\{center\}|\{center\{\||\{\{center\|[^}\n]+\}\])/',
+        "packs": ["pack_align", "pack_eol_align"],
+    },
+    "Unclosed Single-Brace {{SW-ML}": {
+        "query": r'insource:"{{SW-ML}" insource:/\{\{SW-ML\}[^}]/',
+        "packs": ["pack_page"],
+    },
+    "Empty {{}} or Anonymous {{|...}} Templates": {
+        "query": r'insource:/\{\{\|?[A-Za-z0-9\}]/',
+        "packs": ["pack_page"],
+    },
+    "Broken Closing </small or </center Tags (Missing '>')": {
+        "query": r'insource:"</small" insource:/<\/small[^a-zA-Z>]/',
+        "packs": ["pack_html"],
+    },
+    "Scoped Unclosed {{page|...} (Requires Prefix below to avoid timeout!)": {
+        "query": r'insource:"{{page|" insource:/\{\{page\|[^}\n]+\}[^}]/',
+        "packs": ["pack_page"],
+    },
 }
 
 # ==============================================================================
@@ -480,7 +495,9 @@ with src_col2:
 
     elif discovery_mode.startswith("⚡"):
         preset_choice = st.selectbox("Select Pre-Filtered `insource:` Query", ["Custom Query..."] + list(INSOURCE_PRESETS.keys()))
-        default_q = INSOURCE_PRESETS.get(preset_choice, r'insource:"bwpage" insource:/\{\{bwpage\|[^}\n]+\}(?!\})/')
+        preset_info = INSOURCE_PRESETS.get(preset_choice, {"query": r'insource:"bwpage" insource:/\{\{bwpage\|[^}\n]+\}[^}]/', "packs": list(TIER1_RULE_PACKS.keys())})
+        default_q = preset_info["query"]
+
         c_q1, c_q2, c_q3 = st.columns([2.5, 1.2, 0.8])
         with c_q1:
             srsearch_query = st.text_input("CirrusSearch Query (`srsearch`)", value=default_q)
@@ -528,6 +545,7 @@ with src_col2:
                             break
 
                 st.session_state["surgeon_target_queue"] = found_titles
+                st.session_state["active_tier1_packs"] = preset_info["packs"]
                 st.session_state.pop("tier1_proposals", None)
                 st.session_state.pop("tier2_proposals", None)
                 st.success(f"Found **{len(found_titles)}** matching pages on `bahai.works`!")
@@ -595,10 +613,11 @@ with tab_tier1:
     st.subheader("🤖 Tier 1: High-Confidence Python Regex Replacements")
     st.caption("Fetches live wikitext in batches of 50, runs deterministic regex fixes, shows exact line diffs, and batch-uploads approved changes.")
 
+    default_packs = st.session_state.get("active_tier1_packs", list(TIER1_RULE_PACKS.keys()))
     enabled_packs = st.multiselect(
         "Enabled Deterministic Rule Packs",
         options=list(TIER1_RULE_PACKS.keys()),
-        default=list(TIER1_RULE_PACKS.keys()),
+        default=default_packs,
         format_func=lambda k: TIER1_RULE_PACKS[k][0],
     )
 
@@ -632,7 +651,11 @@ with tab_tier1:
                         "_summary": f"Bot: {', '.join(notes)}",
                     })
                 else:
-                    unresolved_for_tier2.append(meta_by_title[t])
+                    item_copy = dict(meta_by_title[t])
+                    win_txt, win_method = locate_defect_window(raw_wt, csv_snippet=item_copy.get("snippet", ""), window_radius=200)
+                    item_copy["raw_window_preview"] = win_txt
+                    item_copy["anchor_method"] = win_method
+                    unresolved_for_tier2.append(item_copy)
 
             st.session_state["tier1_proposals"] = proposals
             st.session_state["tier1_unresolved"] = unresolved_for_tier2
@@ -641,15 +664,30 @@ with tab_tier1:
 
     t1_proposals = st.session_state.get("tier1_proposals")
     if t1_proposals is not None:
-        unresolved_cnt = len(st.session_state.get("tier1_unresolved", []))
+        unresolved_list = st.session_state.get("tier1_unresolved", [])
+        unresolved_cnt = len(unresolved_list)
         st.write(
             f"✅ **Tier 1 matched `{len(t1_proposals)}` page(s)** with deterministic fixes. "
             f"(`{unresolved_cnt}` page(s) had no Tier 1 regex match and can be sent to **Tab 2 Surgical LLM**.)"
         )
 
         if unresolved_cnt > 0:
+            with st.expander(f"🔎 Inspect {unresolved_cnt} Unresolved Page(s) & Raw Wikitext Snippets", expanded=False):
+                st.dataframe(
+                    pd.DataFrame([
+                        {
+                            "Title": u["title"],
+                            "Search / CSV Snippet": u.get("snippet", ""),
+                            "Anchor": u.get("anchor_method", ""),
+                            "Raw Wikitext Window": (u.get("raw_window_preview", "") or "").replace("\n", " ↵ "),
+                        }
+                        for u in unresolved_list
+                    ]),
+                    width="stretch",
+                    hide_index=True,
+                )
             if st.button(f"➡️ Send {unresolved_cnt} Unresolved Page(s) Only to Active Queue for Tab 2"):
-                st.session_state["surgeon_target_queue"] = st.session_state["tier1_unresolved"]
+                st.session_state["surgeon_target_queue"] = unresolved_list
                 st.rerun()
 
         if t1_proposals:
