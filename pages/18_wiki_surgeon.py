@@ -54,7 +54,7 @@ INSOURCE_PRESETS = {
         "packs": ["pack_page"],
     },
     "Empty {{}} or Anonymous {{|...}} Templates": {
-        "query": r'insource:/\{\{\|?[A-Za-z0-9\}]/',
+        "query": r'insource:/\{\{(\}\}|\|[^}\n]+\}\})/',
         "packs": ["pack_page"],
     },
     "Broken Closing </small or </center Tags (Missing '>')": {
