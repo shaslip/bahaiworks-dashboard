@@ -786,33 +786,28 @@ with tab_tier2:
 
         prog = st.progress(0)
         status = st.empty()
-        llm_proposals = []
 
-        for idx, item in enumerate(batch_items, 1):
+        def _process_single_llm_item(item):
             t = item["title"]
             raw_wt = wt_map.get(t, "")
-            status.write(f"Analyzing ({idx}/{len(batch_items)}): `{t}`...")
-
             if not raw_wt:
-                prog.progress(idx / len(batch_items))
-                continue
+                return None
 
             window_txt, anchor_method = locate_defect_window(
                 raw_wt, csv_snippet=item.get("snippet", ""), window_radius=window_radius
             )
             if not window_txt:
-                llm_proposals.append({
+                return {
                     "Approve": False,
                     "Title": t,
                     "Confidence": "NO_ANCHOR",
                     "Anchor": "Could not locate snippet in live wikitext (already fixed?)",
+                    "Window Preview": "",
                     "Find (Exact)": "",
                     "Replace (Surgical)": "",
                     "Summary": "",
                     "_raw_wikitext": raw_wt,
-                })
-                prog.progress(idx / len(batch_items))
-                continue
+                }
 
             patch = propose_surgical_llm_patch(
                 page_title=t,
@@ -825,7 +820,6 @@ with tab_tier2:
             replace_str = patch.get("replace", "")
             conf = patch.get("confidence", "SKIP")
 
-            # Strict Uniqueness Verification in full page
             occ_count = raw_wt.count(find_str) if find_str else 0
             is_valid = (
                 conf in ("HIGH", "MEDIUM")
@@ -839,18 +833,35 @@ with tab_tier2:
             elif occ_count > 1:
                 conf = f"AMBIGUOUS ({occ_count} matches)"
 
-            llm_proposals.append({
+            return {
                 "Approve": is_valid and conf == "HIGH",
                 "Title": t,
                 "Confidence": conf,
                 "Anchor": anchor_method,
+                "Window Preview": window_txt.replace("\n", " ↵ ")[:240],
                 "Find (Exact)": find_str,
                 "Replace (Surgical)": replace_str,
                 "Summary": patch.get("summary", "Bot: Surgical markup fix"),
                 "_raw_wikitext": raw_wt,
-            })
-            prog.progress(idx / len(batch_items))
+            }
 
+        results_by_idx = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            future_to_idx = {
+                executor.submit(_process_single_llm_item, item): i
+                for i, item in enumerate(batch_items)
+            }
+            completed = 0
+            for future in concurrent.futures.as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                res = future.result()
+                if res is not None:
+                    results_by_idx[idx] = res
+                completed += 1
+                prog.progress(completed / len(batch_items))
+                status.write(f"Analyzed ({completed}/{len(batch_items)}): `{batch_items[idx]['title']}`...")
+
+        llm_proposals = [results_by_idx[i] for i in sorted(results_by_idx.keys())]
         status.success(f"Generated {len(llm_proposals)} surgical patch proposal(s)!")
         st.session_state["tier2_proposals"] = llm_proposals
 
