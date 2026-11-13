@@ -42,7 +42,7 @@ INSOURCE_PRESETS = {
         "packs": ["pack_page"],
     },
     "Unclosed {{u|...} Transliteration Underlines": {
-        "query": r'insource:"{{u|" insource:/\{\{u\|([a-zA-Z]{1,3}\}[^}]|[cdgkstzCDGKSTZ][hH][a-zA-Z]+)/',
+        "query": r'insource:/(\{\{u\|[^}\n]+\}[^}]|[^{]\{u\|[^}\n]+\}\}|\{\{u\|\}[a-zA-Z]+|\{\{u\|[a-zA-Z]+[ ,.;:\n])/',
         "packs": ["pack_u"],
     },
     "Mangled {{center|...}} / {{right|...}} Braces ({center|, {[center|, {{center})": {
@@ -160,8 +160,17 @@ def _apply_pack_underlines(text: str) -> tuple[str, list[str]]:
         notes.append(f"Fixed {n} single-open-brace {{{{u|...}}}} template(s)")
     text = new_t
 
-    # 2c. Unclosed digraphs inside words: e.g. Mua{{u|dhdhin -> Mua{{u|dh}}dhin
-    # Standard Bahá'í transliteration digraphs: dh, sh, kh, gh, th, zh, ch, Dh, Sh, Kh, Gh, Th, Zh, Ch
+    # 2c. {{u|}sh} or {{u|}sh}} -> {{u|sh}} (stray brace before letters)
+    new_t, n = re.subn(
+        r'\{\{\s*u\s*\|\s*\}([A-Za-zÁáÍíÚúḤḥṢṣṬṭḌḍẒẓ]{1,3})\}\}?|(?<!\{)\{\s*u\s*\|\s*\}([A-Za-zÁáÍíÚúḤḥṢṣṬṭḌḍẒẓ]{1,3})\}\}?',
+        lambda m: f"{{{{u|{m.group(1) or m.group(2)}}}}}",
+        text,
+    )
+    if n:
+        notes.append(f"Fixed {n} mangled {{{{u|}}...}}}} template(s)")
+    text = new_t
+
+    # 2d. Unclosed digraphs inside words: e.g. Mua{{u|dhdhin -> Mua{{u|dh}}dhin
     new_t, n = re.subn(
         r'\{\{\s*u\s*\|\s*([dskgtzcDSKGTZC][hH])([A-Za-zÁáÍíÚúḤḥṢṣṬṭḌḍẒẓ’‘]+)(?![^}\n]*\})',
         r'{{u|\1}}\2',
@@ -326,8 +335,7 @@ def build_compact_diff_preview(old_text: str, new_text: str, context_chars: int 
 # ==============================================================================
 def locate_defect_window(wikitext: str, csv_snippet: str = "", window_radius: int = 300) -> tuple[str, str]:
     """
-    Locates the defect in live wikitext and returns (window_text, anchor_method).
-    Never returns the whole page—strictly slices a ~600-char local window.
+    Locates the unclosed/malformed template or tag in live wikitext and returns (window_text, anchor_method).
     """
     if not wikitext:
         return "", "empty"
@@ -335,36 +343,35 @@ def locate_defect_window(wikitext: str, csv_snippet: str = "", window_radius: in
     anchor_pos = -1
     method = ""
 
-    # Strategy 1: Anchor using clean prose runs from the Tab 5 CSV snippet
-    if csv_snippet:
+    # Strategy 1: Scan raw wikitext directly for unclosed/mangled braces or broken tags FIRST
+    defect_patterns = [
+        (r'\{\{[^\n{}]+\}(?!\})', "Single-closed template '{{...}'"),
+        (r'\{\{\s*u\s*\|\s*\}?[A-Za-z]+(?![^}\n]*\}\})', "Unclosed {{u|... template"),
+        (r'(?<!\{)\{[A-Za-z]+\|[^\n{}]+\}\}', "Single-opened template '{...|...}}'"),
+        (r'(?<!\{)\{\[?[A-Za-z]+\s*\{\|[^\n{}]+\}\}', "Mangled '{name{|...}}' template"),
+        (r'\{\{\s*\|[^\n{}]+\}\}', "Anonymous '{{|...}}' template"),
+        (r'\{\{\s*(?:page|bwpage|swpage|center|right|left)\s*\|[^\n{}]+$', "Unclosed template at EOL"),
+        (r'^[ \t]*[^\n{}|]+[A-Za-z0-9.\)"”’]\}\}[ \t]*$', "Orphan closing '}}' after prose/heading"),
+        (r'<\/(?:small|center|div|span|table|ref)(?![A-Za-z>])', "Truncated HTML tag"),
+        (r'<ref\b[^>]*>(?:(?!</ref>).){650,}', "Unclosed/oversized <ref>"),
+    ]
+    for pat, label in defect_patterns:
+        m = re.search(pat, wikitext, flags=re.IGNORECASE | re.MULTILINE)
+        if m:
+            anchor_pos = m.start()
+            method = f"Regex detector ({label})"
+            break
+
+    # Strategy 2: Fallback to clean prose runs from the Tab 5 CSV snippet
+    if anchor_pos == -1 and csv_snippet:
         clean_snip = re.sub(r'^\.\.\.|\.\.\.$', '', csv_snippet)
         clean_snip = clean_snip.replace(" ↵ ", "\n").replace("⏭️", "")
-        # Extract 3-to-6 word runs of plain letters to bypass cleaned vs raw markup differences
         phrases = re.findall(r'[A-Za-zÁáÍíÚúḤḥṢṣṬṭḌḍẒẓ]{4,}(?:\s+[A-Za-zÁáÍíÚúḤḥṢṣṬṭḌḍẒẓ]{3,}){2,5}', clean_snip)
-        # Try longest phrases first
         for phrase in sorted(phrases, key=len, reverse=True):
             pos = wikitext.find(phrase)
             if pos != -1:
                 anchor_pos = pos
                 method = f"CSV prose anchor ('{phrase[:28]}...')"
-                break
-
-    # Strategy 2: Scan raw wikitext directly for unclosed/mangled braces or broken tables/tags
-    if anchor_pos == -1:
-        defect_patterns = [
-            (r'\{\{[^\n{}]+\}(?!\})', "Single-closed template"),
-            (r'(?<!\{)\{[A-Za-z]+\|[^\n{}]+\}\}', "Single-opened template"),
-            (r'\{\{\s*\|[^\n{}]+\}\}', "Anonymous {{|...}} template"),
-            (r'^[^\n{}]*\}\}', "Orphan closing '}}'"),
-            (r'\{\{\s*(?:center|right|left)\s*\|[^\n{}]+$', "Unclosed alignment template"),
-            (r'<\/(?:small|center|div|span|table|ref)(?![A-Za-z>])', "Truncated HTML tag"),
-            (r'<ref\b[^>]*>(?:(?!</ref>).){650,}', "Unclosed/oversized <ref>"),
-        ]
-        for pat, label in defect_patterns:
-            m = re.search(pat, wikitext, flags=re.IGNORECASE | re.MULTILINE)
-            if m:
-                anchor_pos = m.start()
-                method = f"Regex detector ({label})"
                 break
 
     if anchor_pos == -1:
@@ -407,7 +414,7 @@ For each item, identify the broken MediaWiki template (`{{{{...}}}}`), broken ta
 
 STRICT RULES:
 1. `find` MUST be an exact, character-for-character substring copied verbatim from that item's `window`. Include enough surrounding words (25–120 chars) so `find` is 100% unique on the page.
-2. Do NOT alter, modernize, or rewrite any author prose, spelling, or punctuation—ONLY fix the broken MediaWiki markup/templates/tags.
+2. Do NOT alter, modernize, or rewrite any author prose, spelling, or punctuation, and NEVER modify templates thatalready have matching opening `{{{{` and closing `}}}}` braces (such as valid `{{{{u|...}}}}`). ONLY fix unclosed, single-brace, or mangled MediaWiki syntax.
 3. Common Bahai.works conventions:
    - Centered headings/lines use `{{{{center|...}}}}`. If `{{{{center|` is missing before an obvious heading ending with `}}}}`, add `{{{{center|` at the start of that heading block.
    - If an image caption or inscription is wrapped in anonymous braces like `{{{{|Caption text}}}}`, convert it to `{{{{center|Caption text}}}}` (or remove the stray braces if it's plain prose).
