@@ -328,7 +328,7 @@ def inject_text_into_page(wikitext, page_num, new_content, pdf_filename="File.pd
     wikitext = re.sub(r'\{\{ocr.*?\}\}\n?', '', wikitext, flags=re.IGNORECASE)
 
     # 1. Try to find the existing tag
-    pattern_tag_start = re.compile(r'\{\{page\s*\|\s*' + str(page_num) + r'(?:\||\}\})', re.IGNORECASE)
+    pattern_tag_start = re.compile(r'\{\{page\s*\|\s*' + re.escape(str(page_num)) + r'(?:\||\}\})', re.IGNORECASE)
     match = pattern_tag_start.search(wikitext)
     
     if match:
