@@ -134,6 +134,12 @@ def _apply_pack_page_and_void(text: str) -> tuple[str, list[str]]:
         notes.append(f"Removed {n} empty {{{{}}}} tag(s)")
     text = new_t
 
+    # 1g. Anonymous {{|...}} -> {{center|...}}
+    new_t, n = re.subn(r'\{\{\s*\|([^\n{}]+?)\}\}', r'{{center|\1}}', text)
+    if n:
+        notes.append(f"Converted {n} anonymous {{{{|...}}}} template(s) to {{{{center|...}}}}")
+    text = new_t
+
     return text, notes
 
 
