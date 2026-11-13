@@ -377,10 +377,15 @@ def deskew_and_crop_edges(stitched_data, extra_trim_px=0):
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             h, w = gray.shape
 
-    # 2. First crop top and bottom so top/bottom rotation wedges don't affect left/right
-    is_paper = (gray < 254) & (page_mask > 0)
-    row_paper_ratio = np.mean(is_paper, axis=1)
-    valid_rows = np.where(row_paper_ratio >= 0.85)[0]
+    # 2. Crop top, bottom, left, right so ZERO white border wedges/steps remain
+    # Use < 250 so faint scanner-lid noise (250-254) is treated as white background
+    is_paper = (gray < 250) & (page_mask > 0)
+
+    # First find top and bottom where at least 95% of the width is paper
+    # (Examine the middle 80% horizontally first so left/right overhangs don't skew top/bottom)
+    mid_l, mid_r = int(w * 0.10), int(w * 0.90)
+    row_paper_ratio = np.mean(is_paper[:, mid_l:mid_r], axis=1)
+    valid_rows = np.where(row_paper_ratio >= 0.98)[0]
 
     if len(valid_rows) > 0:
         top = int(valid_rows[0])
@@ -388,34 +393,23 @@ def deskew_and_crop_edges(stitched_data, extra_trim_px=0):
     else:
         top, bottom = 0, h
 
-    # For each row between top and bottom, find where 255 white ends on the left
-    # and starts on the right, then take the inner bound (98th/2nd percentile to ignore 1px noise)
-    paper_cropped = is_paper[top:bottom, :]
-    row_has_paper = np.any(paper_cropped, axis=1)
-    if np.any(row_has_paper):
-        valid_r = paper_cropped[row_has_paper]
-        row_lefts = np.argmax(valid_r, axis=1)
-        row_rights = w - np.argmax(valid_r[:, ::-1], axis=1)
-        left = int(np.percentile(row_lefts, 98))
-        right = int(np.percentile(row_rights, 2))
-        if right <= left:
-            left, right = 0, w
+    # Now across [top:bottom], require >= 98% of the vertical height to be paper
+    # This removes the wider margin overhang whenever one half has 20px white and the other has 10px white
+    col_paper_ratio = np.mean(is_paper[top:bottom, :], axis=0)
+    valid_cols = np.where(col_paper_ratio >= 0.98)[0]
+
+    if len(valid_cols) > 0:
+        left = int(valid_cols[0])
+        right = int(valid_cols[-1]) + 1
     else:
         left, right = 0, w
 
-    # 3. Protect printed ink/text (gray < 200) inside the interior paper area so a narrower
-    # scan half never clips text on a wider scan half (e.g. "members." on Page 16)
-    ink_mask = (gray < 200) & (page_mask > 0)
-    # Ignore outermost 8px of raw scan edges to avoid scanner-bezel shadow lines
-    edge_pad = 8
-    if bottom - top > 2 * edge_pad and w > 2 * edge_pad:
-        ink_cols = np.where(
-            np.mean(ink_mask[top + edge_pad : bottom - edge_pad, :], axis=0)
-            > 0.002
-        )[0]
-        if len(ink_cols) > 0:
-            left = min(left, max(0, int(ink_cols[0]) - 10))
-            right = max(right, min(w, int(ink_cols[-1]) + 11))
+    # Re-tighten top and bottom strictly within [left:right] so no white corner triangles remain
+    row_paper_ratio_strict = np.mean(is_paper[:, left:right], axis=1)
+    valid_rows_strict = np.where(row_paper_ratio_strict >= 0.98)[0]
+    if len(valid_rows_strict) > 0:
+        top = max(top, int(valid_rows_strict[0]))
+        bottom = min(bottom, int(valid_rows_strict[-1]) + 1)
 
     left = min(w - 1, left + extra_trim_px)
     right = max(left + 1, right - extra_trim_px)
