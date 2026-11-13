@@ -58,7 +58,7 @@ INSOURCE_PRESETS = {
         "packs": ["pack_page"],
     },
     "Broken Closing </small or </center Tags (Missing '>')": {
-        "query": r'insource:"</small" insource:/<\/small[^a-zA-Z>]/',
+        "query": r'insource:"</small" insource:/\<\/small[^a-zA-Z\>]/',
         "packs": ["pack_html"],
     },
     "Scoped Unclosed {{page|...} (Requires Prefix below to avoid timeout!)": {
