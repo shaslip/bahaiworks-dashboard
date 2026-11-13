@@ -117,15 +117,85 @@ def int_to_roman(num):
         i += 1
     return roman_num
 
-def calculate_page_label(pdf_page_num, anchor_pdf_page):
-    """Determines if a page should be Roman (i, ii) or Arabic (1, 2)."""
-    if anchor_pdf_page is None:
-        return str(pdf_page_num)
-        
-    if pdf_page_num < anchor_pdf_page:
+MEDIA_API_URL = "https://bahai.media/api.php"
+
+PERIODICAL_LUA_MODULES = {
+    "TheAmericanBahai": "Module:AmericanBahai",
+}
+
+def fetch_periodical_lua_maps(base_title, session=None):
+    """
+    Fetches Module:AmericanBahai (or matching module) from bahai.media (fallback bahai.works)
+    and parses pdfDoublePage_map, pdfOffset_map, and publicationDate_map.
+    """
+    pub_key = format_access_pub_name(base_title)
+    module_title = PERIODICAL_LUA_MODULES.get(pub_key, f"Module:{pub_key}")
+
+    wikitext, err = fetch_wikitext(module_title, session=session, api_url=MEDIA_API_URL)
+    if err or not wikitext:
+        wikitext, err = fetch_wikitext(module_title, session=session, api_url=API_URL)
+    if err or not wikitext:
+        return {"double_map": {}, "offset_map": {}, "date_map": {}}
+
+    def _parse_int_table(map_name):
+        res = {}
+        m = re.search(fr'local\s+{map_name}\s*=\s*\{{([^}}]+)\}}', wikitext, re.IGNORECASE)
+        if m:
+            for p in re.finditer(r'\[\s*0*(\d+)\s*\]\s*=\s*["\']?(-?\d+)["\']?', m.group(1)):
+                res[int(p.group(1))] = int(p.group(2))
+        return res
+
+    return {
+        "double_map": _parse_int_table("pdfDoublePage_map"),
+        "offset_map": _parse_int_table("pdfOffset_map"),
+        "date_map": _parse_int_table("publicationDate_map"),
+    }
+
+def get_issue_lua_config(vol, iss, lua_maps):
+    """Returns (offset_val, double_page_val, pub_year) for a given (vol, iss)."""
+    if not lua_maps or not vol or not iss:
+        return 0, 0, None
+    try:
+        v_num = int(vol)
+        i_num = int(str(iss).split('-')[0])
+        key = int(f"{v_num:02d}{i_num:02d}")
+    except ValueError:
+        return 0, 0, None
+
+    offset_val = lua_maps.get("offset_map", {}).get(key, 0)
+    double_val = lua_maps.get("double_map", {}).get(key, 0)
+    date_map = lua_maps.get("date_map", {})
+    pub_year = date_map.get(v_num)
+    if not pub_year and date_map:
+        # Extrapolate if linear (e.g. Vol 1 = 1970 -> Vol 34 = 2003)
+        min_v = min(date_map.keys())
+        pub_year = date_map[min_v] + (v_num - min_v)
+
+    return offset_val, double_val, (str(pub_year) if pub_year else None)
+
+def calculate_page_label(pdf_page_num, anchor_pdf_page, double_page_pub_num=0):
+    """
+    Determines the printed page label for a given 1-based PDF page number:
+    - Roman numerals (i, ii) for front matter before anchor_pdf_page
+    - 'X-Y' (e.g. '16-17') on the combined double-page spread
+    - Shifted by +1 for all pages after the double-page spread
+    """
+    eff_anchor = anchor_pdf_page if anchor_pdf_page is not None else 1
+
+    if pdf_page_num < eff_anchor:
         return int_to_roman(pdf_page_num)
-    else:
-        return str(pdf_page_num - anchor_pdf_page + 1)
+
+    pub_page = pdf_page_num - eff_anchor + 1
+
+    if double_page_pub_num and double_page_pub_num > 0:
+        if pub_page < double_page_pub_num:
+            return str(pub_page)
+        elif pub_page == double_page_pub_num:
+            return f"{pub_page}-{pub_page + 1}"
+        else:
+            return str(pub_page + 1)
+
+    return str(pub_page)
 
 def find_anchor_offset(wikitext):
     """Scans for any {{page|N|...|page=X}} where N is an integer to establish the offset."""
@@ -350,11 +420,15 @@ def build_new_base_page_wikitext(vol, iss, pdf_filename, struct_info, copyright_
         f"<pdf>File:{pdf_space_name}</pdf>\n"
     )
 
-def build_new_text_page_skeleton(vol, iss, pdf_filename, page_count, struct_info, copyright_mode, base_title=""):
-    """Generates the initial /Text skeleton with {{page}} tags for every page in the PDF."""
+def build_new_text_page_skeleton(vol, iss, pdf_filename, page_count, struct_info, copyright_mode, base_title="", lua_maps=None):
+    """Generates the initial /Text skeleton with {{page}} tags accounting for offsets and double-page spreads."""
     access_tag = get_access_tag(copyright_mode, base_title)
     prev_num, next_num = calc_prev_next_nums(iss)
     pn_sep = struct_info.get("prev_next_space", " ")
+
+    offset_val, double_val, pub_year = get_issue_lua_config(vol, iss, lua_maps)
+    anchor_pdf_page = 1 + offset_val
+    cat_str = pub_year if pub_year else "xxxx"
 
     if vol:
         title_link = "[[../../../]]"
@@ -376,14 +450,15 @@ def build_new_text_page_skeleton(vol, iss, pdf_filename, page_count, struct_info
         f" | previous   = {prev_link}\n"
         f" | next       = {next_link}\n"
         f" | notes      = {{{{bnreturn}}}}{{{{ps|1}}}}\n"
-        f" | categories = xxxx\n"
+        f" | categories = {cat_str}\n"
         f"}}}}\n\n"
     )
-    page_tags = "\n".join(
-        f"{{{{page|{p}|file={pdf_filename}|page={p}}}}}"
-        for p in range(1, page_count + 1)
-    )
-    return header + page_tags + "\n"
+    page_tags = []
+    for p in range(1, page_count + 1):
+        label = calculate_page_label(p, anchor_pdf_page, double_page_pub_num=double_val)
+        page_tags.append(f"{{{{page|{label}|file={pdf_filename}|page={p}}}}}")
+
+    return header + "\n".join(page_tags) + "\n"
 
 def render_multi_issue_telemetry(issue_jobs, global_log_list, ui_holders):
     """Renders live telemetry across all queued periodical issues and their pages."""
@@ -543,10 +618,14 @@ def merge_and_upload_issue(job, session, log_area, status_container, copyright_m
         current_wikitext = access_tag_prefix + current_wikitext.lstrip()
 
     anchor_pdf_page = find_anchor_offset(current_wikitext)
+    offset_val = job.get("offset_val", 0)
+    double_val = job.get("double_val", 0)
+    if anchor_pdf_page is None or offset_val > 0:
+        anchor_pdf_page = 1 + offset_val
 
     for page_num in pages_to_process:
         final_text = all_extracted_text.get(page_num, "").strip()
-        correct_label = calculate_page_label(page_num, anchor_pdf_page)
+        correct_label = calculate_page_label(page_num, anchor_pdf_page, double_page_pub_num=double_val)
         current_wikitext = find_and_fix_tag_by_page_num(current_wikitext, wiki_pdf_name, page_num, correct_label)
 
         if not final_text:
@@ -646,6 +725,7 @@ def load_periodical_issues(input_folder, base_title, copyright_mode="1) Open (No
 
     wiki_pages = get_all_wiki_text_pages(base_title, session=session)
     struct_info = inspect_wiki_structure(base_title, wiki_pages, session=session)
+    lua_maps = fetch_periodical_lua_maps(base_title, session=session)
     batched_wikitexts = fetch_wikitext_batch(wiki_pages, session=session) if wiki_pages else {}
 
     issues = []
@@ -954,13 +1034,13 @@ if __name__ == '__main__':
             short_name = item["short_name"]
 
             # Regenerate skeleton with current copyright_mode if it's a new issue
-            # Regenerate skeleton with current copyright_mode if it's a new issue
             if item.get("is_new_issue"):
                 base_page_wt = build_new_base_page_wikitext(
                     item.get("vol"), item.get("iss"), short_name, item.get("struct_info", {}), copyright_mode, base_title
                 )
                 live_wikitext = build_new_text_page_skeleton(
-                    item.get("vol"), item.get("iss"), short_name, item["page_count"], item.get("struct_info", {}), copyright_mode, base_title
+                    item.get("vol"), item.get("iss"), short_name, item["page_count"],
+                    item.get("struct_info", {}), copyright_mode, base_title, lua_maps=item.get("lua_maps")
                 )
             else:
                 base_page_wt = ""
