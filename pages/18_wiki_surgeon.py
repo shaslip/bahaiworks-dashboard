@@ -938,7 +938,7 @@ with tab_tier2:
             df_t2.drop(columns=["_raw_wikitext"]),
             width="stretch",
             hide_index=True,
-            disabled=["Title", "Confidence", "Anchor"],
+            disabled=["Title", "Confidence", "Anchor", "Window Preview"],
             key="tier2_editor",
         )
 
