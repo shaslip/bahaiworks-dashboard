@@ -135,7 +135,7 @@ def discover_issue_folders_recursive(root_folder):
 
 
 def trim_scanner_whitespace(img):
-    """Crops away ONLY the pure-white scanner bed (gray >= 254).
+    """Crops away ONLY the pure-white scanner bed (gray == 255).
 
     Preserves the entire physical magazine page including its blank outer paper
     margins.
@@ -143,12 +143,12 @@ def trim_scanner_whitespace(img):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape
 
-    # Scanner bed is pure 255 white. Any pixel < 254 is physical magazine paper.
-    is_paper = gray < 254
+    # Scanner bed is pure 255 white. Any pixel < 255 is physical magazine paper.
+    is_paper = gray < 255
 
-    # A column is part of the physical page if at least 20% of its height is < 254
+    # Keep any column/row that has physical paper (ignore tiny 1-2px dust specks via > 0.01)
     col_paper_ratio = np.mean(is_paper, axis=0)
-    page_cols = np.where(col_paper_ratio > 0.20)[0]
+    page_cols = np.where(col_paper_ratio > 0.01)[0]
 
     if len(page_cols) > 0:
         left = int(page_cols[0])
@@ -157,7 +157,7 @@ def trim_scanner_whitespace(img):
         left, right = 0, w
 
     row_paper_ratio = np.mean(is_paper[:, left:right], axis=1)
-    page_rows = np.where(row_paper_ratio > 0.20)[0]
+    page_rows = np.where(row_paper_ratio > 0.01)[0]
 
     if len(page_rows) > 0:
         top = int(page_rows[0])
@@ -166,7 +166,6 @@ def trim_scanner_whitespace(img):
         top, bottom = 0, h
 
     return img[top:bottom, left:right]
-
 
 def stitch_pair_fallback(img1, img2, mask1=None):
     """2D rigid stitcher using SIFT + RANSAC. Returns (blended_img, valid_page_mask)."""
@@ -310,9 +309,8 @@ def deskew_and_crop_edges(stitched_data, extra_trim_px=0):
     """1.
 
     Straightens page using vertical column rules and horizontal dividers.
-    2. Uses the geometric page mask (not ink brightness!) to crop only the empty
-    canvas outside the paper, preserving the full paper margin on all four
-    sides.
+    2. Crops ONLY the pure-white empty canvas outside the union of the physical
+    paper mask, never clipping a wider scan half down to a narrower scan half.
     """
     if isinstance(stitched_data, tuple):
         img, page_mask = stitched_data
@@ -352,12 +350,19 @@ def deskew_and_crop_edges(stitched_data, extra_trim_px=0):
         if angles:
             median_angle = float(np.median(angles))
             if abs(median_angle) > 0.03:
-                center = (w // 2, h // 2)
+                center = (w / 2.0, h / 2.0)
                 M = cv2.getRotationMatrix2D(center, median_angle, 1.0)
+                cos_a = abs(M[0, 0])
+                sin_a = abs(M[0, 1])
+                new_w = int((h * sin_a) + (w * cos_a))
+                new_h = int((h * cos_a) + (w * sin_a))
+                M[0, 2] += (new_w / 2.0) - center[0]
+                M[1, 2] += (new_h / 2.0) - center[1]
+
                 img = cv2.warpAffine(
                     img,
                     M,
-                    (w, h),
+                    (new_w, new_h),
                     flags=cv2.INTER_CUBIC,
                     borderMode=cv2.BORDER_CONSTANT,
                     borderValue=(255, 255, 255),
@@ -365,16 +370,16 @@ def deskew_and_crop_edges(stitched_data, extra_trim_px=0):
                 page_mask = cv2.warpAffine(
                     page_mask,
                     M,
-                    (w, h),
+                    (new_w, new_h),
                     flags=cv2.INTER_NEAREST,
                     borderMode=cv2.BORDER_CONSTANT,
                     borderValue=0,
                 )
+                h, w = img.shape[:2]
 
-    # 2. Crop using the geometric page_mask (where the physical paper actually exists),
-    # NOT pixel darkness (which previously mistook blank paper margins for scanner bed).
-    col_mask_ratio = np.mean(page_mask > 0, axis=0)
-    valid_cols = np.where(col_mask_ratio >= 0.90)[0]
+    # 2. Crop ONLY outside the union of the valid paper mask (and any non-255 pixels)
+    non_white = np.any(img < 255, axis=2) & (page_mask > 0)
+    valid_cols = np.where(np.any(non_white, axis=0))[0]
 
     if len(valid_cols) > 0:
         left = min(w - 1, int(valid_cols[0]) + extra_trim_px)
@@ -382,8 +387,7 @@ def deskew_and_crop_edges(stitched_data, extra_trim_px=0):
     else:
         left, right = 0, w
 
-    row_mask_ratio = np.mean(page_mask[:, left:right] > 0, axis=1)
-    valid_rows = np.where(row_mask_ratio >= 0.90)[0]
+    valid_rows = np.where(np.any(non_white[:, left:right], axis=1))[0]
 
     if len(valid_rows) > 0:
         top = max(0, int(valid_rows[0]))
@@ -531,7 +535,7 @@ if not os.path.isdir(input_dir):
 cols_cfg = st.columns([1, 1, 1])
 with cols_cfg[0]:
     extra_trim = st.number_input(
-        "Auto-Crop Edge Trim (px)", min_value=0, max_value=200, value=15, step=5
+        "Auto-Crop Edge Trim (px)", min_value=0, max_value=200, value=0, step=5
     )
 with cols_cfg[1]:
     jpeg_quality = st.slider(
