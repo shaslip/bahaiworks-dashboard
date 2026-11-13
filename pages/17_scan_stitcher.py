@@ -435,12 +435,12 @@ def _stitch_single_group_worker(folder_path, g, extra_trim, auto_trim_bc=False):
     raw_stitched = stitch_images_group(part_paths)
     final_img = deskew_and_crop_edges(raw_stitched, extra_trim_px=extra_trim)
 
-    # In automatic mode, crop an extra 120px off the right edge of back cover ('bc') scans
+    # In automatic mode, crop an extra 100px off the right edge of back cover ('bc') scans
     if auto_trim_bc and any(
         re.search(r"bc\.", p, re.IGNORECASE) for p in g["parts"]
     ):
-        if final_img.shape[1] > 120:
-            final_img = final_img[:, :-120]
+        if final_img.shape[1] > 100:
+            final_img = final_img[:, :-100]
 
     cv2.imwrite(target_path, final_img)
     return (
