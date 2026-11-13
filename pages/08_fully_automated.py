@@ -778,6 +778,9 @@ def load_periodical_issues(input_folder, base_title, copyright_mode="1) Open (No
             status_label = "⏳ Unproofread"
             default_select = True
 
+        vol_ex, iss_ex = parse_vol_issue_from_filename(short_name or wiki_pdf_name or wiki_title)
+        off_ex, dbl_ex, _ = get_issue_lua_config(vol_ex, iss_ex, lua_maps)
+
         issues.append({
             "idx": idx,
             "selected": default_select,
@@ -791,7 +794,12 @@ def load_periodical_issues(input_folder, base_title, copyright_mode="1) Open (No
             "pdf_path": pdf_path,
             "short_name": short_name,
             "page_count": page_count,
-            "wikitext": norm_text
+            "wikitext": norm_text,
+            "vol": vol_ex,
+            "iss": iss_ex,
+            "offset_val": off_ex,
+            "double_val": dbl_ex,
+            "lua_maps": lua_maps
         })
 
     # 2. Discover new local PDFs that do not exist on the Wiki yet
@@ -829,8 +837,9 @@ def load_periodical_issues(input_folder, base_title, copyright_mode="1) Open (No
         if page_count == 0:
             continue
 
+        off_new, dbl_new, _ = get_issue_lua_config(vol, iss, lua_maps)
         base_page_wt = build_new_base_page_wikitext(vol, iss, short_name, struct_info, copyright_mode, base_title)
-        text_page_wt = build_new_text_page_skeleton(vol, iss, short_name, page_count, struct_info, copyright_mode, base_title)
+        text_page_wt = build_new_text_page_skeleton(vol, iss, short_name, page_count, struct_info, copyright_mode, base_title, lua_maps=lua_maps)
 
         issues.append({
             "idx": len(issues),
@@ -848,7 +857,10 @@ def load_periodical_issues(input_folder, base_title, copyright_mode="1) Open (No
             "wikitext": text_page_wt,
             "vol": vol,
             "iss": iss,
-            "struct_info": struct_info
+            "offset_val": off_new,
+            "double_val": dbl_new,
+            "struct_info": struct_info,
+            "lua_maps": lua_maps
         })
 
     return issues, None
@@ -1078,7 +1090,9 @@ if __name__ == '__main__':
                 "shared_log_list": [],
                 "futures": {},
                 "pdf_doc": None,
-                "uploaded": False
+                "uploaded": False,
+                "offset_val": item.get("offset_val", 0),
+                "double_val": item.get("double_val", 0),
             })
 
         status_container.markdown(
