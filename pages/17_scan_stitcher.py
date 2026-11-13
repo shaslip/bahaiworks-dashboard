@@ -134,31 +134,31 @@ def discover_issue_folders_recursive(root_folder):
 
 
 def trim_scanner_whitespace(img):
-    """Crops away the pure-white scanner bed (gray >= 254) from a raw scan."""
+    """Crops away ONLY the pure-white scanner bed (gray == 255) from the 4 outer edges."""
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape
 
-    # Scanner bed is pure 254-255 white. Physical magazine paper is < 254.
-    is_paper = gray < 254
+    # Smooth 3x3 to ignore single-pixel scanner dust specks in the 255 white area
+    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+    is_paper = blurred < 254
 
-    # Require at least 25% of the column/row to be paper so dust/corner tips don't block cropping
-    col_paper_ratio = np.mean(is_paper, axis=0)
-    page_cols = np.where(col_paper_ratio > 0.25)[0]
-
-    if len(page_cols) > 0:
-        left = int(page_cols[0])
-        right = int(page_cols[-1]) + 1
-    else:
-        left, right = 0, w
-
-    row_paper_ratio = np.mean(is_paper[:, left:right], axis=1)
-    page_rows = np.where(row_paper_ratio > 0.25)[0]
-
+    # Measure continuous 255 white from top and bottom edges
+    row_has_paper = np.mean(is_paper, axis=1) > 0.15
+    page_rows = np.where(row_has_paper)[0]
     if len(page_rows) > 0:
         top = int(page_rows[0])
         bottom = int(page_rows[-1]) + 1
     else:
         top, bottom = 0, h
+
+    # Measure continuous 255 white from left and right edges
+    col_has_paper = np.mean(is_paper[top:bottom, :], axis=0) > 0.15
+    page_cols = np.where(col_has_paper)[0]
+    if len(page_cols) > 0:
+        left = int(page_cols[0])
+        right = int(page_cols[-1]) + 1
+    else:
+        left, right = 0, w
 
     return img[top:bottom, left:right]
 
@@ -377,39 +377,51 @@ def deskew_and_crop_edges(stitched_data, extra_trim_px=0):
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             h, w = gray.shape
 
-    # 2. Crop top, bottom, left, right so ZERO white border wedges/steps remain
-    # Use < 250 so faint scanner-lid noise (250-254) is treated as white background
-    is_paper = (gray < 250) & (page_mask > 0)
+    # 2. Measure the 255-white border from the 4 outer edges inward
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    is_paper = (blurred < 254) & (page_mask > 0)
 
-    # First find top and bottom where at least 95% of the width is paper
-    # (Examine the middle 80% horizontally first so left/right overhangs don't skew top/bottom)
+    # Top & bottom: find where each column's top/bottom 255-white border ends (middle 80% width)
     mid_l, mid_r = int(w * 0.10), int(w * 0.90)
-    row_paper_ratio = np.mean(is_paper[:, mid_l:mid_r], axis=1)
-    valid_rows = np.where(row_paper_ratio >= 0.98)[0]
-
-    if len(valid_rows) > 0:
-        top = int(valid_rows[0])
-        bottom = int(valid_rows[-1]) + 1
+    mid_paper = is_paper[:, mid_l:mid_r]
+    cols_with_paper = np.any(mid_paper, axis=0)
+    if np.any(cols_with_paper):
+        valid_c = mid_paper[:, cols_with_paper]
+        col_tops = np.argmax(valid_c, axis=0)
+        col_bottoms = h - np.argmax(valid_c[::-1, :], axis=0)
+        top = int(np.percentile(col_tops, 95))
+        bottom = int(np.percentile(col_bottoms, 5))
+        if bottom <= top:
+            top, bottom = 0, h
     else:
         top, bottom = 0, h
 
-    # Now across [top:bottom], require >= 98% of the vertical height to be paper
-    # This removes the wider margin overhang whenever one half has 20px white and the other has 10px white
-    col_paper_ratio = np.mean(is_paper[top:bottom, :], axis=0)
-    valid_cols = np.where(col_paper_ratio >= 0.98)[0]
-
-    if len(valid_cols) > 0:
-        left = int(valid_cols[0])
-        right = int(valid_cols[-1]) + 1
+    # Left & right: for each row between [top:bottom], find how many pixels of 255-white
+    # touch the left edge (row_lefts) and right edge (row_rights), then crop at the inner border
+    paper_band = is_paper[top:bottom, :]
+    rows_with_paper = np.any(paper_band, axis=1)
+    if np.any(rows_with_paper):
+        valid_r = paper_band[rows_with_paper]
+        row_lefts = np.argmax(valid_r, axis=1)
+        row_rights = w - np.argmax(valid_r[:, ::-1], axis=1)
+        left = int(np.percentile(row_lefts, 95))
+        right = int(np.percentile(row_rights, 5))
+        if right <= left:
+            left, right = 0, w
     else:
         left, right = 0, w
 
-    # Re-tighten top and bottom strictly within [left:right] so no white corner triangles remain
-    row_paper_ratio_strict = np.mean(is_paper[:, left:right], axis=1)
-    valid_rows_strict = np.where(row_paper_ratio_strict >= 0.98)[0]
-    if len(valid_rows_strict) > 0:
-        top = max(top, int(valid_rows_strict[0]))
-        bottom = min(bottom, int(valid_rows_strict[-1]) + 1)
+    # Ensure we never crop dark printed text/ink (gray < 140) near the left/right edges
+    ink_mask = (blurred < 140) & (page_mask > 0)
+    edge_pad = 10
+    if bottom - top > 2 * edge_pad and w > 2 * edge_pad:
+        ink_cols = np.where(
+            np.mean(ink_mask[top + edge_pad : bottom - edge_pad, :], axis=0)
+            > 0.002
+        )[0]
+        if len(ink_cols) > 0:
+            left = min(left, max(0, int(ink_cols[0]) - 8))
+            right = max(right, min(w, int(ink_cols[-1]) + 9))
 
     left = min(w - 1, left + extra_trim_px)
     right = max(left + 1, right - extra_trim_px)
