@@ -290,6 +290,7 @@ def reformat_raw_text(raw_text, book_title=None, chapter_title=None):
         - "Bahá’í", "Bahá’u’lláh", "‘Abdu’l-Bahá" (match case of original document)
     4.  **STRICT MEDIAWIKI FORMATTING (NO MARKDOWN):**
         - Format strictly for MediaWiki. HTML tags supported by MediaWiki (such as `<div>`, `<center>`, `<blockquote>`, `<br>`) are allowed when appropriate.
+        - DARK MODE COMPATIBILITY: NEVER hardcode `background-color`, `background`, or `color` (such as `#f9f9f9`, `#fff`, `black`, etc.) in inline `style="..."` attributes on tables or divs, as this breaks dark mode. Only use layout/border styles (e.g. `border`, `padding`, `margin`, `text-align`), or `class="wikitable"`.
         - Use `== Header ==` for section headers (NEVER use Markdown `#` headers).
         - Use `'''bold'''` for bold and `''italic''` for italics (NEVER use Markdown asterisks `*` or `**`, or underscores `_`).
         - Do NOT wrap your output in Markdown code blocks (no ```mediawiki or ```).
@@ -379,6 +380,7 @@ def proofread_with_formatting(image, book_title=None, chapter_title=None):
         -   NEVER use Markdown syntax: do NOT use `**bold**` or `*italic*`, do NOT use `#` for headers, and do NOT wrap the output in ``` code fences.
         -   If you see a **Header** (that is part of the text, not a running head), use `== Header ==`.
         -   If you see a **Table**, use `{{| class="wikitable" ... |}}`.
+        -   DARK MODE COMPATIBILITY: NEVER hardcode `background-color`, `background`, or `color` (such as `#f9f9f9`, `#fff`, `black`, etc.) in inline `style="..."` attributes on tables or divs, as this breaks dark mode. Only use layout/border styles (e.g. `border`, `padding`, `margin`, `text-align`).
         -   If you see **Bold** or *Italic*, use MediaWiki apostrophes: `'''bold'''` and `''italic''`.
         -   Standard HTML tags supported by MediaWiki (such as `<div>`, `<center>`, `<blockquote>`, `<br>`) are allowed where appropriate for layout/alignment, but `<poem>` tags are not supported.
         -   If the text has an OBVIOUS typo (e.g. "sentance"), transcribe it as: {{{{sic|sentance|sentence}}}}
