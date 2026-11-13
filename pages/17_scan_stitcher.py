@@ -318,7 +318,7 @@ def deskew_and_crop_edges(stitched_data, extra_trim_px=0):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape
 
-    # 1. Measure page skew ONLY from full-width header/footer rules in the outer 6% bands
+    # 1. Measure page skew from horizontal rules in the outer 6% top/bottom bands
     margin_x = int(w * 0.04)
     band_h = int(h * 0.06)
     bands = [
@@ -333,10 +333,10 @@ def deskew_and_crop_edges(stitched_data, extra_trim_px=0):
             lines = cv2.HoughLinesP(
                 edges,
                 1,
-                np.pi / 1800,
-                threshold=100,
-                minLineLength=int(w * 0.60),
-                maxLineGap=30,
+                np.pi / 720,
+                threshold=80,
+                minLineLength=w // 5,
+                maxLineGap=40,
             )
             if lines is not None:
                 for line in lines:
