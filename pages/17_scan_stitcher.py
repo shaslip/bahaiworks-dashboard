@@ -308,7 +308,8 @@ def stitch_images_group(image_paths):
 def deskew_and_crop_edges(stitched_data, extra_trim_px=0):
     """1.
 
-    Straightens page using vertical column rules and horizontal dividers.
+    Straightens page using long horizontal header/footer rules in the top and
+    bottom bands (ignoring tilted interior graphics) within ±1.5°.
     2. Crops ONLY the pure-white empty canvas outside the union of the physical
     paper mask, never clipping a wider scan half down to a narrower scan half.
     """
@@ -321,61 +322,63 @@ def deskew_and_crop_edges(stitched_data, extra_trim_px=0):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape
 
-    # 1. Measure page skew using vertical column rules (~90 deg) and horizontal lines (~0 deg)
-    margin_y, margin_x = int(h * 0.05), int(w * 0.05)
-    interior = gray[margin_y : h - margin_y, margin_x : w - margin_x]
+    # 1. Measure page skew from top/bottom header & footer bands (top 15% and bottom 15%)
+    margin_x = int(w * 0.05)
+    band_h = int(h * 0.15)
+    bands = [
+        gray[:band_h, margin_x : w - margin_x],
+        gray[h - band_h :, margin_x : w - margin_x],
+    ]
 
-    if interior.size > 0:
-        edges = cv2.Canny(interior, 50, 150, apertureSize=3)
-        lines = cv2.HoughLinesP(
-            edges,
-            1,
-            np.pi / 1800,
-            threshold=80,
-            minLineLength=min(w, h) // 10,
-            maxLineGap=15,
-        )
-        angles = []
-        if lines is not None:
-            for line in lines:
-                x1, y1, x2, y2 = line[0]
-                length = np.hypot(x2 - x1, y2 - y1)
-                angle = np.degrees(np.arctan2(y2 - y1, x2 - x1))
-                if -5.0 < angle < 5.0:
-                    angles.extend([angle] * int(max(1, length // 50)))
-                elif 85.0 < abs(angle) < 95.0:
-                    vert_dev = angle - 90.0 if angle > 0 else angle + 90.0
-                    angles.extend([vert_dev] * int(max(1, length // 50)))
+    angles = []
+    for band in bands:
+        if band.size > 0:
+            edges = cv2.Canny(band, 50, 150, apertureSize=3)
+            lines = cv2.HoughLinesP(
+                edges,
+                1,
+                np.pi / 1800,
+                threshold=100,
+                minLineLength=w // 5,
+                maxLineGap=20,
+            )
+            if lines is not None:
+                for line in lines:
+                    x1, y1, x2, y2 = line[0]
+                    length = np.hypot(x2 - x1, y2 - y1)
+                    angle = np.degrees(np.arctan2(y2 - y1, x2 - x1))
+                    if -1.5 <= angle <= 1.5:
+                        angles.extend([angle] * int(max(1, length // 50)))
 
-        if angles:
-            median_angle = float(np.median(angles))
-            if abs(median_angle) > 0.03:
-                center = (w / 2.0, h / 2.0)
-                M = cv2.getRotationMatrix2D(center, median_angle, 1.0)
-                cos_a = abs(M[0, 0])
-                sin_a = abs(M[0, 1])
-                new_w = int((h * sin_a) + (w * cos_a))
-                new_h = int((h * cos_a) + (w * sin_a))
-                M[0, 2] += (new_w / 2.0) - center[0]
-                M[1, 2] += (new_h / 2.0) - center[1]
+    if angles:
+        median_angle = float(np.median(angles))
+        if abs(median_angle) > 0.03:
+            center = (w / 2.0, h / 2.0)
+            M = cv2.getRotationMatrix2D(center, median_angle, 1.0)
+            cos_a = abs(M[0, 0])
+            sin_a = abs(M[0, 1])
+            new_w = int((h * sin_a) + (w * cos_a))
+            new_h = int((h * cos_a) + (w * sin_a))
+            M[0, 2] += (new_w / 2.0) - center[0]
+            M[1, 2] += (new_h / 2.0) - center[1]
 
-                img = cv2.warpAffine(
-                    img,
-                    M,
-                    (new_w, new_h),
-                    flags=cv2.INTER_CUBIC,
-                    borderMode=cv2.BORDER_CONSTANT,
-                    borderValue=(255, 255, 255),
-                )
-                page_mask = cv2.warpAffine(
-                    page_mask,
-                    M,
-                    (new_w, new_h),
-                    flags=cv2.INTER_NEAREST,
-                    borderMode=cv2.BORDER_CONSTANT,
-                    borderValue=0,
-                )
-                h, w = img.shape[:2]
+            img = cv2.warpAffine(
+                img,
+                M,
+                (new_w, new_h),
+                flags=cv2.INTER_CUBIC,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=(255, 255, 255),
+            )
+            page_mask = cv2.warpAffine(
+                page_mask,
+                M,
+                (new_w, new_h),
+                flags=cv2.INTER_NEAREST,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=0,
+            )
+            h, w = img.shape[:2]
 
     # 2. Crop ONLY outside the union of the valid paper mask (and any non-255 pixels)
     non_white = np.any(img < 255, axis=2) & (page_mask > 0)
