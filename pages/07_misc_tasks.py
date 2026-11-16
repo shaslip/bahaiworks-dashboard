@@ -6,7 +6,7 @@ import glob
 import urllib.parse
 import pandas as pd
 import concurrent.futures
-from src.mediawiki_uploader import upload_to_bahaiworks, fetch_wikitext, upload_to_mediawiki, get_csrf_token, upload_file_binary, move_page, delete_page, get_image_url
+from src.mediawiki_uploader import upload_to_bahaiworks, fetch_wikitext, fetch_wikitext_batch, upload_to_mediawiki, get_csrf_token, upload_file_binary, move_page, delete_page, get_image_url
 from src.sitelink_manager import set_sitelink
 from src.wikibase_importer import get_or_create_author
 
@@ -38,7 +38,7 @@ with st.expander("ℹ️ Help / Instructions"):
 st.markdown("---")
 
 # --- TABS ---
-tab_create_author, tab_ac, tab_update_author, tab_maintenance, tab_media, tab_fix_pages, tab_periodicals, tab_wanted_cats, tab_5yp, tab_dups, tab_double_redirects = st.tabs([
+tab_create_author, tab_ac, tab_update_author, tab_maintenance, tab_media, tab_fix_pages, tab_periodicals, tab_wanted_cats, tab_5yp, tab_dups, tab_double_redirects, tab_module_dates = st.tabs([
     "👤 Create Author Pages", 
     "📖 AC Messages", 
     "📝 Update Author list",
@@ -49,7 +49,8 @@ tab_create_author, tab_ac, tab_update_author, tab_maintenance, tab_media, tab_fi
     "📅 Wanted Categories",
     "🔄 5YP Image Migration",
     "🗂️ Duplicate Files",
-    "🔀 Double Redirects"
+    "🔀 Double Redirects",
+    "📆 Module Dates"
 ])
 
 # --- Author page maintenance and exclusions ---
@@ -2085,3 +2086,124 @@ with tab_double_redirects:
                     st.error(f"Authentication or execution failed: {e}")
                 finally:
                     shared_session.close()
+
+# ==============================================================================
+# TAB 12: MODULE PUBLICATION DATES
+# ==============================================================================
+with tab_module_dates:
+    st.header("📆 Populate Module Publication Dates")
+    st.info("Scans periodical issue pages, extracts publication dates from the `{{header}}` template, and formats them for Lua modules (e.g., `Module:BahaiNews`).")
+
+    col_md1, col_md2 = st.columns(2)
+    with col_md1:
+        page_pattern = st.text_input(
+            "Page Title Pattern (use `{i}` for issue number)", 
+            value="Bahá’í News/Issue {i}"
+        )
+        section_regex = st.text_input(
+            "Extraction Regex (Group 1 = Date)", 
+            value=r"\|\s*section\s*=\s*(?:Issue\s+\d+\s*[-–—]\s*)?([^\n|{}]+)",
+            help="Extracts the date from the header's section parameter. By default, strips 'Issue X - ' if present."
+        )
+        target_module = st.text_input("Target Module Page", value="Module:BahaiNews")
+
+    with col_md2:
+        start_issue = st.number_input("Start Issue", min_value=1, value=1, step=1)
+        end_issue = st.number_input("End Issue", min_value=1, value=714, step=1)
+        lua_table_name = st.text_input("Lua Table Variable Name", value="publicationDate_map")
+
+    if st.button("🔍 Scan Issues (Batch Fetch)", type="primary"):
+        titles_map = {i: page_pattern.format(i=i) for i in range(start_issue, end_issue + 1)}
+        all_titles = list(titles_map.values())
+        
+        progress_bar = st.progress(0)
+        status_box = st.empty()
+        
+        extracted_data = []
+        chunk_size = 50
+        
+        for idx in range(0, len(all_titles), chunk_size):
+            chunk_titles = all_titles[idx:idx + chunk_size]
+            status_box.write(f"Fetching pages {idx + 1} to {min(idx + chunk_size, len(all_titles))} of {len(all_titles)}...")
+            
+            batch_results = fetch_wikitext_batch(chunk_titles)
+            
+            for issue_num in range(start_issue + idx, min(start_issue + idx + chunk_size, end_issue + 1)):
+                t = titles_map[issue_num]
+                wt = batch_results.get(t) or batch_results.get(t.replace("_", " "))
+                
+                date_val = ""
+                status = "Missing Page"
+                if wt:
+                    match = re.search(section_regex, wt, flags=re.IGNORECASE)
+                    if match:
+                        date_val = match.group(1).strip()
+                        status = "OK"
+                    else:
+                        status = "Regex No Match"
+                        
+                extracted_data.append({
+                    "Issue": issue_num,
+                    "Page": t,
+                    "Date": date_val,
+                    "Status": status
+                })
+                
+            progress_bar.progress(min((idx + chunk_size) / len(all_titles), 1.0))
+            
+        status_box.success(f"✅ Scanned {len(all_titles)} issues!")
+        st.session_state["module_dates_data"] = extracted_data
+
+    if "module_dates_data" in st.session_state:
+        df_dates = pd.DataFrame(st.session_state["module_dates_data"])
+        
+        ok_count = len(df_dates[df_dates["Status"] == "OK"])
+        missing_count = len(df_dates) - ok_count
+        st.write(f"**Extracted:** {ok_count} | **Missing / Unmatched:** {missing_count}")
+        
+        edited_df = st.data_editor(
+            df_dates,
+            disabled=["Issue", "Page", "Status"],
+            hide_index=True,
+            width='stretch',
+            key="module_dates_editor"
+        )
+        
+        # Build Lua table lines for rows with non-empty dates
+        lua_lines = [f"local {lua_table_name} = {{"]
+        for _, row in edited_df.iterrows():
+            if str(row["Date"]).strip():
+                safe_date = str(row["Date"]).strip().replace('"', '\\"')
+                lua_lines.append(f'\t[{row["Issue"]}]="{safe_date}",')
+        lua_lines.append("}")
+        lua_code_block = "\n".join(lua_lines)
+        
+        with st.expander("📄 View Generated Lua Table", expanded=True):
+            st.code(lua_code_block, language="lua")
+            
+        if st.button(f"🚀 Update `{target_module}` on bahai.works", type="primary"):
+            with st.spinner(f"Fetching `{target_module}`..."):
+                mod_text, err = fetch_wikitext(target_module)
+                if err or not mod_text:
+                    st.error(f"Could not fetch `{target_module}`: {err}")
+                else:
+                    # Replace existing table definition in the Lua module
+                    pattern = re.compile(
+                        rf"(local\s+{re.escape(lua_table_name)}\s*=\s*\{{).*?(\n\}})",
+                        re.DOTALL
+                    )
+                    if not pattern.search(mod_text):
+                        st.error(f"Could not find `local {lua_table_name} = {{ ... }}` in `{target_module}`.")
+                    else:
+                        new_mod_text = pattern.sub(lambda _: lua_code_block, mod_text, count=1)
+                        try:
+                            upload_to_bahaiworks(
+                                title=target_module,
+                                content=new_mod_text,
+                                summary=f"Updated {lua_table_name} with issue publication dates",
+                                check_exists=False
+                            )
+                            st.success(f"✅ Successfully updated `{target_module}`!")
+                            st.balloons()
+                        except Exception as e:
+                            st.error(f"Error uploading `{target_module}`: {e}")
