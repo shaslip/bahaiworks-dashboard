@@ -2169,41 +2169,62 @@ with tab_module_dates:
             key="module_dates_editor"
         )
         
-        # Build Lua table lines for rows with non-empty dates
-        lua_lines = [f"local {lua_table_name} = {{"]
+        # Build preview of just the newly scanned/edited entries
+        new_entries = {}
         for _, row in edited_df.iterrows():
             if str(row["Date"]).strip():
-                safe_date = str(row["Date"]).strip().replace('"', '\\"')
-                lua_lines.append(f'\t[{row["Issue"]}]="{safe_date}",')
-        lua_lines.append("}")
-        lua_code_block = "\n".join(lua_lines)
+                new_entries[int(row["Issue"])] = str(row["Date"]).strip()
+
+        preview_lines = [f"-- Preview of {len(new_entries)} scanned entries to merge into {lua_table_name}:"]
+        for k in sorted(new_entries.keys()):
+            safe_val = new_entries[k].replace('"', '\\"')
+            preview_lines.append(f'\t[{k}]="{safe_val}",')
         
-        with st.expander("📄 View Generated Lua Table", expanded=True):
-            st.code(lua_code_block, language="lua")
+        with st.expander("📄 View Scanned Lua Entries (Preview)", expanded=True):
+            st.code("\n".join(preview_lines), language="lua")
             
-        if st.button(f"🚀 Update `{target_module}` on bahai.works", type="primary"):
-            with st.spinner(f"Fetching `{target_module}`..."):
+        if st.button(f"🚀 Merge & Update `{target_module}` on bahai.works", type="primary"):
+            with st.spinner(f"Fetching `{target_module}` and merging entries..."):
                 mod_text, err = fetch_wikitext(target_module)
                 if err or not mod_text:
                     st.error(f"Could not fetch `{target_module}`: {err}")
                 else:
-                    # Replace existing table definition in the Lua module
+                    # Find existing table definition in the Lua module
                     pattern = re.compile(
-                        rf"(local\s+{re.escape(lua_table_name)}\s*=\s*\{{).*?(\n\}})",
+                        rf"(local\s+{re.escape(lua_table_name)}\s*=\s*\{{)(.*?)(\n\}})",
                         re.DOTALL
                     )
-                    if not pattern.search(mod_text):
+                    match = pattern.search(mod_text)
+                    if not match:
                         st.error(f"Could not find `local {lua_table_name} = {{ ... }}` in `{target_module}`.")
                     else:
-                        new_mod_text = pattern.sub(lambda _: lua_code_block, mod_text, count=1)
+                        existing_body = match.group(2)
+                        
+                        # 1. Parse existing [num]="val" entries from the module
+                        merged_map = {}
+                        for m in re.finditer(r'\[(\d+)\]\s*=\s*"([^"]*)"', existing_body):
+                            merged_map[int(m.group(1))] = m.group(2)
+                            
+                        # 2. Merge new entries on top of existing ones
+                        merged_map.update(new_entries)
+                        
+                        # 3. Rebuild full sorted Lua table
+                        full_lua_lines = [f"local {lua_table_name} = {{"]
+                        for k in sorted(merged_map.keys()):
+                            safe_date = merged_map[k].replace('"', '\\"')
+                            full_lua_lines.append(f'\t[{k}]="{safe_date}",')
+                        full_lua_lines.append("}")
+                        full_lua_block = "\n".join(full_lua_lines)
+                        
+                        new_mod_text = pattern.sub(lambda _: full_lua_block, mod_text, count=1)
                         try:
                             upload_to_bahaiworks(
                                 title=target_module,
                                 content=new_mod_text,
-                                summary=f"Updated {lua_table_name} with issue publication dates",
+                                summary=f"Updated {lua_table_name} ({len(new_entries)} issues merged)",
                                 check_exists=False
                             )
-                            st.success(f"✅ Successfully updated `{target_module}`!")
+                            st.success(f"✅ Successfully merged {len(new_entries)} issues into `{target_module}` (Total entries: {len(merged_map)})!")
                             st.balloons()
                         except Exception as e:
                             st.error(f"Error uploading `{target_module}`: {e}")
